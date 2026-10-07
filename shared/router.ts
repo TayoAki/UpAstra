@@ -17,6 +17,8 @@ const LANE_FALLBACK: Record<Lane, Lane[]> = {
   speech: ["hero-video", "explore-video"],
   "motion-transfer": ["hero-video", "cinematic"],
   finishing: [],
+  copy: [],
+  "copy-edit": ["copy"],
 };
 
 const LANE_WHY: Record<Lane, string> = {
@@ -31,6 +33,8 @@ const LANE_WHY: Record<Lane, string> = {
   speech: "a person must speak with audio generated in the scene",
   "motion-transfer": "an exact movement reference must be copied",
   finishing: "finishing for publish-ready delivery",
+  copy: "words are the deliverable — structure, voice and constraints matter",
+  "copy-edit": "the copy is close — fix specific lines and keep the rest",
 };
 
 export type PolicyGate = Pick<AutonomyPolicy, "blockedFamilies" | "blockedOrigins">;

@@ -2,7 +2,7 @@
   "name": "studio-operator",
   "version": "0.1.0",
   "private": true,
-  "description": "Studio Operator — cockpit for a semi-autonomous, AI-native creative service firm (Astra orchestration + Higgsfield production layer).",
+  "description": "Studio Operator \u2014 cockpit for a semi-autonomous, AI-native creative service firm (Astra orchestration + Higgsfield production layer).",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n api,web -c blue,magenta \"tsx watch server/index.ts\" \"vite\"",
@@ -10,17 +10,20 @@
     "start": "NODE_ENV=production tsx server/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "reset-data": "rm -f data/db.json"
+    "reset-data": "rm -f data/db.json",
+    "mcp": "tsx server/mcp-stdio.ts"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "express": "^5.2.1",
     "lucide-react": "^1.52.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "tsx": "^4.23.15"
+    "tsx": "^4.23.15",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

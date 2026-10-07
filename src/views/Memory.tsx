@@ -9,7 +9,7 @@ const LIST_FIELDS: { key: "colors" | "fonts" | "likes" | "rejectedStyles" | "app
   { key: "fonts", label: "Fonts" },
   { key: "likes", label: "What they like" },
   { key: "rejectedStyles", label: "Rejected styles" },
-  { key: "approvedClaims", label: "Approved claims (verbatim)" },
+  { key: "approvedClaims", label: "Approved claims & verified facts", hint: "Claims ads/emails may make, and the stats a grant may cite — one per line" },
 ];
 
 export function MemoryView({ clientId }: { clientId?: string }) {

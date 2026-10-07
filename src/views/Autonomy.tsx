@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { fmtPct, fmtUSD } from "../../shared/economics";
-import type { AuditEntry, AutonomyPolicy, Channel } from "../../shared/types";
+import type { AuditEntry, AutonomyPolicy, Channel, Checkpoint } from "../../shared/types";
 import { api } from "../api";
 import { Frame, Panel, SideHeader, SideItem, Tabs, timeAgo } from "../components/ui";
 import { go, useAction, useApp } from "../store";
@@ -12,7 +12,18 @@ const SECTIONS = [
   ["messages", "Client messages"],
   ["gates", "Approval gates"],
   ["fees", "Channel fees"],
+  ["agents", "Agent access (MCP)"],
 ] as const;
+
+const AGENT_KINDS: { kind: Checkpoint["kind"]; label: string }[] = [
+  { kind: "client-questions", label: "Send clarifying questions" },
+  { kind: "accept-job", label: "Accept or decline jobs" },
+  { kind: "start-production", label: "Approve production spend" },
+  { kind: "qa-escalation", label: "Decide QA escalations" },
+  { kind: "client-message", label: "Send client replies" },
+  { kind: "budget-limit", label: "Raise a job's spend cap" },
+  { kind: "scope-change", label: "Accept scope changes & re-pricing" },
+];
 
 function Num({ label, value, onChange, step = 0.01, suffix, hint }: { label: string; value: number; onChange: (n: number) => void; step?: number; suffix?: string; hint?: string }) {
   return (
@@ -221,6 +232,27 @@ export function AutonomyView() {
                 />
               ))}
             </div>
+          </Panel>
+          <Panel title={<span id="sec-agents">Agent access (MCP)</span>}>
+            <p className="small muted">
+              Claude, Astra or any MCP client can run the firm through the Studio Operator MCP server (<code>npm run mcp</code>, or <code>/mcp</code> with <code>MCP_TOKEN</code>). Its
+              actions are logged as <span className="actor actor-agent">agent</span>. Choose which decisions an agent may make on its own; everything else waits for you. Agents can
+              read this policy but never change it.
+            </p>
+            {AGENT_KINDS.map(({ kind, label }) => (
+              <label key={kind} className="radio">
+                <input
+                  type="checkbox"
+                  checked={p.agentMayResolve.includes(kind)}
+                  onChange={(e) => setP({ ...p, agentMayResolve: e.target.checked ? [...p.agentMayResolve, kind] : p.agentMayResolve.filter((k) => k !== kind) })}
+                />
+                {label}
+              </label>
+            ))}
+            <label className="radio disabled">
+              <input type="checkbox" checked={false} disabled />
+              Approve final delivery — always a human
+            </label>
           </Panel>
         </>
       ) : (

@@ -7,6 +7,7 @@ import type { AutonomyPolicy, ClientMemory, Job, ProviderStatus } from "../share
 import { astraMode, astraModel } from "./astra";
 import { getProvider } from "./higgsfield";
 import {
+  assertAgentMay,
   acceptJob,
   createJob,
   firmStats,
@@ -20,12 +21,18 @@ import {
   startProduction,
 } from "./pipeline";
 import { seed } from "./seed";
-import { DEFAULT_POLICY, HttpError, audit, findClient, findJob, getDB, loadDB, newId, save } from "./store";
+import { DEFAULT_POLICY, HttpError, audit, currentActor, findClient, findJob, getDB, loadDB, newId, runAs, save } from "./store";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { CHECKPOINT_KINDS, createMcpServer, httpApi } from "./mcp";
 
 loadEnv();
+const port = Number(process.env.PORT ?? 8787);
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
+// Requests from the MCP server identify themselves so the audit log and the
+// agent permissions in the autonomy policy apply to them.
+app.use((req, _res, next) => runAs(req.get("x-studio-actor") === "agent" ? "agent" : "human", next));
 
 const wrap =
   (fn: (req: Request<Record<string, string>>, res: Response) => unknown) =>
@@ -100,7 +107,10 @@ app.post("/api/jobs/:id/accept", wrap(async (req, res) => {
   const job = findJob(req.params.id);
   const cp = job.checkpoints.find((c) => c.kind === "accept-job" && c.status === "open");
   if (cp) await resolveCheckpoint(job, cp.id, "approved");
-  else await acceptJob(job);
+  else {
+    assertAgentMay("accept-job");
+    await acceptJob(job);
+  }
   res.json(jobDetail(job));
 }));
 
@@ -108,7 +118,10 @@ app.post("/api/jobs/:id/start", wrap(async (req, res) => {
   const job = findJob(req.params.id);
   const cp = job.checkpoints.find((c) => c.kind === "start-production" && c.status === "open");
   if (cp) await resolveCheckpoint(job, cp.id, "approved");
-  else await startProduction(job);
+  else {
+    assertAgentMay("start-production");
+    await startProduction(job);
+  }
   res.json(jobDetail(job));
 }));
 
@@ -139,13 +152,19 @@ app.post("/api/jobs/:id/messages", wrap(async (req, res) => {
 
 app.get("/api/policy", (_req, res) => res.json(getDB().policy));
 
+const humanOnly = () => {
+  if (currentActor() === "agent") throw new HttpError(403, "Agents can read the autonomy policy but not change it.");
+};
+
 app.put("/api/policy", (req, res) => {
+  humanOnly();
   const db = getDB();
   const next = { ...db.policy, ...req.body } as AutonomyPolicy;
   const nums: (keyof AutonomyPolicy)[] = ["maxSpendPerJob", "maxRepairSpendPerJob", "maxRepairCostPerAttempt", "maxAttemptsPerStep", "minGrossMargin", "autoStartBelowCost", "repairReservePct"];
   for (const k of nums) if (!(Number(next[k]) >= 0)) throw new HttpError(400, `${k} must be a non-negative number`);
   for (const k of nums) (next as unknown as Record<string, number>)[k] = Number(next[k]);
   next.requireApproval = { ...next.requireApproval, finalDelivery: true };
+  next.agentMayResolve = (next.agentMayResolve ?? []).filter((k) => CHECKPOINT_KINDS.includes(k) && k !== "final-delivery");
   db.policy = next;
   audit({ actor: "human", type: "policy", message: "Autonomy policy updated." });
   rerouteOpenJobs();
@@ -154,6 +173,7 @@ app.put("/api/policy", (req, res) => {
 });
 
 app.post("/api/policy/reset", (_req, res) => {
+  humanOnly();
   getDB().policy = structuredClone(DEFAULT_POLICY);
   audit({ actor: "human", type: "policy", message: "Autonomy policy reset to defaults." });
   rerouteOpenJobs();
@@ -188,6 +208,28 @@ app.get("/api/audit", (req, res) => {
 });
 
 app.use("/api", (_req, res) => res.status(404).json({ error: "Not found" }));
+
+// MCP over Streamable HTTP, for remote agents (e.g. Astra through an OpenAI
+// remote-MCP tool, or a Claude custom connector). Off unless MCP_TOKEN is set.
+app.all("/mcp", async (req, res) => {
+  const token = process.env.MCP_TOKEN;
+  if (!token) return res.status(404).json({ error: "MCP over HTTP is disabled. Set MCP_TOKEN to enable it." });
+  if (req.get("authorization") !== `Bearer ${token}`) return res.status(401).json({ error: "Missing or invalid bearer token" });
+  // Stateless: a fresh server + transport per request.
+  const server = createMcpServer(httpApi(`http://127.0.0.1:${port}`));
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+  res.on("close", () => {
+    transport.close();
+    server.close();
+  });
+  try {
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (err) {
+    console.error("[mcp]", err);
+    if (!res.headersSent) res.status(500).json({ error: "MCP request failed" });
+  }
+});
 
 // Production: serve the built client.
 const dist = path.resolve(process.cwd(), "dist");
@@ -238,8 +280,8 @@ if (fresh && process.env.SEED !== "0") {
 // Jobs that were mid-run when the server stopped need a human to restart them.
 for (const job of getDB().jobs) if (job.running) job.running = false;
 
-const port = Number(process.env.PORT ?? 8787);
 app.listen(port, () => {
   const p = providerStatus();
   console.log(`Studio Operator API on http://localhost:${port}  (Astra: ${p.astra.mode}, Higgsfield: ${p.higgsfield.mode})`);
+  console.log(process.env.MCP_TOKEN ? `MCP (HTTP) on http://localhost:${port}/mcp` : "MCP: stdio via `npm run mcp` (set MCP_TOKEN to also serve /mcp over HTTP)");
 });

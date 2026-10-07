@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { getModel } from "../../shared/catalog";
 import { fmtPct, fmtUSD } from "../../shared/economics";
 import { routeStep } from "../../shared/router";
-import type { Checkpoint, Generation, Job } from "../../shared/types";
+import type { Checkpoint, CopySpec, Generation, Job } from "../../shared/types";
+import { AngleList, CopyDeliverable } from "../components/CopyView";
 import { api, type JobDetail } from "../api";
 import { CheckpointCard } from "../components/Checkpoints";
 import { JobList } from "../components/JobList";
@@ -137,6 +138,11 @@ export function JobView({ id, tab }: { id: string; tab?: string }) {
   );
 }
 
+function copySummary(c: CopySpec): string {
+  const bits = [c.platform, c.funder && `to ${c.funder}`, c.ask, c.fields.map((f) => `${f.label}${f.maxChars ? ` ≤${f.maxChars}c` : f.maxWords ? ` ≤${f.maxWords}w` : ""}`).join(", ")];
+  return bits.filter(Boolean).join(" · ");
+}
+
 type TabProps = { d: JobDetail; setD: (d: JobDetail) => void };
 
 function List({ items, empty, tone }: { items: string[]; empty: string; tone?: "warn" | "bad" | "ok" }) {
@@ -219,7 +225,7 @@ function BriefTab({ d, setD }: TabProps) {
                 <th>Deliverable</th>
                 <th>Qty</th>
                 <th>Format</th>
-                <th>Aspect</th>
+                <th>Spec</th>
                 <th>Duration</th>
                 <th>Exact copy</th>
                 <th>Status</th>
@@ -231,7 +237,7 @@ function BriefTab({ d, setD }: TabProps) {
                   <td>{x.label}</td>
                   <td>{x.quantity}</td>
                   <td>{x.format.toUpperCase()}</td>
-                  <td>{x.aspect}</td>
+                  <td className="small">{x.copy ? copySummary(x.copy) : x.aspect}</td>
                   <td>{x.durationSec ? `${x.durationSec}s` : "—"}</td>
                   <td className="small">{x.exactCopy ? `“${x.exactCopy}”` : "—"}</td>
                   <td>
@@ -307,7 +313,7 @@ function ProductionTab({ d, setD }: TabProps) {
                       <span className="chip">lane: {s.lane}</span>
                       {s.preserve !== "none" && <span className="chip">preserve: {s.preserve}</span>}
                       <span className="chip">
-                        {s.units} {model?.unit === "second" ? "sec" : model?.unit === "job" ? "job" : "img"}
+        {s.units} {model?.unit === "second" ? "sec" : model?.unit === "job" ? "job" : model?.unit === "ktok" ? "k tokens" : "img"}
                       </span>
                     </div>
                   </div>
@@ -409,16 +415,19 @@ function DeliveryTab({ d, setD }: TabProps) {
             key={del.id}
             title={
               <>
-                {del.quantity}× {del.label}{" "}
+                {del.copy?.format === "grant-proposal" ? "" : `${del.quantity}× `}
+                {del.label}{" "}
                 <span className="muted small">
-                  {del.aspect} {del.format}
+                  {del.copy ? copySummary(del.copy) : `${del.aspect} ${del.format}`}
                   {del.durationSec ? ` · ${del.durationSec}s` : ""}
                 </span>
               </>
             }
             aside={<span className={`badge del-${del.status}`}>{del.status}</span>}
           >
-            {gens.length ? (
+            {del.kind === "text" ? (
+              <CopyDeliverable jobTitle={job.title} d={del} gens={gens} />
+            ) : gens.length ? (
               <div className="gens">
                 {gens.map((g) => (
                   <GenCard key={g.id} g={g} accepted={del.outputIds.includes(g.id)} />
@@ -432,11 +441,25 @@ function DeliveryTab({ d, setD }: TabProps) {
       })}
       {internal.length > 0 && (
         <Panel title="Exploration & finishing (internal)">
-          <div className="gens small-gens">
-            {internal.map((g) => (
-              <GenCard key={g.id} g={g} accepted={false} />
+          {internal.some((g) => !g.copy) && (
+            <div className="gens small-gens">
+              {internal
+                .filter((g) => !g.copy)
+                .map((g) => (
+                  <GenCard key={g.id} g={g} accepted={false} />
+                ))}
+            </div>
+          )}
+          {internal
+            .filter((g) => g.copy)
+            .map((g) => (
+              <div key={g.id}>
+                <h4>
+                  {d.job.steps.find((s) => s.id === g.stepId)?.label} · {getModel(g.modelId)?.name} · {fmtUSD(g.actualCost ?? g.estimatedCost)}
+                </h4>
+                <AngleList g={g} />
+              </div>
             ))}
-          </div>
         </Panel>
       )}
       <ClientThread job={job} setD={setD} />

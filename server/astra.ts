@@ -1,8 +1,10 @@
-import { SERVICE_TEMPLATES, getTemplate } from "../shared/templates";
+import { AD_PLATFORMS, GRANT_SECTIONS, SERVICE_TEMPLATES, getTemplate } from "../shared/templates";
+import { checkCopy } from "../shared/copy";
 import { getModel } from "../shared/catalog";
 import type {
   Channel,
   ClientMemory,
+  CopySpec,
   DeliverableSpec,
   Generation,
   IntakeAnalysis,
@@ -13,6 +15,7 @@ import type {
   ServiceTemplate,
 } from "../shared/types";
 import { hash } from "./higgsfield";
+import { extractAudience, extractFacts, extractOffer } from "./writer";
 
 // Astra is the orchestrator: it handles judgment (reading briefs, writing
 // prompts, inspecting outputs, interpreting feedback). Prices, margins and
@@ -62,7 +65,9 @@ exactCopy (strings that must appear verbatim), deadline (string or null), suppli
 risks (rights, likeness, claims, timing, budget), revisionRisks (what is likely to cause revisions),
 clientQuestions (the SMALLEST useful set, max 3, only questions whose answers change the output),
 recommendation ("accept"|"review"|"reject") and reasoning.
-Do not compute prices or margins. Prefer the template whose deliverables best match the brief.`;
+Do not compute prices or margins. Prefer the template whose deliverables best match the brief.
+For copy templates (cold-email-sequence, ad-copy-pack, grant-proposal) return one deliverable with kind "text", quantity = number of pieces,
+and copy: {format, platform?, fields?, tone?, audience?, offer?, cta?, funder?, ask?} extracted from the brief. Never invent facts.`;
 
 export async function analyzeBrief(input: {
   rawBrief: string;
@@ -91,7 +96,9 @@ function normalizeAnalysis(a: IntakeAnalysis): IntakeAnalysis {
   return {
     ...a,
     templateId: t.id,
-    deliverables: a.deliverables?.length ? a.deliverables : t.deliverables,
+    deliverables: (a.deliverables?.length ? a.deliverables : t.deliverables).map((d) =>
+      t.deliverables[0]?.kind === "text" ? { ...t.deliverables[0], ...d, kind: "text", copy: { ...t.deliverables[0].copy!, ...(d.copy ?? {}) } } : d,
+    ),
     exactCopy: a.exactCopy ?? [],
     suppliedAssets: a.suppliedAssets ?? [],
     missingInputs: a.missingInputs ?? [],
@@ -105,6 +112,10 @@ const has = (s: string, re: RegExp) => re.test(s);
 
 export function pickTemplate(text: string): ServiceTemplate {
   const s = text.toLowerCase();
+  // Copy first: "ad copy" and "email" briefs must not fall into the visual templates.
+  if (has(s, /\bgrants?\b|\brfp\b|letter of (?:inquiry|intent)|\bloi\b|\bfunders?\b|foundation (?:proposal|application)|501\(c\)|nonprofit proposal/)) return getTemplate("grant-proposal");
+  if (has(s, /cold (?:e-?mails?|outreach)|outbound|e-?mail sequence|outreach sequence|sales e-?mails?|follow-?up e-?mails?|\bsdrs?\b|\d+[- ](?:e-?mail|touch|step) (?:sequence|cadence)/)) return getTemplate("cold-email-sequence");
+  if (has(s, /ad copy|ads? copy|primary text|headlines? (?:and|&) (?:descriptions?|primary|body)|google ads? (?:copy|headlines|text)|(?:facebook|meta|linkedin|tiktok) ad (?:copy|text)|ad (?:variations|variants|text)|copywrit/)) return getTemplate("ad-copy-pack");
   if (has(s, /franchise|locations?\b|per[- ]store|local versions/)) return getTemplate("franchise-localization");
   if (has(s, /spec sheet|manufactur|industrial|trade ?show|distributor|cad\b/)) return getTemplate("industrial-sku-pack");
   if (has(s, /weekly|every (week|friday)|ad pack|ad creatives|creatives for (meta|facebook|tiktok)|hooks/)) return getTemplate("always-on-ads");
@@ -123,6 +134,7 @@ export function simulateIntake(input: {
   const text = `${input.rawBrief}\n${input.clientNotes}`;
   const s = text.toLowerCase();
   const template = pickTemplate(text);
+  if (template.deliverables[0]?.kind === "text") return simulateCopyIntake(input, template);
 
   const exactCopy = [...text.matchAll(/["“]([^"”]{2,80})["”]/g)].map((m) => m[1]);
   const aspect = text.match(/\b(\d{1,2})\s?[:x×]\s?(\d{1,2})\b/);
@@ -228,6 +240,110 @@ export function simulateIntake(input: {
   };
 }
 
+function normalizeAmount(raw: string): string {
+  const m = raw.replace(/[\s,$]/g, "").match(/^([\d.]+)([kKmM]?)$/);
+  if (!m) return raw.trim();
+  const n = parseFloat(m[1]) * (m[2].toLowerCase() === "k" ? 1_000 : m[2].toLowerCase() === "m" ? 1_000_000 : 1);
+  return `$${Math.round(n).toLocaleString("en-US")}`;
+}
+
+function simulateCopyIntake(
+  input: { rawBrief: string; channel: Channel; price: number; referenceAssets: string[]; clientNotes: string; client?: ClientMemory },
+  template: ServiceTemplate,
+): IntakeAnalysis {
+  const text = `${input.rawBrief}\n${input.clientNotes}`;
+  const s = text.toLowerCase();
+  const base = template.deliverables[0];
+  const spec: CopySpec = structuredClone(base.copy!);
+  let quantity = base.quantity;
+  const memory = input.client;
+  const facts = extractFacts(text);
+
+  spec.audience = extractAudience(text);
+  spec.offer = extractOffer(text, memory);
+  spec.cta = text.match(/\b(?:cta|call to action)\s*(?:is|should be|:|-)?\s*["“]?([^"”.\n]{3,60})/i)?.[1]?.trim();
+  spec.tone = text.match(/\b(?:tone|voice)\s*(?:is|should be|:|-)\s*([\w ,/-]{3,40})/i)?.[1]?.trim() ?? spec.tone;
+
+  const missingInputs: string[] = [];
+  const risks: string[] = [];
+  const revisionRisks: string[] = [];
+  const questions: string[] = [];
+  const need = (missing: string, question: string) => {
+    missingInputs.push(missing);
+    questions.push(question);
+  };
+
+  if (spec.format === "cold-email") {
+    const n = s.match(/\b(\d{1,2})[- ](?:e-?mails?|touch(?:es)?|steps?)\b/);
+    if (n) quantity = Math.min(Math.max(Number(n[1]), 1), 10);
+    if (!spec.audience) need("Ideal customer profile (title, company type, size)", "Who exactly are we emailing — job titles, company type and size?");
+    if (!spec.offer) need("Offer / value proposition", "In one sentence, what do you sell and what result does it get customers?");
+    if (!memory?.approvedClaims?.length && !facts.length) need("Proof points (results, customers, case studies)", "Any results, customer names or case studies we're allowed to mention?");
+    if (/bought|purchased|scraped|buy a list/.test(s)) risks.push("List source may not be compliant (CAN-SPAM / GDPR) — confirm opt-out handling and sending domain");
+    revisionRisks.push("Deliverability: no links or images in the first touch, plain text only");
+  } else if (spec.format === "ad-copy") {
+    const n = s.match(/\b(\d{1,2})\s+(?:[\w-]+\s+){0,2}?(?:variations?|variants?|versions?|headlines?|ads?|sets?)\b/);
+    if (n) quantity = Math.min(Math.max(Number(n[1]), 1), 20);
+    const platform = /google/.test(s) ? "Google Search" : /linkedin/.test(s) ? "LinkedIn" : /tiktok/.test(s) ? "TikTok" : /facebook|meta|instagram/.test(s) ? "Meta" : undefined;
+    spec.platform = platform ?? "Meta";
+    spec.fields = AD_PLATFORMS[spec.platform].map((f) => ({ ...f }));
+    if (!platform) need("Platform & placements", "Which platform are these for — Meta, Google Search, LinkedIn or TikTok?");
+    if (!spec.audience) need("Target customer", "Who's the customer — and what do they say about the problem in their own words (reviews welcome)?");
+    if (!spec.offer) need("Product / offer", "What's the product and the offer (discount, bundle, free shipping)?");
+    if (!memory?.approvedClaims?.length) need("Approved claims", "Which claims are we allowed to make (e.g. 'dermatologist tested')?");
+    revisionRisks.push(`${spec.platform} character limits: ${spec.fields.map((f) => `${f.label} ${f.maxChars}`).join(", ")}`);
+  } else {
+    quantity = 1;
+    if (/letter of (?:inquiry|intent)|\bloi\b/.test(s)) spec.fields = GRANT_SECTIONS.loi.map((f) => ({ ...f }));
+    spec.funder = text.match(/\b((?:[A-Z][\w&.'-]*\s+){1,5}(?:Foundation|Fund|Trust|Endowment|Council|Grants? Program))\b/)?.[1]?.trim();
+    const ask = text.match(/\$\s?\d[\d,]*(?:\.\d+)?\s?[kKmM]?\b/)?.[0];
+    if (ask) spec.ask = normalizeAmount(ask);
+    const limit = s.match(/(\d{2,4})[- ]words? (?:limit|max)|(?:limit(?:ed)?|max(?:imum)?) (?:of |to )?(\d{2,4}) words/);
+    if (limit) {
+      const max = Number(limit[1] ?? limit[2]);
+      // A single overall limit is shared across sections in proportion to their defaults.
+      const total = spec.fields.reduce((n, f) => n + (f.maxWords ?? 0), 0);
+      spec.fields = spec.fields.map((f) => ({ ...f, maxWords: Math.max(30, Math.round(((f.maxWords ?? 0) / total) * max)), minWords: Math.min(f.minWords ?? 0, 25) }));
+    }
+    if (!spec.funder) need("Funder name", "Which funder is this for, and do you have their guidelines or RFP?");
+    else if (!/guideline|rfp|requirements|priorit|criteria/.test(s)) need("Funder guidelines / RFP", `Can you share ${spec.funder}'s guidelines (priorities, section limits, scoring criteria)?`);
+    if (!spec.ask) need("Requested amount", "How much are you requesting, and over what period?");
+    if (facts.length < 2) need("Program data (people served, outcomes, budget)", "What numbers can we cite — people served, outcomes so far, program and org budget?");
+    if (/guarantee (?:we|the) (?:win|get)|make sure we win/.test(s)) risks.push("Client expects a guaranteed award — set expectations in writing");
+    revisionRisks.push("Every statistic must come from the org's data — Astra will mark gaps as [DATA NEEDED] rather than invent numbers");
+    if (spec.funder) revisionRisks.push(`Align language with ${spec.funder}'s stated priorities`);
+  }
+
+  const deadlineMatch = text.match(/\b(by|before|within|due)\s+((?:next\s)?(?:mon|tues|wednes|thurs|fri|satur|sun)day|tomorrow|end of (?:day|week|month)|\d+\s+(?:hours?|days?|weeks?)|[A-Z][a-z]+ \d{1,2}(?:st|nd|rd|th)?)/i);
+  if (!deadlineMatch) missingInputs.push("Deadline");
+  if (has(s, /asap|urgent|24 ?h|today|tonight|tomorrow/)) risks.push("Rush timeline");
+  if (input.price < template.basePrice * 0.05) risks.push(`Budget ($${input.price}) is far below the ${template.name} list price`);
+  if (has(s, /unlimited revisions?/)) revisionRisks.push("Client expects unlimited revisions — cap revisions in the offer");
+  if (memory?.rejectedStyles?.length) revisionRisks.push(`Client previously rejected: ${memory.rejectedStyles.join(", ")}`);
+  const clientQuestions = questions.slice(0, 3);
+  const recommendation: IntakeAnalysis["recommendation"] = missingInputs.filter((m) => m !== "Deadline").length >= 2 || risks.length ? "review" : "accept";
+  const unit = spec.format === "cold-email" ? "email sequence" : spec.format === "ad-copy" ? `${spec.platform} ad copy` : spec.fields.length <= 4 ? "letter of inquiry" : "grant proposal";
+
+  return {
+    summary: `${input.channel === "direct" ? "Direct lead" : `${input.channel[0].toUpperCase()}${input.channel.slice(1)} job`} for ${spec.format === "grant-proposal" ? `a ${unit}${spec.funder ? ` to ${spec.funder}` : ""}${spec.ask ? ` requesting ${spec.ask}` : ""}` : `${quantity}-piece ${unit}`} — best fit: ${template.name}.`,
+    templateId: template.id,
+    deliverables: [{ ...base, quantity, copy: spec }],
+    exactCopy: [...text.matchAll(/["“]([^"”]{2,80})["”]/g)].map((m) => m[1]),
+    deadline: deadlineMatch?.[0],
+    suppliedAssets: [...input.referenceAssets, ...facts.map((f) => `Fact: ${f}`)],
+    missingInputs,
+    risks,
+    revisionRisks,
+    clientQuestions,
+    recommendation,
+    reasoning:
+      recommendation === "review"
+        ? `Doable, but ${missingInputs.length} input(s) are missing${risks.length ? ` and ${risks.length} risk(s) need a human call` : ""}. Ask before writing — copy built on guesses comes back as revisions.`
+        : "Clear brief with enough inputs to write without guessing.",
+    source: "simulated",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Generation prompts (written by Astra per step, using client memory)
 
@@ -256,6 +372,28 @@ Return JSON {verdict:"ready"|"edit"|"regenerate"|"human", score:0-100, checks:[{
 "regenerate" = composition, motion or concept is wrong.
 "human" = subjective, legal or claim question a person must decide.`;
 
+const COPY_QA_SYSTEM = `You are Astra, copy chief. The copy already passed mechanical checks (lengths, CTA, spam, merge tags, claims).
+Judge only what code cannot: voice vs. the brief, specificity, persuasiveness, and fit with the client's likes/dislikes.
+Return JSON {"verdict":"ready"|"edit"|"regenerate", "summary": string, "fixes": string[]} — fixes are concrete line edits.`;
+
+function copyQA(generation: Generation, job: Job, client?: ClientMemory): QAResult {
+  const d = job.deliverables.find((x) => x.id === generation.deliverableId);
+  const r = checkCopy(generation.copy ?? [], d!.copy!, {
+    quantity: d!.quantity,
+    approvedClaims: client?.approvedClaims,
+    sources: `${job.rawBrief}\n${job.clientNotes}`,
+  });
+  const failed = r.checks.filter((c) => !c.pass);
+  return {
+    verdict: r.verdict,
+    score: r.score,
+    checks: r.checks,
+    fixes: r.fixes,
+    summary: failed.length ? failed.map((c) => `${c.rule} — ${c.note}`).join(" · ") : "Passes every rule in the copy rulebook. Ready for human review.",
+    source: "simulated",
+  };
+}
+
 export async function qaOutput(args: {
   generation: Generation;
   job: Job;
@@ -263,6 +401,23 @@ export async function qaOutput(args: {
   client?: ClientMemory;
 }): Promise<QAResult> {
   const { generation, job, template, client } = args;
+  if (generation.copy) {
+    const qa = copyQA(generation, job, client);
+    if (qa.verdict !== "ready" || astraMode() !== "live") return qa;
+    try {
+      const d = job.deliverables.find((x) => x.id === generation.deliverableId);
+      const j = await askJSON<{ verdict: QAVerdict; summary: string; fixes?: string[] }>(COPY_QA_SYSTEM, { brief: job.rawBrief, spec: d?.copy, client, copy: generation.copy });
+      if (j.verdict !== "ready") {
+        qa.checks.push({ rule: "Voice & persuasiveness (Astra)", pass: false, note: j.summary });
+        return { ...qa, verdict: j.verdict === "regenerate" ? "regenerate" : "edit", fixes: j.fixes ?? [j.summary], summary: j.summary, source: "astra" };
+      }
+      qa.checks.push({ rule: "Voice & persuasiveness (Astra)", pass: true, note: j.summary });
+      return { ...qa, source: "astra" };
+    } catch (err) {
+      console.warn("[astra] copy QA judgment skipped:", (err as Error).message);
+      return qa;
+    }
+  }
   if (astraMode() === "live") {
     try {
       const d = job.deliverables.find((x) => x.id === generation.deliverableId);

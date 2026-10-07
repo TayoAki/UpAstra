@@ -636,6 +636,10 @@ p {
   background: var(--c-warn-soft);
   color: var(--c-warn);
 }
+.actor-agent {
+  background: color-mix(in srgb, var(--c-ok) 16%, transparent);
+  color: var(--c-ok);
+}
 .actor-higgsfield {
   background: color-mix(in srgb, var(--c-info) 14%, transparent);
   color: var(--c-info);
@@ -1261,4 +1265,89 @@ select.input {
   .bottombar > span:last-child {
     display: none;
   }
+}
+
+/* ---------- copy ---------- */
+.copy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.copy-grid.cold-email {
+  grid-template-columns: 1fr;
+}
+.copy-piece {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  background: var(--surface);
+}
+.copy-piece-title {
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.copy-field {
+  margin-bottom: 8px;
+}
+.copy-label {
+  font-weight: 600;
+}
+.copy-value {
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.copy-value.long {
+  font-size: 14px;
+}
+.copy-doc {
+  max-width: 760px;
+  margin-top: 12px;
+}
+.copy-doc section {
+  border-bottom: 1px solid var(--line);
+  padding: 10px 0;
+}
+.copy-doc .copy-label {
+  font-size: 15px;
+  color: var(--text);
+}
+.versions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.version {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 12px;
+}
+.version.active {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+}
+.qa-banner {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--c-warn-soft);
+  font-size: 13px;
+}
+.qa-details {
+  margin-top: 10px;
+}
+.qa-details summary {
+  cursor: pointer;
+  color: var(--muted);
 }

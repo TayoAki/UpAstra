@@ -23,7 +23,9 @@ import {
   readClientMessage,
 } from "./astra";
 import { getProvider, type ProductionProvider } from "./higgsfield";
-import { HttpError, audit, findClient, getDB, newId, now, save, touch } from "./store";
+import { renderCopyProof, writeCopy } from "./writer";
+import { copyUnits } from "../shared/copy";
+import { HttpError, audit, currentActor, findClient, getDB, newId, now, save, touch } from "./store";
 
 // The production engine: moves a job through intake → plan → production → QA
 // → approval → delivery, enforcing the autonomy policy at every step and
@@ -231,11 +233,7 @@ function planJob(job: Job) {
       if (!deliverable) continue;
       used.add(deliverable.id);
     }
-    const units = deliverable
-      ? deliverable.kind === "video"
-        ? deliverable.quantity * (deliverable.durationSec ?? 5)
-        : deliverable.quantity
-      : r.units;
+    const units = deliverable ? deliverableUnits(deliverable) : r.units;
     steps.push({ ...r, deliverableId: deliverable?.id, units, modelId: "", routedBy: "astra", rationale: "", attempts: 0, status: "pending" });
   }
   // Any deliverable the template didn't anticipate still gets a final step.
@@ -247,8 +245,8 @@ function planJob(job: Job) {
       kind: d.kind,
       intent: "final",
       preserve: "product",
-      lane: d.kind === "video" ? "hero-video" : "product",
-      units: d.kind === "video" ? d.quantity * (d.durationSec ?? 5) : d.quantity,
+      lane: d.kind === "video" ? "hero-video" : d.kind === "text" ? "copy" : "product",
+      units: deliverableUnits(d),
       modelId: "",
       routedBy: "astra",
       rationale: "",
@@ -266,6 +264,11 @@ function planJob(job: Job) {
     message: `Production route proposed: ${steps.length} steps, est. ${fmtUSD(econ.productionEstimate)} (+${fmtUSD(econ.repairReserve)} repair reserve).`,
     cost: econ.productionEstimate,
   });
+}
+
+function deliverableUnits(d: Deliverable): number {
+  if (d.kind === "text") return copyUnits(d);
+  return d.kind === "video" ? d.quantity * (d.durationSec ?? 5) : d.quantity;
 }
 
 function applyRoute(step: RecipeStep, policy = getDB().policy) {
@@ -409,18 +412,22 @@ async function runStep(job: Job, step: RecipeStep): Promise<"ok" | "halt"> {
   }
 
   d.status = "generating";
-  const perItem = d.kind === "video" ? (d.durationSec ?? 5) : 1;
-  const needed = d.quantity - d.outputIds.length;
+  // A text deliverable is written in one pass (a sequence or a set of variants must hang together).
+  const perItem = d.kind === "video" ? (d.durationSec ?? 5) : d.kind === "text" ? step.units : 1;
+  const needed = itemsNeeded(d) - d.outputIds.length;
   for (let i = 0; i < needed; i++) {
     const r = await produceItem(job, step, d, perItem);
     if (r === "halt") return halt(step);
   }
   step.status = "done";
   step.feedback = undefined;
-  d.status = d.outputIds.length >= d.quantity ? "ready" : "needs-human";
+  d.status = d.outputIds.length >= itemsNeeded(d) ? "ready" : "needs-human";
   touch(job);
   return "ok";
 }
+
+/** Outputs a deliverable needs: one per image/video, one per text deliverable (pieces live inside it). */
+export const itemsNeeded = (d: Pick<Deliverable, "kind" | "quantity">) => (d.kind === "text" ? 1 : d.quantity);
 
 function halt(step: RecipeStep): "halt" {
   step.status = "pending";
@@ -451,11 +458,12 @@ async function produceItem(job: Job, step: RecipeStep, d: Deliverable, units: nu
   let modelId = step.modelId;
   let purpose: Generation["purpose"] = "generate";
   let sourceUrl: string | undefined;
+  let previous: Generation | undefined;
 
   for (;;) {
     if (!withinBudget(job, modelId, units, step.label)) return "halt";
     step.attempts = Math.max(step.attempts, attempt);
-    const g = await generate(job, step, { modelId, units, purpose, attempt, sourceUrl, deliverable: d });
+    const g = await generate(job, step, { modelId, units, purpose, attempt, sourceUrl, deliverable: d, previous });
     if (g.status === "failed") {
       if (attempt >= policy.maxAttemptsPerStep) return escalate(job, d, g, `Provider failed ${attempt}× (${g.error ?? "unknown error"}).`);
       attempt++;
@@ -483,8 +491,9 @@ async function produceItem(job: Job, step: RecipeStep, d: Deliverable, units: nu
     // Controlled repair.
     if (attempt >= policy.maxAttemptsPerStep) return escalate(job, d, g, `Still failing after ${attempt} attempts: ${qa.summary}`);
     let repairModel = step.modelId;
-    if (qa.verdict === "edit" && d.kind === "image") {
-      const r = routeStep({ lane: "repair", kind: "image", intent: "repair", preserve: step.preserve, units, label: "repair" }, policy);
+    if (qa.verdict === "edit" && (d.kind === "image" || d.kind === "text")) {
+      const lane = d.kind === "text" ? "copy-edit" : "repair";
+      const r = routeStep({ lane, kind: d.kind, intent: "repair", preserve: step.preserve, units, label: "repair" }, policy);
       if (r.modelId) repairModel = r.modelId;
     }
     const repairCost = stepCost(getModel(repairModel)!, units);
@@ -493,6 +502,7 @@ async function produceItem(job: Job, step: RecipeStep, d: Deliverable, units: nu
 
     purpose = qa.verdict === "edit" && repairModel !== step.modelId ? "edit" : "regenerate";
     sourceUrl = purpose === "edit" ? g.outputUrl : undefined;
+    previous = g;
     modelId = repairModel;
     attempt++;
     audit({
@@ -513,8 +523,9 @@ function escalate(job: Job, d: Deliverable, g: Generation, reason: string): "ok"
 async function generate(
   job: Job,
   step: RecipeStep,
-  o: { modelId: string; units: number; purpose: Generation["purpose"]; attempt: number; sourceUrl?: string; deliverable?: Deliverable },
+  o: { modelId: string; units: number; purpose: Generation["purpose"]; attempt: number; sourceUrl?: string; deliverable?: Deliverable; previous?: Generation },
 ): Promise<Generation> {
+  if (step.kind === "text") return generateCopy(job, step, o);
   const p = provider();
   const model = getModel(o.modelId)!;
   const client = findClient(job.clientId);
@@ -581,10 +592,68 @@ async function generate(
   return g;
 }
 
+async function generateCopy(
+  job: Job,
+  step: RecipeStep,
+  o: { modelId: string; units: number; purpose: Generation["purpose"]; attempt: number; deliverable?: Deliverable; previous?: Generation },
+): Promise<Generation> {
+  const model = getModel(o.modelId)!;
+  const client = findClient(job.clientId);
+  const g: Generation = {
+    id: newId("gen"),
+    jobId: job.id,
+    stepId: step.id,
+    deliverableId: o.deliverable?.id,
+    modelId: o.modelId,
+    prompt: buildPrompt(step, job, client, step.feedback),
+    attempt: o.attempt,
+    purpose: o.purpose,
+    status: "running",
+    estimatedCost: round2(stepCost(model, o.units) * 1000) / 1000,
+    createdAt: now(),
+  };
+  getDB().generations.push(g);
+  touch(job);
+  try {
+    const r = await writeCopy({
+      catalogId: o.modelId,
+      job,
+      client,
+      deliverable: o.deliverable,
+      purpose: o.purpose === "finish" ? "generate" : o.purpose,
+      attempt: o.attempt,
+      previous: o.previous?.copy,
+      fixes: o.previous?.qa?.fixes,
+      feedback: step.feedback,
+      seed: `${job.id}:${step.id}:${o.attempt}`,
+    });
+    g.copy = r.pieces;
+    g.status = r.pieces.length ? "completed" : "failed";
+    g.actualCost = r.cost;
+    if (!r.pieces.length) g.error = "writer returned no copy";
+    const first = r.pieces[0] ?? {};
+    g.outputUrl = renderCopyProof(o.deliverable?.label ?? step.label, Object.values(first).flatMap((v) => v.split("\n")).filter(Boolean), client?.colors ?? []);
+  } catch (err) {
+    g.status = "failed";
+    g.error = (err as Error).message;
+    g.actualCost = 0;
+  }
+  g.completedAt = now();
+  audit({
+    jobId: job.id,
+    actor: "astra",
+    type: "generation",
+    message: `${g.status === "completed" ? (o.purpose === "edit" ? "Edited" : "Wrote") : "Failed"}: ${o.deliverable?.label ?? step.label} with ${model.name}${g.copy ? ` (${g.copy.length} piece${g.copy.length === 1 ? "" : "s"})` : ""}${g.error ? ` — ${g.error}` : ""}`,
+    cost: g.actualCost,
+  });
+  touch(job);
+  return g;
+}
+
 function finalize(job: Job) {
   const needsHuman = job.deliverables.some((d) => d.status === "needs-human") || job.steps.some((s) => s.status === "blocked");
   const halted = job.steps.some((s) => s.status === "pending");
-  const allReady = job.deliverables.length > 0 && job.deliverables.every((d) => d.outputIds.length >= d.quantity);
+  const allReady = job.deliverables.length > 0 && job.deliverables.every((d) => d.outputIds.length >= itemsNeeded(d));
   if (allReady && !halted && !needsHuman) {
     job.stage = "approval";
     const client = findClient(job.clientId);
@@ -606,10 +675,18 @@ function finalize(job: Job) {
 // ---------------------------------------------------------------------------
 // Human decisions
 
+/** Agents (MCP clients) may only resolve the checkpoint kinds the policy allows — never final delivery. */
+export function assertAgentMay(kind: Checkpoint["kind"]) {
+  if (currentActor() !== "agent") return;
+  if (kind === "final-delivery" || !getDB().policy.agentMayResolve.includes(kind))
+    throw new HttpError(403, `"${kind}" checkpoints are reserved for a human. Ask the operator to decide in the Studio Operator UI.`);
+}
+
 export async function resolveCheckpoint(job: Job, cpId: string, decision: "approved" | "rejected", note?: string) {
   const cp = job.checkpoints.find((c) => c.id === cpId);
   if (!cp) throw new HttpError(404, "Checkpoint not found");
   if (cp.status !== "open") throw new HttpError(409, "Checkpoint already resolved");
+  assertAgentMay(cp.kind);
   cp.status = decision;
   cp.resolvedAt = now();
   audit({ jobId: job.id, actor: "human", type: "approval", message: `${decision === "approved" ? "Approved" : "Rejected"}: ${cp.title}${note ? ` — ${note}` : ""}` });
@@ -651,8 +728,8 @@ export async function resolveCheckpoint(job: Job, cpId: string, decision: "appro
       if (!d || !step) break;
       if (decision === "approved") {
         d.outputIds.push(String(cp.payload?.generationId));
-        d.status = d.outputIds.length >= d.quantity ? "ready" : "pending";
-        if (d.outputIds.length < d.quantity) step.status = "pending";
+        d.status = d.outputIds.length >= itemsNeeded(d) ? "ready" : "pending";
+        if (d.outputIds.length < itemsNeeded(d)) step.status = "pending";
       } else {
         d.status = "pending";
         step.status = "pending";

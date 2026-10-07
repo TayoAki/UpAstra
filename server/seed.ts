@@ -80,6 +80,30 @@ const CLIENTS: ClientMemory[] = [
     approvedClaims: ["Fragrance free", "Dermatologist tested"],
     notes: "Meta ads are fatigued — same hook across most active ads.",
   },
+  {
+    id: "cl_shiftwise",
+    name: "Shiftwise",
+    contact: "Dana Brooks",
+    logo: "Blue wordmark with a clock tick",
+    colors: ["#0b1f3a", "#3b82f6", "#eff6ff"],
+    fonts: ["Inter"],
+    likes: ["Short, direct emails", "Specific numbers from real customers"],
+    rejectedStyles: ["Hype words", "Long intros about ourselves"],
+    approvedClaims: ["Used by 40 mid-size companies", "Setup in under a week"],
+    notes: "Shift scheduling SaaS for mid-size employers. Sales team books demos via Calendly.",
+  },
+  {
+    id: "cl_bridges",
+    name: "Bridges Youth Mentoring",
+    contact: "Monique Alvarez",
+    logo: "Arched bridge mark, teal",
+    colors: ["#134e4a", "#14b8a6", "#f0fdfa"],
+    fonts: ["Source Serif", "Inter"],
+    likes: ["Student voice", "Plain language"],
+    rejectedStyles: ["Deficit framing of students", "Savior language"],
+    approvedClaims: ["Served 240 students across 6 schools last year", "92% of seniors in the program graduated on time", "Annual budget $1.2M"],
+    notes: "Community nonprofit. ED: Monique Alvarez. Applies to 10–15 foundations per year.",
+  },
 ];
 
 type Target = "review" | "planned" | "approval" | "delivered" | "revision";
@@ -157,6 +181,34 @@ const JOBS: (NewJobInput & { target: Target; followUp?: string })[] = [
     rawBrief:
       "Our ads are tired. We want a weekly pack of fresh creatives for our barrier cream — new hooks every friday. Something cool, you decide on the angles. Text overlays welcome.",
     target: "review",
+  },
+  {
+    title: "Outbound sequence — HR managers",
+    channel: "upwork",
+    clientId: "cl_shiftwise",
+    price: 250,
+    sourceUrl: "https://www.upwork.com/jobs/~example-shiftwise",
+    rawBrief:
+      "Need a 5-email cold outreach sequence for our shift scheduling software, targeting HR managers at mid-size companies. CTA is book a 15 minute demo. Tone: plain and direct. Due by Friday.",
+    target: "approval",
+  },
+  {
+    title: "Meta ad copy — barrier cream",
+    channel: "fiverr",
+    clientId: "cl_kindred",
+    price: 120,
+    sourceUrl: "https://www.fiverr.com/requests/example-kindred-copy",
+    rawBrief: "Need 6 Meta ad copy variations (headline, primary text, description) for our barrier cream, aimed at people with sensitive skin. Within 2 days.",
+    target: "delivered",
+  },
+  {
+    title: "Hartwell Foundation proposal — Bridges",
+    channel: "direct",
+    clientId: "cl_bridges",
+    price: 900,
+    rawBrief:
+      'We need a grant proposal requesting $75,000 from the Hartwell Community Foundation for our mentoring program called "Bridges". Last year we served 240 students across 6 schools, and 92% of seniors in the program graduated on time. Our annual budget is $1.2M. Foundation priorities: youth development and education equity. Due by October 30th.',
+    target: "approval",
   },
   {
     title: "Ad with celebrity lookalike",

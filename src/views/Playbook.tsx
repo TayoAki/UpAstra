@@ -17,6 +17,8 @@ const LANES: { lane: Lane; title: string; when: string }[] = [
   { lane: "speech", title: "Speaking", when: "Spokesperson and localized performances" },
   { lane: "motion-transfer", title: "Copy a performance", when: "You already have the exact movement" },
   { lane: "finishing", title: "Finishing", when: "Upscale, lip sync, captions, export" },
+  { lane: "copy", title: "Copywriting", when: "Cold email, ad copy, grant narratives — cheap drafts, pro finals" },
+  { lane: "copy-edit", title: "Copy editing", when: "Copy is close — trim, fix a CTA, a merge tag or a claim" },
 ];
 
 export function PlaybookView({ tab, item }: { tab?: string; item?: string }) {
@@ -91,8 +93,9 @@ export function PlaybookView({ tab, item }: { tab?: string; item?: string }) {
                     {d.quantity}× {d.label}
                   </div>
                   <div className="muted small">
-                    {d.kind} · {d.aspect} · {d.format}
-                    {d.durationSec ? ` · ${d.durationSec}s` : ""}
+                    {d.copy
+                      ? `${d.copy.platform ? `${d.copy.platform} · ` : ""}${d.copy.fields.map((f) => `${f.label}${f.maxChars ? ` ≤${f.maxChars} chars` : f.maxWords ? ` ≤${f.maxWords} words` : ""}`).join(" · ")}`
+                      : `${d.kind} · ${d.aspect} · ${d.format}${d.durationSec ? ` · ${d.durationSec}s` : ""}`}
                   </div>
                 </div>
               </div>
@@ -142,7 +145,7 @@ export function PlaybookView({ tab, item }: { tab?: string; item?: string }) {
             <div>
               <h1>Model router primer</h1>
               <p className="muted">
-                One Higgsfield key, every lane. Prices shown are list estimates per unit. Models blocked by your autonomy policy are marked and never routed.
+                One Higgsfield key for every visual lane; copy lanes run on the Astra endpoint. Prices shown are list estimates per unit. Models blocked by your autonomy policy are marked and never routed.
               </p>
             </div>
           </header>
@@ -175,7 +178,7 @@ export function PlaybookView({ tab, item }: { tab?: string; item?: string }) {
                           <td className="small">{m.strengths}</td>
                           <td className="small muted">{m.watchOuts}</td>
                           <td className="num small">
-                            {fmtUSD(stepCost(m, 1))}/{m.unit === "second" ? "sec" : m.unit}
+                            {fmtUSD(stepCost(m, 1))}/{m.unit === "second" ? "sec" : m.unit === "ktok" ? "1k tokens" : m.unit}
                           </td>
                         </tr>
                       );

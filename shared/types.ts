@@ -13,7 +13,7 @@ export type JobStage =
   | "delivered"
   | "rejected";
 
-export type MediaKind = "image" | "video" | "audio";
+export type MediaKind = "image" | "video" | "audio" | "text";
 
 /** The four questions asked before choosing a model. */
 export type StepIntent = "explore" | "final" | "repair" | "finish";
@@ -29,7 +29,9 @@ export type Lane =
   | "hero-video" // Kling
   | "speech" // Wan, Minimax
   | "motion-transfer" // Kling Motion Control
-  | "finishing"; // Topaz, lipsync, captions, export
+  | "finishing" // Topaz, lipsync, captions, export
+  | "copy" // writing: drafts and finals
+  | "copy-edit"; // controlled line edits that keep the rest of the copy
 
 export interface ModelSpec {
   id: string;
@@ -41,11 +43,37 @@ export interface ModelSpec {
   lanes: Lane[];
   /** USD list price per unit (image, second of video, or job for finishing tools). */
   price: number;
-  unit: "image" | "second" | "job";
+  unit: "image" | "second" | "job" | "ktok"; // ktok = 1,000 tokens (text models)
   strengths: string;
   watchOuts: string;
   quality: number; // 1–5, used to break ties for final work
 }
+
+/** A field inside one piece of copy, e.g. an email's subject or an ad's headline. */
+export interface CopyField {
+  key: string;
+  label: string;
+  maxChars?: number;
+  maxWords?: number;
+  minWords?: number;
+}
+
+export interface CopySpec {
+  format: "cold-email" | "ad-copy" | "grant-proposal";
+  funder?: string; // grants: who is being asked
+  ask?: string; // grants: requested amount, e.g. "$50,000"
+  platform?: string; // e.g. "Meta", "Google Search", "LinkedIn"
+  fields: CopyField[];
+  tone?: string;
+  audience?: string;
+  offer?: string;
+  cta?: string;
+  /** Allowed merge tags, e.g. {{first_name}}. Anything else is a broken token. */
+  mergeTags?: string[];
+}
+
+/** One generated piece of copy: an email in a sequence, or one ad variant. */
+export type CopyPiece = Record<string, string>;
 
 export interface DeliverableSpec {
   id: string;
@@ -56,6 +84,7 @@ export interface DeliverableSpec {
   durationSec?: number;
   quantity: number;
   exactCopy?: string;
+  copy?: CopySpec; // text deliverables only; quantity = number of pieces
 }
 
 export interface Deliverable extends DeliverableSpec {
@@ -136,6 +165,7 @@ export interface Generation {
   estimatedCost: number;
   actualCost?: number;
   outputUrl?: string;
+  copy?: CopyPiece[]; // text generations
   error?: string;
   createdAt: string;
   completedAt?: string;
@@ -156,6 +186,7 @@ export interface QAResult {
   checks: QACheck[];
   summary: string;
   source: "astra" | "simulated";
+  fixes?: string[]; // actionable fixes for an editor pass (copy)
 }
 
 export interface Checkpoint {
@@ -181,7 +212,7 @@ export interface AuditEntry {
   id: string;
   jobId?: string;
   at: string;
-  actor: "astra" | "human" | "system" | "higgsfield";
+  actor: "astra" | "human" | "system" | "higgsfield" | "agent"; // agent = external MCP client (Claude, Astra, …)
   type:
     | "intake"
     | "decision"
@@ -272,6 +303,8 @@ export interface AutonomyPolicy {
   };
   channelFees: Record<Channel, number>;
   repairReservePct: number;
+  /** Checkpoint kinds an external agent (via MCP) may resolve. Final delivery is never allowed. */
+  agentMayResolve: Checkpoint["kind"][];
 }
 
 export interface FirmStats {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { AuditEntry, AutonomyPolicy, ClientMemory, Generation, Job, Lesson } from "../shared/types";
 
 // A single JSON file is the firm's system of record: every job, generation,
@@ -29,6 +30,7 @@ export const DEFAULT_POLICY: AutonomyPolicy = {
   requireApproval: { acceptJob: true, finalDelivery: true, scopeChange: true },
   channelFees: { upwork: 0.1, fiverr: 0.2, contra: 0, direct: 0 },
   repairReservePct: 0.25,
+  agentMayResolve: ["client-questions", "accept-job", "start-production", "qa-escalation"],
 };
 
 const DATA_DIR = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
@@ -80,8 +82,15 @@ export function save() {
   }, 150);
 }
 
+// Who is acting for the current request: the operator in the UI, or an
+// external agent connected over MCP.
+const actorContext = new AsyncLocalStorage<"human" | "agent">();
+export const runAs = <T,>(actor: "human" | "agent", fn: () => T) => actorContext.run(actor, fn);
+export const currentActor = () => actorContext.getStore() ?? "human";
+
 export function audit(entry: Omit<AuditEntry, "id" | "at">): AuditEntry {
-  const e: AuditEntry = { id: newId("log"), at: now(), ...entry };
+  const actor = entry.actor === "human" && currentActor() === "agent" ? "agent" : entry.actor;
+  const e: AuditEntry = { id: newId("log"), at: now(), ...entry, actor };
   getDB().audit.push(e);
   save();
   return e;

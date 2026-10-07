@@ -1,4 +1,24 @@
-import type { ServiceTemplate } from "./types";
+import type { CopyField, ServiceTemplate } from "./types";
+
+/** Standard grant sections. Funders' RFPs override the word limits. */
+export const GRANT_SECTIONS: Record<"full" | "loi", CopyField[]> = {
+  full: [
+    { key: "summary", label: "Executive summary", maxWords: 250, minWords: 80 },
+    { key: "need", label: "Statement of need", maxWords: 500, minWords: 120 },
+    { key: "program", label: "Program description", maxWords: 600, minWords: 150 },
+    { key: "objectives", label: "Goals & measurable objectives", maxWords: 300, minWords: 60 },
+    { key: "evaluation", label: "Evaluation plan", maxWords: 300, minWords: 60 },
+    { key: "organization", label: "Organizational capacity", maxWords: 300, minWords: 60 },
+    { key: "budget", label: "Budget narrative", maxWords: 300, minWords: 50 },
+    { key: "sustainability", label: "Sustainability", maxWords: 200, minWords: 40 },
+  ],
+  loi: [
+    { key: "intro", label: "Introduction & request", maxWords: 150, minWords: 40 },
+    { key: "need", label: "Need", maxWords: 200, minWords: 50 },
+    { key: "program", label: "Program & outcomes", maxWords: 250, minWords: 60 },
+    { key: "organization", label: "About the organization", maxWords: 150, minWords: 40 },
+  ],
+};
 
 // Service templates are the firm's product catalog. Swapping the template —
 // buyer, deliverables, production recipe, rulebook and approval points —
@@ -133,7 +153,143 @@ export const SERVICE_TEMPLATES: ServiceTemplate[] = [
     ],
     approvalPoints: ["Spec claim review", "Final delivery"],
   },
+  {
+    id: "cold-email-sequence",
+    name: "Cold Email Sequence",
+    buyer: "B2B founders, SDR teams, agencies running outbound",
+    description: "A personalized outbound sequence: angle exploration, then a coherent multi-touch sequence that passes deliverability and length rules.",
+    basePrice: 250,
+    turnaroundDays: 2,
+    deliverables: [
+      {
+        id: "sequence",
+        label: "Email sequence",
+        kind: "text",
+        format: "md",
+        aspect: "—",
+        quantity: 4,
+        copy: {
+          format: "cold-email",
+          fields: [
+            { key: "subject", label: "Subject", maxChars: 50 },
+            { key: "body", label: "Body", maxWords: 120, minWords: 40 },
+          ],
+          tone: "Plain, specific, peer-to-peer",
+          mergeTags: ["{{first_name}}", "{{company}}", "{{title}}"],
+        },
+      },
+    ],
+    recipe: [
+      { id: "angles", label: "Explore angles & hooks", kind: "text", intent: "explore", preserve: "none", lane: "copy", units: 2 },
+      { id: "write", label: "Write the sequence", deliverableId: "sequence", kind: "text", intent: "final", preserve: "words", lane: "copy", units: 3 },
+    ],
+    rulebook: [
+      "Subject lines ≤ 50 characters, no ALL CAPS or clickbait",
+      "Each email body 40–120 words",
+      "Exactly one clear call to action per email",
+      "No spam-trigger phrases",
+      "Merge tags are valid ({{first_name}}, {{company}}, {{title}})",
+      "Only approved claims and proof points",
+      "Each email opens with a different angle",
+    ],
+    approvalPoints: ["Final delivery"],
+  },
+  {
+    id: "ad-copy-pack",
+    name: "Ad Copy Pack",
+    buyer: "DTC brands and media buyers",
+    description: "Platform-ready ad copy variants built from customer language — distinct hooks, within character limits, claims checked.",
+    basePrice: 150,
+    turnaroundDays: 1,
+    deliverables: [
+      {
+        id: "ad-variants",
+        label: "Ad copy variants",
+        kind: "text",
+        format: "md",
+        aspect: "—",
+        quantity: 6,
+        copy: {
+          format: "ad-copy",
+          platform: "Meta",
+          fields: [
+            { key: "headline", label: "Headline", maxChars: 40 },
+            { key: "primaryText", label: "Primary text", maxChars: 125 },
+            { key: "description", label: "Description", maxChars: 30 },
+          ],
+          tone: "Punchy, benefit-led",
+        },
+      },
+    ],
+    recipe: [
+      { id: "hooks", label: "Mine hooks from customer language", kind: "text", intent: "explore", preserve: "none", lane: "copy", units: 2 },
+      { id: "write", label: "Write ad variants", deliverableId: "ad-variants", kind: "text", intent: "final", preserve: "words", lane: "copy", units: 2 },
+    ],
+    rulebook: [
+      "Every field within the platform's character limit",
+      "Each variant uses a distinct hook",
+      "Clear call to action in each variant",
+      "No spam-trigger phrases or ALL CAPS",
+      "Only approved claims",
+    ],
+    approvalPoints: ["Final delivery"],
+  },
+  {
+    id: "grant-proposal",
+    name: "Nonprofit Grant Proposal",
+    buyer: "Nonprofits, development directors, grant consultants",
+    description:
+      "Funder-ready proposal narrative built from the org's own facts: aligned to the funder's priorities, within every section limit, every number traceable to a source.",
+    basePrice: 600,
+    turnaroundDays: 5,
+    deliverables: [
+      {
+        id: "proposal",
+        label: "Proposal narrative",
+        kind: "text",
+        format: "md",
+        aspect: "—",
+        quantity: 1,
+        copy: {
+          format: "grant-proposal",
+          fields: GRANT_SECTIONS.full,
+          tone: "Clear, evidence-based, community-centered",
+        },
+      },
+    ],
+    recipe: [
+      { id: "align", label: "Map funder priorities to the program", kind: "text", intent: "explore", preserve: "none", lane: "copy", units: 3 },
+      { id: "write", label: "Write the proposal narrative", deliverableId: "proposal", kind: "text", intent: "final", preserve: "words", lane: "copy", units: 6 },
+    ],
+    rulebook: [
+      "Every required section present and within the funder's word limit",
+      "Funder named and its priorities addressed",
+      "Requested amount stated and consistent",
+      "Every statistic traceable to the org's data or a cited source",
+      "Measurable objectives (SMART) and an evaluation plan",
+      "No unsupported promises or guarantees",
+    ],
+    approvalPoints: ["Fact & figure review", "Final delivery"],
+  },
 ];
+
+/** Platform character limits for ad copy. */
+export const AD_PLATFORMS: Record<string, { key: string; label: string; maxChars: number }[]> = {
+  Meta: [
+    { key: "headline", label: "Headline", maxChars: 40 },
+    { key: "primaryText", label: "Primary text", maxChars: 125 },
+    { key: "description", label: "Description", maxChars: 30 },
+  ],
+  "Google Search": [
+    { key: "headline", label: "Headline", maxChars: 30 },
+    { key: "description", label: "Description", maxChars: 90 },
+  ],
+  LinkedIn: [
+    { key: "headline", label: "Headline", maxChars: 70 },
+    { key: "primaryText", label: "Intro text", maxChars: 150 },
+  ],
+  TikTok: [{ key: "primaryText", label: "Ad text", maxChars: 100 }],
+};
 
 export function getTemplate(id: string): ServiceTemplate {
   return SERVICE_TEMPLATES.find((t) => t.id === id) ?? SERVICE_TEMPLATES[0];

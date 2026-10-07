@@ -7,6 +7,32 @@ import { go, useAction, useApp } from "../store";
 
 const EXAMPLES: { title: string; channel: Channel; price: number; brief: string; assets?: string }[] = [
   {
+    title: "Upwork · Cold email sequence",
+    channel: "upwork",
+    price: 250,
+    brief:
+      "Need a 5-email cold outreach sequence for our scheduling software, targeting HR managers at mid-size companies. CTA is book a 15 minute demo. We cut onboarding time for 40 customers last year. Due by Friday.",
+  },
+  {
+    title: "Fiverr · Google ads copy",
+    channel: "fiverr",
+    price: 90,
+    brief: "Looking for 8 Google ads headlines and descriptions for our organic dog food subscription, aimed at busy dog owners. Within 2 days.",
+  },
+  {
+    title: "Direct · Nonprofit grant proposal",
+    channel: "direct",
+    price: 900,
+    brief:
+      'We are a nonprofit seeking a $75k grant from the Hartwell Community Foundation for our youth mentoring program called "Bridges". Last year we served 240 students across 6 schools. 92% of seniors in the program graduated on time. Our annual budget is $1.2M. Foundation priorities: youth development and education equity. Due by October 30th.',
+  },
+  {
+    title: "Upwork · Letter of inquiry",
+    channel: "upwork",
+    price: 200,
+    brief: "Need a letter of inquiry (LOI) for a food bank requesting $25,000 for our weekend meals program. 1,800 children received weekend meal kits in 2025.",
+  },
+  {
     title: "Upwork · Amazon listing set",
     channel: "upwork",
     price: 120,

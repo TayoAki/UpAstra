@@ -261,6 +261,51 @@ export const MODEL_CATALOG: ModelSpec[] = [
     watchOuts: "Verify caption copy against approved script.",
     quality: 4,
   },
+  // Text models run through the Astra (OpenAI-compatible) endpoint, not
+  // Higgsfield. Model IDs are configured per tier on the server:
+  // COPY_FAST_MODEL, COPY_PRO_MODEL, COPY_EDIT_MODEL (all default to ASTRA_MODEL).
+  {
+    id: "astra-writer-fast",
+    name: "Astra Writer (fast)",
+    family: "astra",
+    vendor: "OpenAI",
+    origin: "US",
+    kind: "text",
+    lanes: ["copy"],
+    price: 0.002,
+    unit: "ktok",
+    strengths: "Cheap angle and hook exploration — dozens of directions for pennies.",
+    watchOuts: "Drafts, not finals: voice and claims need the pro pass.",
+    quality: 3,
+  },
+  {
+    id: "astra-writer-pro",
+    name: "Astra Writer (pro)",
+    family: "astra",
+    vendor: "OpenAI",
+    origin: "US",
+    kind: "text",
+    lanes: ["copy"],
+    price: 0.012,
+    unit: "ktok",
+    strengths: "Final copy: holds voice, structure across a sequence, and the brief's constraints.",
+    watchOuts: "Can drift into superlatives — QA checks claims against the approved list.",
+    quality: 5,
+  },
+  {
+    id: "astra-editor",
+    name: "Astra Editor",
+    family: "astra",
+    vendor: "OpenAI",
+    origin: "US",
+    kind: "text",
+    lanes: ["copy-edit"],
+    price: 0.004,
+    unit: "ktok",
+    strengths: "Line edits: trim to length, fix a CTA, remove a spam word, repair a merge tag — keeps everything else.",
+    watchOuts: "Won't fix a weak angle; regenerate for that.",
+    quality: 4,
+  },
 ];
 
 export function getModel(id: string): ModelSpec | undefined {
