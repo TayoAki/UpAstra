@@ -1,6 +1,7 @@
 node_modules
 dist
-data/*.json
+data/*
+!data/.gitkeep
 .env
 .env.local
 *.log
