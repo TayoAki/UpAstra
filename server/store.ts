@@ -1,20 +1,25 @@
-import fs from "node:fs";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { AuditEntry, AutonomyPolicy, ClientMemory, Generation, Job, Lesson } from "../shared/types";
+import type { AuditEntry, AutonomyPolicy, ClientMemory, FirmProfile, Generation, Job, Lesson, RadarState } from "../shared/types";
+import { getBackend } from "./persist";
 
-// A single JSON file is the firm's system of record: every job, generation,
-// cost, decision and lesson. Small, inspectable, and easy to back up.
+// Each workspace (tenant) has its own document: jobs, clients, generations,
+// audit, lessons, policy, firm profile and radar. Documents are loaded into
+// memory on first use and written back (debounced) to Postgres or disk.
+//
+// Every request and background task runs inside a context naming its
+// workspace, so getDB() can only ever see the current tenant's data.
 
 export interface DB {
-  version: 1;
+  version: 2;
   jobs: Job[];
   clients: ClientMemory[];
   generations: Generation[];
   audit: AuditEntry[];
   lessons: Lesson[];
   policy: AutonomyPolicy;
+  profile: FirmProfile;
+  radar: RadarState;
 }
 
 export const DEFAULT_POLICY: AutonomyPolicy = {
@@ -33,65 +38,152 @@ export const DEFAULT_POLICY: AutonomyPolicy = {
   agentMayResolve: ["client-questions", "accept-job", "start-production", "qa-escalation"],
 };
 
-const DATA_DIR = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data");
-const DB_FILE = path.join(DATA_DIR, "db.json");
-
-let db: DB | null = null;
-let writeTimer: NodeJS.Timeout | null = null;
+export const DEFAULT_PROFILE: FirmProfile = {
+  firmName: "",
+  positioning: "",
+  services: [],
+  proofPoints: [],
+  portfolio: [],
+  signature: "",
+  tone: "Warm, specific, confident — no fluff",
+};
 
 export const newId = (prefix: string) => `${prefix}_${randomUUID().slice(0, 8)}`;
 export const now = () => new Date().toISOString();
 
 export function emptyDB(): DB {
-  return { version: 1, jobs: [], clients: [], generations: [], audit: [], lessons: [], policy: structuredClone(DEFAULT_POLICY) };
+  return {
+    version: 2,
+    jobs: [],
+    clients: [],
+    generations: [],
+    audit: [],
+    lessons: [],
+    policy: structuredClone(DEFAULT_POLICY),
+    profile: structuredClone(DEFAULT_PROFILE),
+    radar: { searches: [], leads: [] },
+  };
 }
 
-export function loadDB(): { db: DB; fresh: boolean } {
-  if (db) return { db, fresh: false };
-  if (fs.existsSync(DB_FILE)) {
-    db = JSON.parse(fs.readFileSync(DB_FILE, "utf8")) as DB;
-    db.policy = { ...structuredClone(DEFAULT_POLICY), ...db.policy };
-    return { db, fresh: false };
+/** Upgrade older documents (including the single-tenant v1 file). */
+export function normalizeDB(raw: Partial<DB> | undefined): DB {
+  const base = emptyDB();
+  if (!raw) return base;
+  return {
+    ...base,
+    ...raw,
+    version: 2,
+    policy: { ...base.policy, ...(raw.policy ?? {}) },
+    profile: { ...base.profile, ...(raw.profile ?? {}) },
+    radar: { searches: raw.radar?.searches ?? [], leads: raw.radar?.leads ?? [] },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Request context
+
+export interface Ctx {
+  workspaceId: string;
+  actor: "human" | "agent";
+  userId?: string;
+  /** Force free simulators (seeding, demos) regardless of configured keys. */
+  simulate?: boolean;
+}
+
+const context = new AsyncLocalStorage<Ctx>();
+export const runWith = <T,>(ctx: Ctx, fn: () => T) => context.run(ctx, fn);
+export const currentCtx = () => context.getStore();
+export const currentActor = () => context.getStore()?.actor ?? "human";
+export const currentWorkspaceId = () => context.getStore()?.workspaceId;
+export const isSimulatedContext = () => !!context.getStore()?.simulate;
+
+// ---------------------------------------------------------------------------
+// Tenant cache
+
+interface Tenant {
+  db: DB;
+  timer?: NodeJS.Timeout;
+  saving?: Promise<void>;
+}
+
+const tenants = new Map<string, Tenant>();
+const loading = new Map<string, Promise<Tenant>>();
+let memoryDB: DB | null = null; // tests
+
+/** Load a workspace document into memory (call before runWith for that workspace). */
+export async function ensureTenant(workspaceId: string): Promise<DB> {
+  if (memoryDB) return memoryDB;
+  const hit = tenants.get(workspaceId);
+  if (hit) return hit.db;
+  let p = loading.get(workspaceId);
+  if (!p) {
+    p = getBackend()
+      .loadData(workspaceId)
+      .then((raw) => {
+        const t: Tenant = { db: normalizeDB(raw as Partial<DB> | undefined) };
+        // Jobs that were mid-run when the process stopped need a human to restart them.
+        for (const j of t.db.jobs) if (j.running) j.running = false;
+        tenants.set(workspaceId, t);
+        return t;
+      })
+      .finally(() => loading.delete(workspaceId));
+    loading.set(workspaceId, p);
   }
-  db = emptyDB();
-  return { db, fresh: true };
+  return (await p).db;
 }
 
-/** For tests: use an in-memory DB that is never written to disk. */
+/** For tests: a single in-memory DB that every context resolves to. */
 export function useMemoryDB(): DB {
-  db = emptyDB();
-  persistEnabled = false;
-  return db;
+  memoryDB = emptyDB();
+  return memoryDB;
 }
-
-let persistEnabled = true;
 
 export function getDB(): DB {
-  return loadDB().db;
+  if (memoryDB) return memoryDB;
+  const id = currentWorkspaceId();
+  if (!id) throw new Error("No workspace in context");
+  const t = tenants.get(id);
+  if (!t) throw new Error(`Workspace ${id} is not loaded`);
+  return t.db;
 }
 
 export function save() {
-  if (!persistEnabled) return;
-  if (writeTimer) return;
-  writeTimer = setTimeout(() => {
-    writeTimer = null;
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    const tmp = `${DB_FILE}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(db, null, 1));
-    fs.renameSync(tmp, DB_FILE);
-  }, 150);
+  if (memoryDB) return;
+  const id = currentWorkspaceId();
+  if (!id) return;
+  const t = tenants.get(id);
+  if (!t || t.timer) return;
+  t.timer = setTimeout(() => {
+    t.timer = undefined;
+    t.saving = getBackend()
+      .saveData(id, t.db)
+      .catch((err) => console.error(`[store] failed to save workspace ${id}:`, err));
+  }, 400);
 }
 
-// Who is acting for the current request: the operator in the UI, or an
-// external agent connected over MCP.
-const actorContext = new AsyncLocalStorage<"human" | "agent">();
-export const runAs = <T,>(actor: "human" | "agent", fn: () => T) => actorContext.run(actor, fn);
-export const currentActor = () => actorContext.getStore() ?? "human";
+/** Write every dirty workspace now (graceful shutdown). */
+export async function flushAll() {
+  await Promise.all(
+    [...tenants.entries()].map(async ([id, t]) => {
+      if (t.timer) {
+        clearTimeout(t.timer);
+        t.timer = undefined;
+        await getBackend().saveData(id, t.db);
+      }
+      await t.saving;
+    }),
+  );
+}
+
+// ---------------------------------------------------------------------------
 
 export function audit(entry: Omit<AuditEntry, "id" | "at">): AuditEntry {
   const actor = entry.actor === "human" && currentActor() === "agent" ? "agent" : entry.actor;
   const e: AuditEntry = { id: newId("log"), at: now(), ...entry, actor };
-  getDB().audit.push(e);
+  const db = getDB();
+  db.audit.push(e);
+  // Keep the document bounded; the newest entries matter most.
+  if (db.audit.length > 5000) db.audit.splice(0, db.audit.length - 5000);
   save();
   return e;
 }

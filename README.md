@@ -13,25 +13,65 @@ npm install
 npm run dev        # API on :8787, UI on http://localhost:5173
 ```
 
-The first boot seeds a demo firm: 8 clients and 11 jobs across image, video, cold email, ad copy and grant work, each at a different stage. With no API keys set, both layers run as **free deterministic simulators**. The bottom bar shows whether each layer is `simulated` or `live`.
+Open the app and **create an account**. Each account gets its own workspace, optionally pre-filled with a demo firm: clients, jobs at every stage, and a Job Radar search with scored leads. With no API keys set, every external service runs on a **free deterministic simulator**. The bottom bar shows what's `simulated` and what's `live`.
 
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | API (tsx watch) and Vite UI |
-| `npm test` | Unit and pipeline tests (vitest) |
+| `npm test` | Unit, pipeline, copy and SaaS tests (vitest). Set `TEST_DATABASE_URL` to run the SaaS suite against Postgres |
 | `npm run typecheck` | TypeScript check |
-| `npm run build && npm start` | Production build, served by the API on `:8787` |
-| `npm run reset-data` | Delete `data/db.json` (the next boot re-seeds) |
-| `npm run mcp` | MCP server over stdio, for Claude Desktop / Claude Code (needs the API running) |
+| `npm run build && npm start` | Production build, served by the API |
+| `npm run reset-data` | Delete local file storage |
+| `npm run mcp` | MCP server over stdio (see below) |
 
-### Going live
+All configuration is in [`.env.example`](.env.example).
 
-Copy `.env.example` to `.env`:
+## SaaS model
 
-- `OPENAI_API_KEY`, `ASTRA_MODEL`, `OPENAI_BASE_URL`: Astra's judgment calls (intake, QA, client messages) go to an OpenAI-compatible chat completions endpoint and use JSON output. If a call fails, it falls back to the rules engine and logs a warning.
-- `HIGGSFIELD_API_KEY`, `HIGGSFIELD_BASE_URL`: the production layer. The key stays on the server. **Check the endpoint paths and field names in `server/higgsfield.ts` (`ENDPOINTS`, `submit`, `check`) against Higgsfield's current API reference before you spend credits.** They are kept in one place so you can change them in one spot.
-- `COPY_FAST_MODEL`, `COPY_PRO_MODEL`, `COPY_EDIT_MODEL`: the model IDs behind the three copy tiers. Copy is written through the Astra endpoint, not Higgsfield. Unset tiers use `ASTRA_MODEL`.
-- Seeding and tests never call live services.
+- **Accounts and workspaces:** users sign up with email and password and get a workspace they own. They can invite teammates with one-time codes (as member or admin) and switch between workspaces.
+- **Isolation:** each workspace's jobs, clients, generations, audit log, lessons, policy, firm profile and radar are stored as one document. Postgres stores it as a `JSONB` row (`DATABASE_URL`); without Postgres it's a file in `./data`. Every request and background task runs inside its workspace's context, and `getDB()` can only return that workspace.
+- **Roles:** owners and admins can change the policy, invites, members and the agent token. Members do the work.
+- **Platform guardrails:** `MAX_SPEND_PER_JOB_CEILING` caps per-job spend for every workspace, `RADAR_MAX_RUNS_PER_DAY` limits scraping, and login and signup are throttled.
+- **Keys:** OpenRouter, Higgsfield and Apify keys are platform-level environment variables and never reach the browser.
+- **Not built yet:** billing (e.g. Stripe) and per-workspace usage metering. Run a single replica, because workspace documents are cached in memory.
+
+## Built-in AI: OpenRouter
+
+`server/llm.ts` is the only file that talks to a language model. Intake, QA, copywriting, client-message reading and proposals all go through `chatJSON()`.
+
+- **Provider:** with `OPENROUTER_API_KEY` set it calls OpenRouter's OpenAI-compatible API, including attribution headers and usage-based cost reporting. `OPENAI_API_KEY` + `OPENAI_BASE_URL` work as an alternative.
+- **Models:** set a model per role with `ASTRA_MODEL`, `COPY_FAST_MODEL`, `COPY_PRO_MODEL`, `COPY_EDIT_MODEL` and `PROPOSAL_MODEL`. Unset roles fall back to `ASTRA_MODEL`, then to `openrouter/auto`.
+- **Swapping it out:** to plug in your own OpenRouter client, replace the body of `chatJSON()`. Nothing else needs to change.
+
+## Job Radar: Apify
+
+1. **Saved searches** (source, query, Apify actor, actor input JSON with `{{query}}` and `{{maxItems}}` placeholders, schedule) run on demand or every 6h, 12h or daily.
+2. **Normalization:** results are mapped from the field names common across marketplace actors: title, description, budget (fixed or hourly), client verification, spend, rating, proposal count and posted time.
+3. **Scoring:** each lead gets a score out of 100:
+   - service fit (30)
+   - budget vs. your list price and margin floor (25)
+   - client quality (20)
+   - brief clarity (15)
+   - competition and freshness (10)
+
+   Scams (unpaid tests, off-platform contact), rights risks and work you don't offer are **skipped** automatically.
+4. **Proposals:** good fits get a draft proposal written from your **firm profile**, which never invents proof. Each draft is checked for length, specificity, a closing question, spam, and pricing above cost. You can edit it, copy it, and mark it applied. **It never submits proposals for you.**
+5. **Won jobs** convert into a Studio Operator job in one click, and from there intake, pricing and production take over.
+
+`APIFY_TOKEN` enables live scraping. Set the default actor per source with `APIFY_ACTOR_UPWORK` etc., or set it per search. Actor input formats differ, so check each actor's input schema on Apify. Without a token, runs return a realistic simulated sample.
+
+## Deploying to Railway
+
+The repo includes a `Dockerfile` and `railway.json` (health check `/api/health`).
+
+1. Create a project with a **Postgres** database and a service from this repo.
+2. On the service, set:
+   - `DATABASE_URL=${{Postgres.DATABASE_URL}}`
+   - `SESSION_SECRET=<random>`
+   - `NODE_ENV=production`
+   - `APP_URL=https://<your-domain>`
+   - your `OPENROUTER_API_KEY`, `APIFY_TOKEN` and `HIGGSFIELD_API_KEY`
+3. Generate a domain. Keep the service at **one replica**.
 
 ## The six layers (one per build prompt)
 
@@ -77,34 +117,20 @@ Text jobs go through the same pipeline as visual jobs: intake, pricing, the marg
 - **Final delivery always needs a human.**
 - Agents can read the autonomy policy but cannot change it.
 
-**Claude Code** (with `npm run dev` running):
+Each workspace creates an **agent token** in **Settings → Agent access**. The token only reaches that workspace, and actions taken with it are logged as `agent`.
+
+**Claude Code / Claude Desktop (stdio)** works with a local or deployed instance:
 
 ```bash
-claude mcp add studio-operator -- npm --prefix /path/to/UpAstra run -s mcp
+claude mcp add studio-operator \
+  -e STUDIO_API_URL=https://your-app.up.railway.app \
+  -e STUDIO_API_TOKEN=so_agent_… \
+  -- npx -y tsx /path/to/UpAstra/server/mcp-stdio.ts
 ```
 
-**Claude Desktop**: add this to `claude_desktop_config.json`:
+**Remote agents (Astra, Claude API, other MCP platforms):** use Streamable HTTP at `https://your-app/mcp` with the header `Authorization: Bearer so_agent_…`.
 
-```json
-{
-  "mcpServers": {
-    "studio-operator": {
-      "command": "npm",
-      "args": ["--prefix", "/path/to/UpAstra", "run", "-s", "mcp"],
-      "env": { "STUDIO_API_URL": "http://localhost:8787" }
-    }
-  }
-}
-```
-
-**Remote agents (Astra, or Claude through the API):** set `MCP_TOKEN` and the server also serves MCP over Streamable HTTP at `/mcp`, protected by `Authorization: Bearer <MCP_TOKEN>`. Remote platforms need a public HTTPS URL, such as a deployment or a tunnel. For example, with the OpenAI Responses API:
-
-```js
-tools: [{ type: "mcp", server_label: "studio-operator", server_url: "https://your-host/mcp",
-          headers: { Authorization: `Bearer ${MCP_TOKEN}` }, require_approval: "never" }]
-```
-
-Check your platform's current MCP connector docs for the exact field names. The HTTP API and UI have no login of their own, so don't expose `:8787` publicly without putting authentication in front of it. `/mcp` is the only route protected by a token.
+Check your platform's current MCP connector docs for the exact field names.
 
 ## Layout
 

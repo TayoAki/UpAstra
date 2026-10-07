@@ -1,8 +1,7 @@
 import type { ClientMemory, Job } from "../shared/types";
-import { setAstraSimulated } from "./astra";
-import { simulatedProvider } from "./higgsfield";
-import { createJob, receiveClientMessage, resolveCheckpoint, settle, useProvider, type NewJobInput } from "./pipeline";
-import { getDB, save } from "./store";
+import { createJob, receiveClientMessage, resolveCheckpoint, settle, type NewJobInput } from "./pipeline";
+import { newSearch, runSearch } from "./radar";
+import { currentCtx, getDB, runWith, save } from "./store";
 
 // Demo data: a small book of clients and jobs at every stage. Always produced
 // with the free simulators, even when live keys are configured.
@@ -221,22 +220,35 @@ const JOBS: (NewJobInput & { target: Target; followUp?: string })[] = [
   },
 ];
 
+/**
+ * Fill the current workspace with a demo firm. Always runs on the free
+ * simulators (a simulated context), even when live keys are configured.
+ */
 export async function seed() {
-  const db = getDB();
-  setAstraSimulated(true);
-  useProvider(simulatedProvider(0));
-  try {
+  const ctx = currentCtx();
+  if (!ctx) throw new Error("seed() needs a workspace context");
+  await runWith({ ...ctx, simulate: true }, async () => {
+    const db = getDB();
     db.clients.push(...structuredClone(CLIENTS));
+    db.profile = {
+      firmName: "Studio Operator Demo",
+      positioning: "A small creative studio that ships product visuals, launch videos, conversion copy and grant narratives fast — checked against your brief before you see it.",
+      services: ["Product stills & lifestyle images", "Short product videos", "Cold email sequences", "Ad copy", "Grant proposals"],
+      proofPoints: ["Delivered 40+ product image sets for Amazon sellers", "Wrote outbound sequences for B2B SaaS teams"],
+      portfolio: [],
+      signature: "— The Studio Operator team",
+      tone: "Warm, specific, confident — no fluff",
+    };
     for (const spec of JOBS) {
       const { target, followUp, ...input } = spec;
       const job = await createJob(input);
       await advance(job, target, followUp);
     }
-  } finally {
-    useProvider(null);
-    setAstraSimulated(false);
+    const search = newSearch({ name: "Copy & creative jobs", source: "upwork", query: "cold email ad copy grant product images video", schedule: "manual", autoDraft: true, maxItems: 12 });
+    db.radar.searches.push(search);
+    await runSearch(search);
     save();
-  }
+  });
 }
 
 const open = (job: Job, kind: string) => job.checkpoints.find((c) => c.kind === kind && c.status === "open");

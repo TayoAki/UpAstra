@@ -2,6 +2,7 @@ import { getModel } from "../shared/catalog";
 import { SPAM_PHRASES, words } from "../shared/copy";
 import type { ClientMemory, CopyPiece, CopySpec, Deliverable, Job } from "../shared/types";
 import { astraMode } from "./astra";
+import { chatJSON, modelFor, type LLMRole } from "./llm";
 import { hash } from "./higgsfield";
 
 // Text production. Copy is written by language models through the same
@@ -10,14 +11,15 @@ import { hash } from "./higgsfield";
 // produces realistic drafts — including the kinds of defects real drafts have,
 // so QA and repair are exercised.
 
-const TIER_ENV: Record<string, string> = {
-  "astra-writer-fast": "COPY_FAST_MODEL",
-  "astra-writer-pro": "COPY_PRO_MODEL",
-  "astra-editor": "COPY_EDIT_MODEL",
+const TIER_ROLE: Record<string, LLMRole> = {
+  "astra-writer-fast": "copy-fast",
+  "astra-writer-pro": "copy-pro",
+  "astra-editor": "copy-edit",
 };
 
+/** The real model behind a catalog tier (configurable per role in server/llm.ts). */
 export function writerModelId(catalogId: string): string {
-  return process.env[TIER_ENV[catalogId] ?? ""] || process.env.ASTRA_MODEL || "astra";
+  return modelFor(TIER_ROLE[catalogId] ?? "copy-pro");
 }
 
 export interface WriteRequest {
@@ -128,22 +130,12 @@ async function liveWrite(req: WriteRequest): Promise<WriteResult> {
         }
       : { task: "List 10 distinct angles/hooks for this brief as pieces [{angle, why}]. Short.", brief: req.job.rawBrief, client: req.client?.name };
 
-  const res = await fetch(`${process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1"}/chat/completions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: writerModelId(req.catalogId),
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: isEdit ? EDIT_SYSTEM : WRITE_SYSTEM },
-        { role: "user", content: JSON.stringify(user) },
-      ],
-    }),
-  });
-  if (!res.ok) throw new Error(`Writer ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const data = await res.json();
-  const pieces = (JSON.parse(data.choices[0].message.content).pieces ?? []) as CopyPiece[];
-  const tokens = data.usage?.total_tokens ?? 1500;
+  const role = (TIER_ROLE[req.catalogId] ?? "copy-pro") as LLMRole;
+  const r = await chatJSON<{ pieces?: CopyPiece[] }>({ role, system: isEdit ? EDIT_SYSTEM : WRITE_SYSTEM, user, maxTokens: 6000 });
+  const pieces = r.json.pieces ?? [];
+  const tokens = r.tokens || 1500;
+  // Prefer the provider's reported charge; fall back to the catalog list price.
+  if (r.cost !== undefined) return { pieces, tokens, cost: Math.round(r.cost * 10000) / 10000 };
   return { pieces, tokens, cost: priceFor(req.catalogId, tokens / 1000) };
 }
 

@@ -320,3 +320,103 @@ export interface ProviderStatus {
   astra: { mode: "live" | "simulated"; model: string };
   higgsfield: { mode: "live" | "simulated"; baseUrl: string };
 }
+
+// ---------------------------------------------------------------------------
+// SaaS: users, workspaces
+
+export type Role = "owner" | "admin" | "member";
+
+export interface PublicUser {
+  id: string;
+  email: string;
+  name: string;
+}
+
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  role: Role;
+}
+
+/** Everything the firm says about itself in proposals. */
+export interface FirmProfile {
+  firmName: string;
+  positioning: string;
+  services: string[];
+  proofPoints: string[];
+  portfolio: string[];
+  signature: string;
+  tone: string;
+}
+
+// ---------------------------------------------------------------------------
+// Job Radar: scraped marketplace jobs, fit scoring, proposal drafts
+
+export type LeadSource = "upwork" | "fiverr" | "contra" | "linkedin" | "custom";
+
+export interface SavedSearch {
+  id: string;
+  name: string;
+  source: LeadSource;
+  /** Apify actor id, e.g. "username~actor-name". Empty = platform default for the source. */
+  actorId: string;
+  /** Actor input; {{query}} placeholders are filled with `query`. */
+  input: Record<string, unknown>;
+  query: string;
+  schedule: "manual" | "6h" | "12h" | "daily";
+  minScore: number; // leads below this are hidden by default
+  autoDraft: boolean; // draft proposals for "good" fits automatically
+  maxItems: number;
+  lastRunAt?: string;
+  lastRunStatus?: string;
+  createdAt: string;
+}
+
+export interface LeadFit {
+  score: number; // 0–100
+  verdict: "good" | "maybe" | "skip";
+  templateId: string;
+  templateName: string;
+  suggestedPrice: number;
+  estimatedCost: number;
+  expectedMargin: number;
+  reasons: string[];
+  redFlags: string[];
+  breakdown: { label: string; points: number; max: number }[];
+  source: "astra" | "simulated";
+}
+
+export interface ProposalDraft {
+  text: string;
+  status: "draft" | "approved" | "applied";
+  generatedAt: string;
+  model: string;
+  cost: number;
+  checks: QACheck[];
+  source: "astra" | "simulated";
+}
+
+export interface Lead {
+  id: string;
+  searchId?: string;
+  source: LeadSource;
+  externalId: string;
+  url?: string;
+  title: string;
+  description: string;
+  budget?: { type: "fixed" | "hourly"; min?: number; max?: number; currency: string };
+  postedAt?: string;
+  client?: { country?: string; paymentVerified?: boolean; totalSpent?: number; hireRate?: number; rating?: number };
+  proposalsCount?: number;
+  skills: string[];
+  fit?: LeadFit;
+  proposal?: ProposalDraft;
+  status: "new" | "shortlisted" | "dismissed" | "applied" | "won" | "lost";
+  jobId?: string;
+  scrapedAt: string;
+}
+
+export interface RadarState {
+  searches: SavedSearch[];
+  leads: Lead[];
+}

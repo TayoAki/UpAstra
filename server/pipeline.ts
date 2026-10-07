@@ -22,10 +22,10 @@ import {
   qaOutput,
   readClientMessage,
 } from "./astra";
-import { getProvider, type ProductionProvider } from "./higgsfield";
+import { getProvider, simulatedProvider, type ProductionProvider } from "./higgsfield";
 import { renderCopyProof, writeCopy } from "./writer";
 import { copyUnits } from "../shared/copy";
-import { HttpError, audit, currentActor, findClient, getDB, newId, now, save, touch } from "./store";
+import { HttpError, audit, currentActor, findClient, getDB, isSimulatedContext, newId, now, save, touch } from "./store";
 
 // The production engine: moves a job through intake → plan → production → QA
 // → approval → delivery, enforcing the autonomy policy at every step and
@@ -33,7 +33,8 @@ import { HttpError, audit, currentActor, findClient, getDB, newId, now, save, to
 
 let providerOverride: ProductionProvider | null = null;
 export const useProvider = (p: ProductionProvider | null) => (providerOverride = p);
-const provider = () => providerOverride ?? getProvider();
+let simulated: ProductionProvider | null = null;
+const provider = () => providerOverride ?? (isSimulatedContext() ? (simulated ??= simulatedProvider(0)) : getProvider());
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

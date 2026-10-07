@@ -14,12 +14,12 @@ import type { Checkpoint, ClientMemory, Generation, Job } from "../shared/types"
 
 export type ApiCall = <T = unknown>(method: "GET" | "POST" | "PUT", path: string, body?: unknown) => Promise<T>;
 
-/** Calls the Studio Operator HTTP API as the agent actor. */
-export function httpApi(baseUrl: string): ApiCall {
+/** Calls the Studio Operator HTTP API with a workspace agent token (always the "agent" actor). */
+export function httpApi(baseUrl: string, token: string): ApiCall {
   return async (method, path, body) => {
     const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api${path}`, {
       method,
-      headers: { "Content-Type": "application/json", "X-Studio-Actor": "agent" },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));

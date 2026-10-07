@@ -15,43 +15,30 @@ import type {
   ServiceTemplate,
 } from "../shared/types";
 import { hash } from "./higgsfield";
+import { chatJSON, llmConfigured, modelFor } from "./llm";
+import { isSimulatedContext } from "./store";
 import { extractAudience, extractFacts, extractOffer } from "./writer";
 
 // Astra is the orchestrator: it handles judgment (reading briefs, writing
 // prompts, inspecting outputs, interpreting feedback). Prices, margins and
 // limits are computed in plain code elsewhere.
 //
-// With OPENAI_API_KEY set, judgment calls go to the configured model through an
-// OpenAI-compatible chat completions endpoint. Without it, a deterministic
-// rules engine stands in so the whole firm can be exercised for free.
+// With an AI provider configured (OpenRouter by default — see server/llm.ts),
+// judgment calls go to a real model. Without one, or inside a simulated
+// context (seeding, demos), a deterministic rules engine stands in so the
+// whole firm can be exercised for free.
 
 let forceSimulated = false;
-/** Seeding and tests never spend real tokens. */
+/** Tests never spend real tokens. */
 export const setAstraSimulated = (on: boolean) => (forceSimulated = on);
 
 export function astraMode(): "live" | "simulated" {
-  return !forceSimulated && process.env.OPENAI_API_KEY ? "live" : "simulated";
+  return !forceSimulated && !isSimulatedContext() && llmConfigured() ? "live" : "simulated";
 }
-export const astraModel = () => process.env.ASTRA_MODEL ?? "astra";
+export const astraModel = () => modelFor("astra");
 
 async function askJSON<T>(system: string, user: unknown, images: string[] = []): Promise<T> {
-  const content: unknown[] = [{ type: "text", text: typeof user === "string" ? user : JSON.stringify(user, null, 1) }];
-  for (const url of images) if (/^https?:/.test(url)) content.push({ type: "image_url", image_url: { url } });
-  const res = await fetch(`${process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1"}/chat/completions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: astraModel(),
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content },
-      ],
-    }),
-  });
-  if (!res.ok) throw new Error(`Astra ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const data = await res.json();
-  return JSON.parse(data.choices[0].message.content) as T;
+  return (await chatJSON<T>({ role: "astra", system, user, images })).json;
 }
 
 // ---------------------------------------------------------------------------

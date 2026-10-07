@@ -1,6 +1,97 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { FirmStats } from "../shared/types";
-import { api, type Bootstrap, type JobSummary } from "./api";
+import { api, getWorkspaceId, setWorkspaceId, type Bootstrap, type JobSummary, type Me } from "./api";
+import { AuthView } from "./views/Auth";
+
+// ---------------------------------------------------------------------------
+// Session: who is signed in, and which workspace they're in.
+
+interface SessionState {
+  me: Me;
+  workspaceId: string;
+  switchWorkspace: (id: string) => void;
+  refreshMe: () => Promise<Me>;
+  logout: () => Promise<void>;
+}
+
+const SessionCtx = createContext<SessionState | null>(null);
+
+export function useSession() {
+  const v = useContext(SessionCtx);
+  if (!v) throw new Error("useSession outside provider");
+  return v;
+}
+
+export function SessionGate({ children }: { children: ReactNode }) {
+  const [me, setMe] = useState<Me | null | undefined>(undefined);
+  const [workspaceId, setWs] = useState(getWorkspaceId());
+
+  const adopt = useCallback((m: Me) => {
+    setMe(m);
+    const current = getWorkspaceId();
+    const valid = m.workspaces.find((w) => w.id === current)?.id ?? m.workspaces[0]?.id ?? "";
+    setWorkspaceId(valid);
+    setWs(valid);
+    return m;
+  }, []);
+
+  useEffect(() => {
+    api.me().then(adopt, () => setMe(null));
+    const out = () => setMe(null);
+    window.addEventListener("so:signed-out", out);
+    return () => window.removeEventListener("so:signed-out", out);
+  }, [adopt]);
+
+  const switchWorkspace = useCallback((id: string) => {
+    setWorkspaceId(id);
+    setWs(id);
+    window.location.hash = "/";
+  }, []);
+  const refreshMe = useCallback(() => api.me().then(adopt), [adopt]);
+  const logout = useCallback(async () => {
+    await api.logout().catch(() => undefined);
+    setMe(null);
+  }, []);
+
+  if (me === undefined) return <div className="auth muted">Loading…</div>;
+  if (me === null) return <AuthView onSignedIn={adopt} />;
+  if (!workspaceId) return <NoWorkspace refresh={refreshMe} />;
+  return (
+    <SessionCtx.Provider value={{ me, workspaceId, switchWorkspace, refreshMe, logout }}>
+      {/* Remount all workspace state when switching tenants. */}
+      <AppProvider key={workspaceId}>{children}</AppProvider>
+    </SessionCtx.Provider>
+  );
+}
+
+function NoWorkspace({ refresh }: { refresh: () => Promise<Me> }) {
+  const [name, setName] = useState("My studio");
+  const [code, setCode] = useState("");
+  const [err, setErr] = useState("");
+  return (
+    <div className="auth">
+      <div className="auth-card form">
+        <h1>Set up a workspace</h1>
+        <label className="field">
+          <span>New studio</span>
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <button className="btn primary wide" onClick={() => api.createWorkspace(name, true).then(refresh, (e) => setErr(e.message))}>
+          Create studio
+        </button>
+        <p className="muted small">— or join one —</p>
+        <label className="field">
+          <span>Invite code</span>
+          <input className="input" value={code} onChange={(e) => setCode(e.target.value)} />
+        </label>
+        <button className="btn wide" disabled={!code} onClick={() => api.join(code).then(refresh, (e) => setErr(e.message))}>
+          Join
+        </button>
+        {err && <p className="neg small">{err}</p>}
+      </div>
+    </div>
+  );
+}
 
 interface AppState {
   boot: Bootstrap | null;
