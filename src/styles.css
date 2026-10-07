@@ -1561,3 +1561,28 @@ pre.code {
     display: none;
   }
 }
+
+/* ---------- portal settings ---------- */
+.question-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 8px;
+  background: var(--surface-2);
+}
+.answers {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px 20px;
+}
+.answers dd {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+}
+a.btn {
+  display: inline-block;
+  text-align: center;
+  text-decoration: none;
+  color: var(--text);
+}

@@ -19,6 +19,9 @@ import type {
   Role,
   SavedSearch,
   WorkspaceSummary,
+  PortalConfig,
+  PortalPackage,
+  FileRef,
 } from "../shared/types";
 
 export interface JobSummary {
@@ -54,6 +57,13 @@ export interface Bootstrap {
   providers: ProviderStatus & { ai: string; apify: "live" | "simulated" };
   workspaceId: string;
   role: Role;
+}
+
+export interface PortalInfo {
+  config: PortalConfig;
+  templates: { id: string; name: string }[];
+  urls: { path: string; subdomain: string | null; custom: string | null; embed: string; cnameTarget: string };
+  clients: { id: string; name: string; email: string; company: string; clientId: string; requests: number; createdAt: string }[];
 }
 
 export interface Me {
@@ -162,4 +172,16 @@ export const api = {
   rescoreLead: (id: string) => req<Lead>(`/radar/leads/${id}/score`, { method: "POST", json: {} }),
   updateLead: (id: string, b: { status?: Lead["status"]; proposalText?: string; proposalStatus?: "draft" | "approved" | "applied" }) => req<Lead>(`/radar/leads/${id}`, { method: "PUT", json: b }),
   convertLead: (id: string) => req<JobDetail>(`/radar/leads/${id}/convert`, { method: "POST", json: {} }),
+
+  // client portal
+  portal: () => req<PortalInfo>("/portal"),
+  savePortal: (p: Partial<PortalConfig>) => req<PortalInfo>("/portal", { method: "PUT", json: p }),
+  defaultPackage: (templateId: string) => req<PortalPackage>("/portal/packages/default", { method: "POST", json: { templateId } }),
+  downloadFile: async (f: FileRef) => {
+    const res = await fetch(`/api/files/${f.key}`, { headers: { "X-Workspace-Id": getWorkspaceId() } });
+    if (!res.ok) throw new Error("Download failed");
+    const url = URL.createObjectURL(await res.blob());
+    Object.assign(document.createElement("a"), { href: url, download: f.name }).click();
+    URL.revokeObjectURL(url);
+  },
 };

@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Bell, BookOpen, Home, LogOut, Radar, Search, Settings, SlidersHorizontal, Users } from "lucide-react";
+import { Bell, BookOpen, Home, LogOut, Radar, Search, Settings, SlidersHorizontal, Store, Users } from "lucide-react";
 import { fmtUSD } from "../shared/economics";
 import { useApp, useRoute, useSession } from "./store";
 import { RadarView } from "./views/Radar";
 import { SettingsView } from "./views/Settings";
+import { PortalView } from "./views/Portal";
 import { HomeView } from "./views/Home";
 import { JobView } from "./views/Job";
 import { IntakeView } from "./views/Intake";
@@ -17,6 +18,7 @@ const RAIL = [
   { id: "intake", icon: Search, label: "New job / intake" },
   { id: "radar", icon: Radar, label: "Job Radar — find & pitch jobs" },
   { id: "approvals", icon: Bell, label: "Approvals" },
+  { id: "portal", icon: Store, label: "Client portal" },
   { id: "memory", icon: Users, label: "Client memory" },
   { id: "playbook", icon: BookOpen, label: "Playbook: templates & models" },
   { id: "autonomy", icon: SlidersHorizontal, label: "Autonomy controls" },
@@ -54,6 +56,9 @@ export function App() {
       break;
     case "radar":
       view = <RadarView searchId={route[1] === "search" ? route[2] : undefined} leadId={route[1] === "lead" ? route[2] : undefined} />;
+      break;
+    case "portal":
+      view = <PortalView tab={route[1]} pkgId={route[1] === "packages" ? route[2] : undefined} />;
       break;
     case "settings":
       view = <SettingsView tab={route[1]} />;

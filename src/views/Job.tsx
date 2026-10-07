@@ -208,6 +208,28 @@ function BriefTab({ d, setD }: TabProps) {
         </div>
       </div>
 
+      {job.portal && (
+        <Panel title={`Portal request · ${job.portal.packageName}${job.portal.addOnLabels?.length ? ` + ${job.portal.addOnLabels.join(", ")}` : ""}`} aside={<span className="badge">{job.portal.clientApprovedAt ? "Client approved" : "From client portal"}</span>}>
+          <dl className="answers">
+            {job.portal.answers.map((x) => (
+              <div key={x.questionId}>
+                <dt className="small muted">{x.label}</dt>
+                <dd>{x.value}</dd>
+              </div>
+            ))}
+          </dl>
+          {job.portal.files.length > 0 && (
+            <div className="row gap wrap top-gap">
+              {job.portal.files.map((f) => (
+                <button key={f.key} className="btn sm" onClick={() => api.downloadFile(f).catch(() => undefined)}>
+                  ⬇ {f.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </Panel>
+      )}
+
       {a ? (
         <Panel
           title={

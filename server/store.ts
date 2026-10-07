@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { AuditEntry, AutonomyPolicy, ClientMemory, FirmProfile, Generation, Job, Lesson, RadarState } from "../shared/types";
+import type { AuditEntry, AutonomyPolicy, ClientMemory, FirmProfile, Generation, Job, Lesson, PortalConfig, PortalUser, RadarState } from "../shared/types";
+import { defaultPackage, defaultPortal } from "../shared/portal";
 import { getBackend } from "./persist";
 
 // Each workspace (tenant) has its own document: jobs, clients, generations,
@@ -20,6 +21,8 @@ export interface DB {
   policy: AutonomyPolicy;
   profile: FirmProfile;
   radar: RadarState;
+  portal: PortalConfig;
+  portalUsers: PortalUser[];
 }
 
 export const DEFAULT_POLICY: AutonomyPolicy = {
@@ -33,7 +36,7 @@ export const DEFAULT_POLICY: AutonomyPolicy = {
   blockedOrigins: [],
   clientMessages: "draft-only",
   requireApproval: { acceptJob: true, finalDelivery: true, scopeChange: true },
-  channelFees: { upwork: 0.1, fiverr: 0.2, contra: 0, direct: 0 },
+  channelFees: { upwork: 0.1, fiverr: 0.2, contra: 0, direct: 0, portal: 0 },
   repairReservePct: 0.25,
   agentMayResolve: ["client-questions", "accept-job", "start-production", "qa-escalation"],
 };
@@ -62,6 +65,8 @@ export function emptyDB(): DB {
     policy: structuredClone(DEFAULT_POLICY),
     profile: structuredClone(DEFAULT_PROFILE),
     radar: { searches: [], leads: [] },
+    portal: defaultPortal(),
+    portalUsers: [],
   };
 }
 
@@ -73,10 +78,21 @@ export function normalizeDB(raw: Partial<DB> | undefined): DB {
     ...base,
     ...raw,
     version: 2,
-    policy: { ...base.policy, ...(raw.policy ?? {}) },
     profile: { ...base.profile, ...(raw.profile ?? {}) },
     radar: { searches: raw.radar?.searches ?? [], leads: raw.radar?.leads ?? [] },
+    policy: { ...base.policy, ...(raw.policy ?? {}), channelFees: { ...base.policy.channelFees, ...(raw.policy?.channelFees ?? {}) } },
+    portal: normalizePortal(raw.portal),
+    portalUsers: raw.portalUsers ?? [],
   };
+}
+
+function normalizePortal(p: Partial<PortalConfig> | undefined): PortalConfig {
+  const base = defaultPortal();
+  if (!p) return base;
+  // Keep the studio's packages, and offer templates added since as inactive packages.
+  const packages = [...(p.packages ?? [])];
+  for (const d of base.packages) if (!packages.some((x) => x.templateId === d.templateId)) packages.push({ ...defaultPackage(d.templateId), active: false });
+  return { ...base, ...p, packages };
 }
 
 // ---------------------------------------------------------------------------

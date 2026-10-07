@@ -2,7 +2,7 @@
   "name": "studio-operator",
   "version": "0.1.0",
   "private": true,
-  "description": "Studio Operator \u2014 cockpit for a semi-autonomous, AI-native creative service firm (Astra orchestration + Higgsfield production layer).",
+  "description": "Studio Operator — cockpit for a semi-autonomous, AI-native creative service firm (Astra orchestration + Higgsfield production layer).",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n api,web -c blue,magenta \"tsx watch server/index.ts\" \"vite\"",
@@ -17,6 +17,7 @@
     "node": ">=20.6"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1147.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "express": "^5.2.1",
     "lucide-react": "^1.52.0",

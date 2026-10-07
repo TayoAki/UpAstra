@@ -1,6 +1,6 @@
 // Domain model for Studio Operator. Shared by server and client.
 
-export type Channel = "upwork" | "fiverr" | "contra" | "direct";
+export type Channel = "upwork" | "fiverr" | "contra" | "direct" | "portal";
 
 export type JobStage =
   | "intake" // raw brief received, not yet analysed
@@ -239,6 +239,27 @@ export interface ClientMessage {
   classification?: "routine" | "scope-change" | "question" | "approval";
 }
 
+/** A file a client uploaded through the portal (or the studio attached). */
+export interface FileRef {
+  key: string;
+  name: string;
+  size: number;
+  type: string;
+}
+
+/** What a client chose and told us when requesting work through the portal. */
+export interface PortalRequest {
+  packageId: string;
+  packageName: string;
+  addOnIds: string[];
+  addOnLabels?: string[];
+  answers: { questionId: string; label: string; value: string }[];
+  files: FileRef[];
+  clientUserId: string;
+  submittedAt: string;
+  clientApprovedAt?: string;
+}
+
 export interface Job {
   id: string;
   title: string;
@@ -259,6 +280,7 @@ export interface Job {
   checkpoints: Checkpoint[];
   messages: ClientMessage[];
   revisionCount: number;
+  portal?: PortalRequest;
   createdAt: string;
   updatedAt: string;
   running?: boolean;
@@ -419,4 +441,91 @@ export interface Lead {
 export interface RadarState {
   searches: SavedSearch[];
   leads: Lead[];
+}
+
+// ---------------------------------------------------------------------------
+// Client portal: each workspace's public storefront and client accounts
+
+export interface PortalAddOn {
+  id: string;
+  label: string;
+  price: number;
+  /** extra-units adds `value` pieces/images/variations to the main deliverable. */
+  kind: "extra-units" | "rush" | "revision" | "custom";
+  value?: number;
+}
+
+export interface PortalQuestion {
+  id: string;
+  label: string;
+  help?: string;
+  type: "text" | "textarea" | "select" | "files";
+  options?: string[];
+  required: boolean;
+}
+
+export interface PortalPackage {
+  id: string;
+  templateId: string;
+  name: string;
+  description: string;
+  price: number;
+  turnaroundDays: number;
+  includes: string[];
+  addOns: PortalAddOn[];
+  questions: PortalQuestion[];
+  active: boolean;
+}
+
+export interface PortalConfig {
+  enabled: boolean;
+  slug: string;
+  headline: string;
+  intro: string;
+  accentColor: string;
+  logoUrl: string;
+  /** Accept portal requests that Astra recommends, without a human checkpoint. */
+  autoAccept: boolean;
+  /** Custom domain that serves this portal, e.g. work.northside.studio */
+  customDomain: string;
+  /** Sites allowed to embed the portal in an iframe. Empty = any site. */
+  embedOrigins: string[];
+  packages: PortalPackage[];
+}
+
+export interface PortalUser {
+  id: string;
+  email: string;
+  name: string;
+  company: string;
+  passwordHash: string;
+  clientId: string;
+  createdAt: string;
+}
+
+/** Public view of a portal (no internal data). */
+export interface PortalPublic {
+  slug: string;
+  studio: { name: string; headline: string; intro: string; accentColor: string; logoUrl: string };
+  packages: Omit<PortalPackage, "templateId" | "active">[];
+}
+
+export type ClientStatus = "received" | "questions" | "in-progress" | "ready" | "revising" | "completed" | "declined";
+
+/** A request as its client sees it — never costs, margins, models or internal notes. */
+export interface ClientRequestView {
+  id: string;
+  title: string;
+  packageName: string;
+  price: number;
+  status: ClientStatus;
+  statusLabel: string;
+  submittedAt: string;
+  updatedAt: string;
+  answers: PortalRequest["answers"];
+  files: FileRef[];
+  deliverables: { label: string; kind: MediaKind; items: { url?: string; markdown?: string }[] }[];
+  messages: { id: string; at: string; from: "you" | "studio"; body: string }[];
+  canApprove: boolean;
+  canRequestChanges: boolean;
 }

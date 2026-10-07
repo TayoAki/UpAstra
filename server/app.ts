@@ -4,7 +4,7 @@ import express, { Router, type NextFunction, type Request, type Response } from 
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { MODEL_CATALOG } from "../shared/catalog";
 import { SERVICE_TEMPLATES, getTemplate } from "../shared/templates";
-import type { AutonomyPolicy, ClientMemory, FirmProfile, Job, Lead, ProviderStatus, Role } from "../shared/types";
+import type { AutonomyPolicy, ClientMemory, FirmProfile, Job, Lead, PortalPackage, ProviderStatus, Role } from "../shared/types";
 import { apifyConfigured } from "./apify";
 import { astraMode, astraModel } from "./astra";
 import {
@@ -43,6 +43,9 @@ import {
 } from "./pipeline";
 import { checkProposal, convertLeadToJob, draftProposal, newSearch, runSearch, scoreLead } from "./radar";
 import { seed } from "./seed";
+import { claimSlug, embedScript, isPortalHost, portalRouter, slugForHost } from "./portal";
+import { fileStore, keyBelongsTo } from "./files";
+import { RESERVED_SLUGS, SLUG_RE, defaultPackage, slugify } from "../shared/portal";
 import { DEFAULT_POLICY, HttpError, audit, currentActor, emptyDB, ensureTenant, findClient, findJob, getDB, newId, now, runWith, save } from "./store";
 
 type Req = Request<Record<string, string>>;
@@ -102,7 +105,10 @@ async function createWorkspace(userId: string, name: string, demo: boolean) {
   await b.createWorkspace(ws, emptyDB());
   await b.addMember({ userId, workspaceId: ws.id, role: "owner" });
   await ensureTenant(ws.id);
+  const slug = await claimSlug(ws.id, slugify(ws.name));
   await runWith({ workspaceId: ws.id, actor: "human", userId }, async () => {
+    getDB().portal.slug = slug;
+    getDB().profile.firmName ||= ws.name;
     audit({ actor: "system", type: "policy", message: `Workspace "${ws.name}" created.` });
     if (demo) await seed();
     save();
@@ -125,14 +131,41 @@ export function createApp(opts: { port: number }) {
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
   app.use(express.json({ limit: "2mb" }));
-  app.use((_req, res, next) => {
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Referrer-Policy", "same-origin");
-    res.setHeader("X-Frame-Options", "SAMEORIGIN");
-    next();
+  app.use(async (req, res, next) => {
+    try {
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+      // The client portal may be embedded on the studio's own site; nothing else may be framed.
+      const htmlish = req.method === "GET" && !req.path.startsWith("/api") && !req.path.startsWith("/papi") && !req.path.startsWith("/assets");
+      const portalPage = htmlish && (req.path.startsWith("/p/") || (await isPortalHost(req.hostname)));
+      if (portalPage) {
+        const slug = req.path.startsWith("/p/") ? req.path.split("/")[2] : await slugForHost(req.hostname);
+        const ws = slug ? await getBackend().findWorkspaceByPortalSlug(slug.toLowerCase()) : undefined;
+        let origins = "*";
+        if (ws) {
+          const db = await ensureTenant(ws.id);
+          if (db.portal.embedOrigins.length) origins = `'self' ${db.portal.embedOrigins.join(" ")}`;
+        }
+        res.setHeader("Content-Security-Policy", `frame-ancestors ${origins}`);
+      } else {
+        res.setHeader("X-Frame-Options", "SAMEORIGIN");
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
   });
 
   app.get("/api/health", (_req, res) => res.json({ ok: true, storage: getBackend().kind, ...providerStatus() }));
+
+  // ---- Client portal (public) ---------------------------------------------------
+  app.use("/papi", express.json({ limit: "200kb" }), portalRouter());
+
+  app.get("/embed.js", (_req, res) => {
+    res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.send(embedScript(process.env.APP_URL ?? ""));
+  });
 
   // ---- Accounts --------------------------------------------------------------
 
@@ -458,6 +491,121 @@ export function createApp(opts: { port: number }) {
     }),
   );
 
+  // ---- Client portal settings ----
+  const portalInfo = (req: Req) => {
+    const db = getDB();
+    const appUrl = process.env.APP_URL ?? `${req.protocol}://${req.get("host")}`;
+    const base = process.env.PORTAL_BASE_DOMAIN;
+    return {
+      config: db.portal,
+      templates: SERVICE_TEMPLATES.map((t) => ({ id: t.id, name: t.name })),
+      urls: {
+        path: `${appUrl}/p/${db.portal.slug}`,
+        subdomain: base ? `https://${db.portal.slug}.${base}` : null,
+        custom: db.portal.customDomain ? `https://${db.portal.customDomain}` : null,
+        embed: `<script src="${appUrl}/embed.js" data-studio="${db.portal.slug}" data-color="${db.portal.accentColor}" async></script>`,
+        cnameTarget: new URL(appUrl).hostname,
+      },
+      clients: db.portalUsers.map((u) => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        company: u.company,
+        clientId: u.clientId,
+        requests: db.jobs.filter((j) => j.portal?.clientUserId === u.id).length,
+        createdAt: u.createdAt,
+      })),
+    };
+  };
+
+  api.get(
+    "/portal",
+    wrap(async (req, res) => {
+      const db = getDB();
+      // Workspaces created before the portal existed get an address on first visit.
+      if (!db.portal.slug || !db.profile.firmName) {
+        const ws = await getBackend().getWorkspace(req.studio!.workspaceId);
+        if (!db.portal.slug) db.portal.slug = await claimSlug(req.studio!.workspaceId, slugify(ws?.name ?? "studio"));
+        db.profile.firmName ||= ws?.name ?? "";
+        save();
+      }
+      res.json(portalInfo(req));
+    }),
+  );
+
+  api.put(
+    "/portal",
+    wrap(async (req, res) => {
+      requireRole(req, "owner", "admin");
+      const db = getDB();
+      const b = req.body ?? {};
+      const cur = db.portal;
+      const str = (v: unknown, max: number, fallback: string) => (typeof v === "string" ? v.trim().slice(0, max) : fallback);
+      const next = { ...cur };
+      if (typeof b.enabled === "boolean") next.enabled = b.enabled;
+      if (typeof b.autoAccept === "boolean") next.autoAccept = b.autoAccept;
+      next.headline = str(b.headline, 120, cur.headline);
+      next.intro = str(b.intro, 1000, cur.intro);
+      if (typeof b.accentColor === "string") {
+        if (!/^#[0-9a-f]{6}$/i.test(b.accentColor)) throw new HttpError(400, "Accent color must be a hex color like #4f46e5");
+        next.accentColor = b.accentColor;
+      }
+      if (typeof b.logoUrl === "string") {
+        if (b.logoUrl && !/^https:\/\/\S+$/i.test(b.logoUrl)) throw new HttpError(400, "Logo URL must start with https://");
+        next.logoUrl = b.logoUrl.trim();
+      }
+      if (Array.isArray(b.embedOrigins)) {
+        const origins = b.embedOrigins.map((o: unknown) => String(o).trim().replace(/\/$/, "")).filter(Boolean);
+        for (const o of origins) if (!/^https?:\/\/[a-z0-9.-]+(:\d+)?$/i.test(o)) throw new HttpError(400, `"${o}" isn't a site origin like https://example.com`);
+        next.embedOrigins = origins.slice(0, 20);
+      }
+      if (typeof b.slug === "string" && b.slug !== cur.slug) {
+        const slug = b.slug.trim().toLowerCase();
+        if (!SLUG_RE.test(slug) || RESERVED_SLUGS.has(slug)) throw new HttpError(400, "Use 3–40 lowercase letters, numbers or dashes");
+        const taken = await getBackend().findWorkspaceByPortalSlug(slug);
+        if (taken && taken.id !== req.studio!.workspaceId) throw new HttpError(409, "That portal address is taken");
+        await getBackend().updateWorkspace(req.studio!.workspaceId, { portalSlug: slug });
+        next.slug = slug;
+      }
+      if (typeof b.customDomain === "string" && b.customDomain.trim().toLowerCase() !== cur.customDomain) {
+        const domain = b.customDomain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+        if (domain && !/^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/.test(domain)) throw new HttpError(400, "Enter a domain like work.yourstudio.com");
+        const appHost = process.env.APP_URL ? new URL(process.env.APP_URL).hostname : "";
+        if (domain && (domain === appHost || (process.env.PORTAL_BASE_DOMAIN && domain.endsWith(process.env.PORTAL_BASE_DOMAIN)))) throw new HttpError(400, "Use a domain you own");
+        const taken = domain ? await getBackend().findWorkspaceByPortalDomain(domain) : undefined;
+        if (taken && taken.id !== req.studio!.workspaceId) throw new HttpError(409, "That domain is already connected to another studio");
+        await getBackend().updateWorkspace(req.studio!.workspaceId, { portalDomain: domain });
+        next.customDomain = domain;
+      }
+      if (Array.isArray(b.packages)) next.packages = b.packages.slice(0, 40).map(sanitizePackage);
+      db.portal = next;
+      audit({ actor: "human", type: "policy", message: `Client portal updated${next.enabled !== cur.enabled ? ` (${next.enabled ? "opened" : "closed"})` : ""}.` });
+      save();
+      res.json(portalInfo(req));
+    }),
+  );
+
+  api.post("/portal/packages/default", (req, res) => {
+    requireRole(req, "owner", "admin");
+    const templateId = String(req.body?.templateId ?? "");
+    if (!SERVICE_TEMPLATES.some((t) => t.id === templateId)) throw new HttpError(400, "Unknown template");
+    res.json({ ...defaultPackage(templateId), id: newId("pkg"), active: true });
+  });
+
+  // Files attached to jobs (client uploads) — studio members only.
+  api.get(
+    "/files/*key",
+    wrap(async (req, res) => {
+      const raw = (req.params as unknown as { key: string | string[] }).key;
+      const key = Array.isArray(raw) ? raw.join("/") : String(raw ?? "");
+      if (!keyBelongsTo(key, req.studio!.workspaceId)) throw new HttpError(404, "File not found");
+      const f = await fileStore().get(key);
+      res.setHeader("Content-Type", f.type);
+      res.setHeader("Content-Disposition", "attachment");
+      res.send(f.body);
+    }),
+  );
+
   // ---- Job Radar ----
   api.get("/radar", (_req, res) => res.json(getDB().radar));
 
@@ -546,7 +694,7 @@ export function createApp(opts: { port: number }) {
   api.use((_req, res) => res.status(404).json({ error: "Not found" }));
 
   // Production: serve the built client.
-  const dist = path.resolve(process.cwd(), "dist");
+  const dist = process.env.DIST_DIR ?? path.resolve(process.cwd(), "dist");
   if (fs.existsSync(dist)) {
     app.use(express.static(dist, { index: false, maxAge: "1h" }));
     app.use((req, res, next) => (req.method === "GET" && !req.path.startsWith("/api") ? res.sendFile(path.join(dist, "index.html")) : next()));
@@ -559,6 +707,43 @@ export function createApp(opts: { port: number }) {
   });
 
   return app;
+}
+
+function sanitizePackage(raw: Partial<PortalPackage>): PortalPackage {
+  if (!SERVICE_TEMPLATES.some((t) => t.id === raw.templateId)) throw new HttpError(400, "Each package needs a valid service template");
+  const base = defaultPackage(raw.templateId!);
+  const text = (v: unknown, max: number, fb: string) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : fb);
+  const money = (v: unknown, fb: number) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.round(Number(v) * 100) / 100 : fb);
+  const id = (v: unknown, fb: string) => (typeof v === "string" && /^[\w-]{1,40}$/.test(v) ? v : fb);
+  return {
+    id: id(raw.id, newId("pkg")),
+    templateId: base.templateId,
+    name: text(raw.name, 80, base.name),
+    description: text(raw.description, 600, base.description),
+    price: money(raw.price, base.price),
+    turnaroundDays: Math.max(1, Math.min(90, Math.round(Number(raw.turnaroundDays) || base.turnaroundDays))),
+    includes: Array.isArray(raw.includes) ? raw.includes.map(String).map((s) => s.trim().slice(0, 120)).filter(Boolean).slice(0, 12) : base.includes,
+    addOns: Array.isArray(raw.addOns)
+      ? raw.addOns.slice(0, 10).map((a, i) => ({
+          id: id(a?.id, `addon${i}`),
+          label: text(a?.label, 80, "Add-on"),
+          price: money(a?.price, 0),
+          kind: (["extra-units", "rush", "revision", "custom"].includes(String(a?.kind)) ? a.kind : "custom") as PortalPackage["addOns"][number]["kind"],
+          value: a?.kind === "extra-units" ? Math.max(1, Math.min(20, Math.round(Number(a?.value) || 1))) : undefined,
+        }))
+      : base.addOns,
+    questions: Array.isArray(raw.questions)
+      ? raw.questions.slice(0, 20).map((q, i) => ({
+          id: id(q?.id, `q${i}`),
+          label: text(q?.label, 200, "Question"),
+          help: typeof q?.help === "string" ? q.help.slice(0, 300) : undefined,
+          type: (["text", "textarea", "select", "files"].includes(String(q?.type)) ? q.type : "text") as PortalPackage["questions"][number]["type"],
+          options: Array.isArray(q?.options) ? q.options.map(String).map((o) => o.trim().slice(0, 80)).filter(Boolean).slice(0, 20) : undefined,
+          required: !!q?.required,
+        }))
+      : base.questions,
+    active: raw.active !== false,
+  };
 }
 
 /** Best-effort listing import. Marketplaces often require login; then paste the brief. */

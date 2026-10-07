@@ -1,4 +1,7 @@
 import type { ClientMemory, Job } from "../shared/types";
+import { randomUUID } from "node:crypto";
+import { hashPassword } from "./auth";
+import { composeBrief } from "./portal";
 import { createJob, receiveClientMessage, resolveCheckpoint, settle, type NewJobInput } from "./pipeline";
 import { newSearch, runSearch } from "./radar";
 import { currentCtx, getDB, runWith, save } from "./store";
@@ -231,7 +234,7 @@ export async function seed() {
     const db = getDB();
     db.clients.push(...structuredClone(CLIENTS));
     db.profile = {
-      firmName: "Studio Operator Demo",
+      firmName: db.profile.firmName || "Studio Operator Demo",
       positioning: "A small creative studio that ships product visuals, launch videos, conversion copy and grant narratives fast — checked against your brief before you see it.",
       services: ["Product stills & lifestyle images", "Short product videos", "Cold email sequences", "Ad copy", "Grant proposals"],
       proofPoints: ["Delivered 40+ product image sets for Amazon sellers", "Wrote outbound sequences for B2B SaaS teams"],
@@ -244,6 +247,39 @@ export async function seed() {
       const job = await createJob(input);
       await advance(job, target, followUp);
     }
+    // Demo client portal: open, with one request from a portal client.
+    db.portal.enabled = true;
+    db.portal.headline = "Creative work, without the agency wait";
+    const dana = {
+      id: "pu_demo",
+      email: "dana@acme-payroll.example",
+      name: "Dana Reyes",
+      company: "Acme Payroll",
+      passwordHash: await hashPassword(randomUUID()),
+      clientId: "",
+      createdAt: new Date().toISOString(),
+    };
+    const portalClient = { id: "cl_acme", name: "Acme Payroll", contact: "Dana Reyes", logo: "", colors: ["#0f172a", "#10b981", "#ecfdf5"], fonts: [], likes: [], rejectedStyles: [], approvedClaims: ["Used by 300+ restaurants"], notes: "Portal client" };
+    db.clients.push(portalClient);
+    dana.clientId = portalClient.id;
+    db.portalUsers.push(dana);
+    const answers = [
+      { questionId: "brief", label: "Describe what you need", value: "Outbound to restaurant owners for our payroll app." },
+      { questionId: "audience", label: "Who are we emailing?", value: "owners of independent restaurants with 1-3 locations" },
+      { questionId: "offer", label: "What do you sell?", value: "payroll software built for restaurants" },
+      { questionId: "cta", label: "What should readers do?", value: "book a 15 minute demo" },
+      { questionId: "emails", label: "How many emails?", value: "4" },
+    ];
+    await createJob({
+      title: "Cold email sequence — Acme Payroll",
+      channel: "portal",
+      rawBrief: composeBrief("Cold Email Sequence", "cold-email-sequence", answers, [], []),
+      clientId: portalClient.id,
+      price: 250,
+      templateId: "cold-email-sequence",
+      portal: { packageId: "pkg_cold-email-sequence", packageName: "Cold Email Sequence", addOnIds: [], answers, files: [], clientUserId: dana.id, submittedAt: new Date().toISOString() },
+    });
+
     const search = newSearch({ name: "Copy & creative jobs", source: "upwork", query: "cold email ad copy grant product images video", schedule: "manual", autoDraft: true, maxItems: 12 });
     db.radar.searches.push(search);
     await runSearch(search);

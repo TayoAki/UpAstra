@@ -35,6 +35,26 @@ All configuration is in [`.env.example`](.env.example).
 - **Keys:** OpenRouter, Higgsfield and Apify keys are platform-level environment variables and never reach the browser.
 - **Not built yet:** billing (e.g. Stripe) and per-workspace usage metering. Run a single replica, because workspace documents are cached in memory.
 
+## Client portal
+
+Every workspace gets a public, branded portal where its own clients request work. Manage it from **Portal** in the studio app.
+
+1. **Storefront:** lives at `/p/<slug>`. It shows the packages the studio chose to sell, each with price, turnaround, what's included and add-ons (extra images or variations, rush, extra revision). The studio name comes from the firm profile; the logo and accent color come from Portal → Setup.
+2. **Guided brief:** each package has its own questions (short or long text, choices, file uploads). These are pre-filled per service so intake gets what it needs up front, and studios can edit them per package.
+3. **Client accounts:** clients sign up with email and password, scoped to that one portal. Each account is linked to a client record, so brand memory carries into every job. Signups are throttled and the form has a spam honeypot. Email magic links will replace passwords once an email provider is added.
+4. **Requests become jobs:** a submitted request is a job with channel `portal` and no marketplace fee.
+   - **Service:** the package fixes the service template.
+   - **Add-ons:** extra images or variations raise the quantity, and rush is noted for the studio.
+   - **Claims:** claims the client provides are added to their client record's approved claims.
+   - **Pipeline:** the job goes through the normal intake, pricing and approval gates. Turn on auto-accept in Portal → Setup to skip the accept step for clean, profitable requests.
+5. **Client dashboard:** shows a simple status (Received → In production → Ready for review → Completed) and a message thread. The client sees deliverables only **after the studio approves delivery**. They can then approve the work or ask for changes; change requests go through the normal client-message handling (routine revision vs. scope change). Clients never see costs, margins, models, QA notes or internal drafts.
+6. **Uploads:** stored in an S3-compatible bucket (`S3_*`) or on local disk, under the workspace's own prefix. Files are size-limited and type-checked, and only the client who uploaded them and the studio can download them.
+7. **Domains and embedding (Portal → Share & embed):**
+   - **Custom domain:** CNAME it to the app, then add it to the service in Railway so it gets HTTPS.
+   - **Subdomains:** `<slug>.PORTAL_BASE_DOMAIN` works if you point a wildcard domain at the app.
+   - **Website widget:** `<script src="https://<app>/embed.js" data-studio="<slug>">` adds a floating "Request work" button that opens the portal in a modal. Use **embed origins** to restrict which sites may frame it.
+8. **No payments yet:** the request total is shown, and the studio arranges payment directly with the client.
+
 ## Built-in AI: OpenRouter
 
 `server/llm.ts` is the only file that talks to a language model. Intake, QA, copywriting, client-message reading and proposals all go through `chatJSON()`.

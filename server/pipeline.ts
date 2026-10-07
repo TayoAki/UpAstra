@@ -117,6 +117,13 @@ export interface NewJobInput {
   newClientName?: string;
   price: number;
   productionBudget?: number;
+  /** Portal requests: the package fixes the service template. */
+  templateId?: string;
+  /** Extra pieces/images/variations bought as an add-on. */
+  extraUnits?: number;
+  /** Skip the accept-job gate when Astra recommends accepting and margins clear. */
+  autoAccept?: boolean;
+  portal?: Job["portal"];
 }
 
 export async function createJob(input: NewJobInput): Promise<Job> {
@@ -160,6 +167,7 @@ export async function createJob(input: NewJobInput): Promise<Job> {
     checkpoints: [],
     messages: [],
     revisionCount: 0,
+    portal: input.portal,
     createdAt: now(),
     updatedAt: now(),
   };
@@ -167,11 +175,11 @@ export async function createJob(input: NewJobInput): Promise<Job> {
   addMessage(job, { direction: "inbound", body: input.rawBrief, status: "received" });
   audit({ jobId: job.id, actor: "human", type: "intake", message: `Job created from ${input.channel}${input.sourceUrl ? ` (${input.sourceUrl})` : ""} at ${fmtUSD(job.price)}` });
 
-  await analyzeJob(job, client);
+  await analyzeJob(job, client, input);
   return job;
 }
 
-async function analyzeJob(job: Job, client: ClientMemory) {
+async function analyzeJob(job: Job, client: ClientMemory, opts: Pick<NewJobInput, "templateId" | "extraUnits" | "autoAccept"> = {}) {
   const policy = getDB().policy;
   const analysis = await analyzeBrief({
     rawBrief: job.rawBrief,
@@ -181,6 +189,14 @@ async function analyzeJob(job: Job, client: ClientMemory) {
     clientNotes: job.clientNotes,
     client,
   });
+  if (opts.templateId && opts.templateId !== analysis.templateId) {
+    // The client picked a package, so its template wins over Astra's guess.
+    const t = getTemplate(opts.templateId);
+    analysis.templateId = t.id;
+    analysis.deliverables = t.deliverables.map((d) => structuredClone(d));
+    analysis.summary = `${analysis.summary.replace(/ — best fit: .*$/, "")} — package: ${t.name}.`;
+  }
+  if (opts.extraUnits && analysis.deliverables[0]) analysis.deliverables[0].quantity += opts.extraUnits;
   job.analysis = analysis;
   job.templateId = analysis.templateId;
   job.deadline = analysis.deadline;
@@ -202,7 +218,7 @@ async function analyzeJob(job: Job, client: ClientMemory) {
   }
 
   const econ = jobEconomics(job);
-  if (analysis.recommendation !== "accept" || policy.requireApproval.acceptJob || !econ.meetsMinimum) {
+  if (analysis.recommendation !== "accept" || (policy.requireApproval.acceptJob && !opts.autoAccept) || !econ.meetsMinimum) {
     openCheckpoint(
       job,
       "accept-job",

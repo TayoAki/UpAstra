@@ -21,6 +21,9 @@ export interface WorkspaceRow {
   createdAt: string;
   /** sha256 of the workspace's agent (MCP/API) token. */
   agentTokenHash?: string;
+  /** Public client-portal routing; unique across the platform. */
+  portalSlug?: string;
+  portalDomain?: string;
 }
 
 export interface MembershipRow {
@@ -47,6 +50,8 @@ export interface Backend {
   getWorkspace(id: string): Promise<WorkspaceRow | undefined>;
   updateWorkspace(id: string, patch: Partial<Omit<WorkspaceRow, "id">>): Promise<void>;
   findWorkspaceByAgentToken(hash: string): Promise<WorkspaceRow | undefined>;
+  findWorkspaceByPortalSlug(slug: string): Promise<WorkspaceRow | undefined>;
+  findWorkspaceByPortalDomain(domain: string): Promise<WorkspaceRow | undefined>;
   listAllWorkspaceIds(): Promise<string[]>;
   addMember(m: MembershipRow): Promise<void>;
   removeMember(workspaceId: string, userId: string): Promise<void>;
@@ -95,6 +100,8 @@ class PgBackend implements Backend {
       CREATE TABLE IF NOT EXISTS invites (
         code TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
         role TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), expires_at TIMESTAMPTZ NOT NULL);
+      ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS portal_slug TEXT UNIQUE;
+      ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS portal_domain TEXT UNIQUE;
     `);
   }
 
@@ -109,6 +116,8 @@ class PgBackend implements Backend {
     id: String(r.id),
     name: String(r.name),
     agentTokenHash: (r.agent_token_hash as string) ?? undefined,
+    portalSlug: (r.portal_slug as string) ?? undefined,
+    portalDomain: (r.portal_domain as string) ?? undefined,
     createdAt: new Date(r.created_at as string).toISOString(),
   });
 
@@ -127,15 +136,25 @@ class PgBackend implements Backend {
     await this.q(`INSERT INTO workspaces (id, name, data) VALUES ($1, $2, $3)`, [w.id, w.name, JSON.stringify(data)]);
   }
   async getWorkspace(id: string) {
-    const r = await this.q(`SELECT id, name, agent_token_hash, created_at FROM workspaces WHERE id = $1`, [id]);
+    const r = await this.q(`SELECT id, name, agent_token_hash, portal_slug, portal_domain, created_at FROM workspaces WHERE id = $1`, [id]);
     return r.rows[0] && this.ws(r.rows[0]);
   }
   async updateWorkspace(id: string, patch: Partial<Omit<WorkspaceRow, "id">>) {
     if (patch.name !== undefined) await this.q(`UPDATE workspaces SET name = $2 WHERE id = $1`, [id, patch.name]);
     if (patch.agentTokenHash !== undefined) await this.q(`UPDATE workspaces SET agent_token_hash = $2 WHERE id = $1`, [id, patch.agentTokenHash || null]);
+    if (patch.portalSlug !== undefined) await this.q(`UPDATE workspaces SET portal_slug = $2 WHERE id = $1`, [id, patch.portalSlug || null]);
+    if (patch.portalDomain !== undefined) await this.q(`UPDATE workspaces SET portal_domain = $2 WHERE id = $1`, [id, patch.portalDomain || null]);
+  }
+  async findWorkspaceByPortalSlug(slug: string) {
+    const r = await this.q(`SELECT id, name, agent_token_hash, portal_slug, portal_domain, created_at FROM workspaces WHERE portal_slug = $1`, [slug]);
+    return r.rows[0] && this.ws(r.rows[0]);
+  }
+  async findWorkspaceByPortalDomain(domain: string) {
+    const r = await this.q(`SELECT id, name, agent_token_hash, portal_slug, portal_domain, created_at FROM workspaces WHERE portal_domain = $1`, [domain]);
+    return r.rows[0] && this.ws(r.rows[0]);
   }
   async findWorkspaceByAgentToken(hash: string) {
-    const r = await this.q(`SELECT id, name, agent_token_hash, created_at FROM workspaces WHERE agent_token_hash = $1`, [hash]);
+    const r = await this.q(`SELECT id, name, agent_token_hash, portal_slug, portal_domain, created_at FROM workspaces WHERE agent_token_hash = $1`, [hash]);
     return r.rows[0] && this.ws(r.rows[0]);
   }
   async listAllWorkspaceIds() {
@@ -154,7 +173,7 @@ class PgBackend implements Backend {
   }
   async listWorkspacesForUser(userId: string) {
     const r = await this.q(
-      `SELECT w.id, w.name, w.agent_token_hash, w.created_at, m.role FROM workspaces w JOIN memberships m ON m.workspace_id = w.id WHERE m.user_id = $1 ORDER BY w.created_at`,
+      `SELECT w.id, w.name, w.agent_token_hash, w.portal_slug, w.portal_domain, w.created_at, m.role FROM workspaces w JOIN memberships m ON m.workspace_id = w.id WHERE m.user_id = $1 ORDER BY w.created_at`,
       [userId],
     );
     return r.rows.map((row) => ({ ...this.ws(row), role: row.role as Role }));
@@ -229,11 +248,21 @@ class FileBackend implements Backend {
   }
   async updateWorkspace(id: string, patch: Partial<Omit<WorkspaceRow, "id">>) {
     const w = this.p.workspaces.find((x) => x.id === id);
+    for (const k of ["portalSlug", "portalDomain"] as const) {
+      const v = patch[k];
+      if (v && this.p.workspaces.some((x) => x.id !== id && x[k] === v)) throw new Error(`duplicate ${k}`);
+    }
     if (w) Object.assign(w, patch);
     this.write();
   }
   async findWorkspaceByAgentToken(hash: string) {
     return this.p.workspaces.find((w) => w.agentTokenHash && w.agentTokenHash === hash);
+  }
+  async findWorkspaceByPortalSlug(slug: string) {
+    return this.p.workspaces.find((w) => w.portalSlug === slug);
+  }
+  async findWorkspaceByPortalDomain(domain: string) {
+    return this.p.workspaces.find((w) => w.portalDomain === domain);
   }
   async listAllWorkspaceIds() {
     return this.p.workspaces.map((w) => w.id);
