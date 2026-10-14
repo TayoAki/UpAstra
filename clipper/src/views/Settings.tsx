@@ -3,6 +3,7 @@ import { Trash2 } from "lucide-react";
 import { PLATFORM_LABEL, PLATFORMS, type Platform } from "../../shared/types";
 import { api } from "../api";
 import { Tabs } from "../App";
+import { AgentAccess } from "./AgentAccess";
 import { Empty, Panel } from "../components/ui";
 import { go, useApp } from "../store";
 
@@ -18,13 +19,16 @@ export function SettingsView({ tab }: { tab: string }) {
         tabs={[
           { id: "workspace", label: "Workspace" },
           { id: "accounts", label: "Posting accounts", n: state?.accounts.length },
+          { id: "agent", label: "Agent access" },
           { id: "account", label: "Your account" },
         ]}
         active={tab}
         onPick={(t) => go(`/settings/${t}`)}
       />
       <div className="content">
-        {tab === "accounts" ? (
+        {tab === "agent" ? (
+          <AgentAccess />
+        ) : tab === "accounts" ? (
           <>
             <div className="page-head">
               <div>

@@ -965,3 +965,24 @@ ul.tight li + li {
     display: none;
   }
 }
+
+/* Agent access */
+.key-box {
+  display: block;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--sunk);
+  font-size: 13px;
+  word-break: break-all;
+}
+pre.snippet {
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--sunk);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre;
+}

@@ -130,6 +130,13 @@ describe.skipIf(!ffmpegAvailable())("render pipeline", () => {
     const v = await fetch(`${base}/api/clips/${clip.id}/video`, { headers: { cookie, Range: "bytes=0-1023" } });
     expect(v.status).toBe(206);
     const full = Buffer.from(await (await fetch(`${base}/api/clips/${clip.id}/video`, { headers: { cookie } })).arrayBuffer());
+    // A signed link plays without a session, and stops working when tampered with.
+    const link = (await api(`/api/clips/${clip.id}/link`)).body.url as string;
+    expect(link).toMatch(/\/v\/ws_[\w]+\/clip_[\w]+\.mp4\?e=\d+&s=/);
+    const pub = await fetch(link, { headers: { Range: "bytes=0-99" } });
+    expect(pub.status).toBe(206);
+    expect(pub.headers.get("content-type")).toBe("video/mp4");
+    expect((await fetch(link.replace(/s=./, "s=x"))).status).toBe(404);
     const out = path.join(tmp, "out.mp4");
     fs.writeFileSync(out, full);
     const probe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=width,height:format=duration", "-of", "json", out]).toString());

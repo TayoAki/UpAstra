@@ -23,6 +23,7 @@ export interface WorkspaceRow {
   ownerId: string;
   name: string;
   createdAt: string;
+  hasAgentKey?: boolean;
 }
 
 interface Backend {
@@ -34,6 +35,9 @@ interface Backend {
   deleteUser(id: string): Promise<void>;
   createWorkspace(w: WorkspaceRow, doc: WorkspaceDoc): Promise<void>;
   workspaceForOwner(userId: string): Promise<WorkspaceRow | undefined>;
+  /** Agent (API / MCP) key: only its SHA-256 is stored. */
+  setAgentKey(id: string, hash: string | null): Promise<void>;
+  workspaceByAgentKey(hash: string): Promise<WorkspaceRow | undefined>;
   renameWorkspace(id: string, name: string): Promise<void>;
   deleteWorkspace(id: string): Promise<void>;
   loadDoc(id: string): Promise<WorkspaceDoc | undefined>;
@@ -55,7 +59,9 @@ class PgBackend implements Backend {
         id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES co_users(id) ON DELETE CASCADE,
         name TEXT NOT NULL, data JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
-      CREATE INDEX IF NOT EXISTS co_workspaces_owner ON co_workspaces(owner_id);`);
+      CREATE INDEX IF NOT EXISTS co_workspaces_owner ON co_workspaces(owner_id);
+      ALTER TABLE co_workspaces ADD COLUMN IF NOT EXISTS agent_key_hash TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS co_workspaces_agent_key ON co_workspaces(agent_key_hash);`);
   }
   private user = (r: Record<string, unknown> | undefined): UserRow | undefined =>
     r && { id: r.id as string, email: r.email as string, name: r.name as string, passwordHash: r.password_hash as string, createdAt: new Date(r.created_at as string).toISOString() };
@@ -74,9 +80,16 @@ class PgBackend implements Backend {
   async createWorkspace(w: WorkspaceRow, doc: WorkspaceDoc) {
     await this.pool.query("INSERT INTO co_workspaces (id, owner_id, name, data, created_at) VALUES ($1,$2,$3,$4,$5)", [w.id, w.ownerId, w.name, JSON.stringify(doc), w.createdAt]);
   }
+  private ws = (r: Record<string, unknown> | undefined): WorkspaceRow | undefined =>
+    r && { id: r.id as string, ownerId: r.owner_id as string, name: r.name as string, createdAt: new Date(r.created_at as string).toISOString(), hasAgentKey: !!r.agent_key_hash };
   async workspaceForOwner(userId: string) {
-    const r = (await this.pool.query("SELECT id, owner_id, name, created_at FROM co_workspaces WHERE owner_id=$1 ORDER BY created_at LIMIT 1", [userId])).rows[0];
-    return r && { id: r.id, ownerId: r.owner_id, name: r.name, createdAt: new Date(r.created_at).toISOString() };
+    return this.ws((await this.pool.query("SELECT id, owner_id, name, created_at, agent_key_hash FROM co_workspaces WHERE owner_id=$1 ORDER BY created_at LIMIT 1", [userId])).rows[0]);
+  }
+  async setAgentKey(id: string, hash: string | null) {
+    await this.pool.query("UPDATE co_workspaces SET agent_key_hash=$2 WHERE id=$1", [id, hash]);
+  }
+  async workspaceByAgentKey(hash: string) {
+    return this.ws((await this.pool.query("SELECT id, owner_id, name, created_at, agent_key_hash FROM co_workspaces WHERE agent_key_hash=$1", [hash])).rows[0]);
   }
   async renameWorkspace(id: string, name: string) {
     await this.pool.query("UPDATE co_workspaces SET name=$2 WHERE id=$1", [id, name]);
@@ -96,7 +109,7 @@ class PgBackend implements Backend {
 class FileBackend implements Backend {
   kind = "file" as const;
   private users: UserRow[] = [];
-  private workspaces: WorkspaceRow[] = [];
+  private workspaces: (WorkspaceRow & { agentKeyHash?: string })[] = [];
   private docs = new Map<string, WorkspaceDoc>();
   constructor(private dir: string | null) {}
   private get platformFile() {
@@ -130,8 +143,21 @@ class FileBackend implements Backend {
     this.persist();
     await this.saveDoc(w.id, doc);
   }
+  private row = (w?: WorkspaceRow & { agentKeyHash?: string }): WorkspaceRow | undefined => {
+    if (!w) return;
+    const { agentKeyHash, ...rest } = w;
+    return { ...rest, hasAgentKey: !!agentKeyHash };
+  };
   async workspaceForOwner(userId: string) {
-    return this.workspaces.find((w) => w.ownerId === userId);
+    return this.row(this.workspaces.find((w) => w.ownerId === userId));
+  }
+  async setAgentKey(id: string, hash: string | null) {
+    const w = this.workspaces.find((x) => x.id === id);
+    if (w) w.agentKeyHash = hash ?? undefined;
+    this.persist();
+  }
+  async workspaceByAgentKey(hash: string) {
+    return this.row(this.workspaces.find((w) => w.agentKeyHash === hash));
   }
   async renameWorkspace(id: string, name: string) {
     const w = this.workspaces.find((x) => x.id === id);
@@ -193,9 +219,9 @@ interface Tenant {
   timer?: NodeJS.Timeout;
 }
 const tenants = new Map<string, Tenant>();
-const ctx = new AsyncLocalStorage<{ workspaceId: string; userId?: string }>();
+const ctx = new AsyncLocalStorage<{ workspaceId: string; userId?: string; actor?: "human" | "agent" }>();
 
-export const runInWorkspace = <T,>(workspaceId: string, userId: string | undefined, fn: () => T) => ctx.run({ workspaceId, userId }, fn);
+export const runInWorkspace = <T,>(workspaceId: string, userId: string | undefined, fn: () => T, actor?: "human" | "agent") => ctx.run({ workspaceId, userId, actor }, fn);
 export const currentWorkspaceId = () => ctx.getStore()?.workspaceId;
 
 export async function loadTenant(workspaceId: string) {
@@ -250,6 +276,6 @@ export function forgetTenant(id: string) {
 
 export function log(entry: Omit<Activity, "id" | "at">) {
   const doc = getDoc();
-  doc.activity.unshift({ id: newId("act"), at: now(), ...entry });
+  doc.activity.unshift({ id: newId("act"), at: now(), ...(ctx.getStore()?.actor === "agent" ? { actor: "agent" as const } : {}), ...entry });
   doc.activity.length = Math.min(doc.activity.length, 300);
 }

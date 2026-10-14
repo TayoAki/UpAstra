@@ -40,7 +40,9 @@ export function Overview({ tab }: { tab: string }) {
                       <td className="small faint" style={{ width: 90 }}>
                         {ago(a.at)}
                       </td>
-                      <td>{a.message}</td>
+                      <td>
+                        {a.actor === "agent" && <span className="badge info">agent</span>} {a.message}
+                      </td>
                       <td className="num small faint">{a.cost ? `$${a.cost.toFixed(3)}` : ""}</td>
                     </tr>
                   ))}
@@ -168,7 +170,9 @@ export function OverviewRight() {
         <h3>Recent activity</h3>
         {state.activity.slice(0, 8).map((a) => (
           <div key={a.id} className="small" style={{ marginBottom: 8 }}>
-            <div>{a.message}</div>
+            <div>
+              {a.actor === "agent" && <span className="badge info">agent</span>} {a.message}
+            </div>
             <div className="faint">{ago(a.at)}</div>
           </div>
         ))}

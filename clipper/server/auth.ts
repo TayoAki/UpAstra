@@ -1,10 +1,11 @@
-import { createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import type { NextFunction, Request, Response } from "express";
 import { HttpError, getBackend, loadTenant, runInWorkspace } from "./db";
 
 // Email + password accounts with a signed HttpOnly session cookie. Each user
-// owns one workspace; every API call runs inside it.
+// owns one workspace; every API call runs inside it. Agents (MCP clients,
+// scripts) use the workspace's agent key as a bearer token instead.
 
 const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number) => Promise<Buffer>;
 const COOKIE = "co_session";
@@ -62,6 +63,27 @@ export function sessionUserId(req: Request): string | undefined {
   }
 }
 
+// ---- Agent keys ------------------------------------------------------------
+export const AGENT_KEY_PREFIX = "co_agent_";
+export const newAgentKey = () => `${AGENT_KEY_PREFIX}${randomBytes(24).toString("base64url")}`;
+export const hashAgentKey = (key: string) => createHash("sha256").update(key).digest("hex");
+export const bearerAgentKey = (req: Request) => req.get("authorization")?.match(/^Bearer\s+(co_agent_[\w-]{20,})$/)?.[1];
+
+// ---- Signed video links ------------------------------------------------------
+// A finished video can be shared as a plain link (for agents, schedulers, a
+// phone) without a session. The link names the workspace, clip and exact file,
+// and expires.
+export function signVideoLink(workspaceId: string, clipId: string, videoKey: string, ttlSec = 7 * 86400) {
+  const e = Math.floor(Date.now() / 1000) + ttlSec;
+  const s = sign(`${workspaceId}.${clipId}.${videoKey}.${e}`);
+  return `/v/${encodeURIComponent(workspaceId)}/${encodeURIComponent(clipId)}.mp4?e=${e}&s=${s}`;
+}
+export function verifyVideoLink(workspaceId: string, clipId: string, videoKey: string, e: number, s: string) {
+  if (!(e * 1000 > Date.now())) return false;
+  const expected = sign(`${workspaceId}.${clipId}.${videoKey}.${e}`);
+  return expected.length === s.length && timingSafeEqual(Buffer.from(expected), Buffer.from(s));
+}
+
 const attempts = new Map<string, { n: number; until: number }>();
 export function throttle(key: string) {
   const t = Date.now();
@@ -75,21 +97,38 @@ declare module "express-serve-static-core" {
   interface Request {
     userId?: string;
     workspaceId?: string;
+    actor?: "human" | "agent";
   }
 }
 
 /** Signed-in user + their workspace; the rest of the request runs inside it. */
 export async function requireWorkspace(req: Request, _res: Response, next: NextFunction) {
   try {
-    const userId = sessionUserId(req);
-    if (!userId) throw new HttpError(401, "Sign in required");
-    const ws = await getBackend().workspaceForOwner(userId);
-    if (!ws) throw new HttpError(401, "Sign in required");
+    const key = bearerAgentKey(req);
+    let userId: string | undefined;
+    let ws;
+    if (key) {
+      ws = await getBackend().workspaceByAgentKey(hashAgentKey(key));
+      if (!ws) throw new HttpError(401, "Invalid agent key");
+      userId = ws.ownerId;
+      req.actor = "agent";
+    } else {
+      userId = sessionUserId(req);
+      if (!userId) throw new HttpError(401, "Sign in required");
+      ws = await getBackend().workspaceForOwner(userId);
+      if (!ws) throw new HttpError(401, "Sign in required");
+      req.actor = "human";
+    }
     req.userId = userId;
     req.workspaceId = ws.id;
     await loadTenant(ws.id);
-    runInWorkspace(ws.id, userId, next);
+    runInWorkspace(ws.id, userId, next, req.actor);
   } catch (err) {
     next(err);
   }
+}
+
+/** Routes an agent key may not use (account and key management). */
+export function humansOnly(req: Request, _res: Response, next: NextFunction) {
+  next(req.actor === "agent" ? new HttpError(403, "Agent keys can't do this — sign in to the dashboard.") : undefined);
 }

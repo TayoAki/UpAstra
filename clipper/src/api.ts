@@ -39,6 +39,8 @@ export const api = {
   logout: () => req<{ ok: true }>("/auth/logout", "POST", {}),
   deleteAccount: (password: string) => req<{ ok: true }>("/auth/account", "DELETE", { password }),
   renameWorkspace: (name: string) => req<Me>("/workspace", "PUT", { name }),
+  createAgentKey: () => req<{ key: string; me: Me }>("/workspace/agent-key", "POST", {}),
+  revokeAgentKey: () => req<Me>("/workspace/agent-key", "DELETE"),
 
   state: () => req<State>("/state"),
   createCampaign: (b: { text?: string; url?: string }) => req<{ campaign: Campaign; state: State }>("/campaigns", "POST", b),

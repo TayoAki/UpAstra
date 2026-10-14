@@ -244,6 +244,8 @@ export interface Activity {
   campaignId?: string;
   kind: "campaign" | "footage" | "clip" | "post" | "account" | "learning";
   message: string;
+  /** Set when an agent (API key / MCP) did it. */
+  actor?: "agent";
   cost?: number;
 }
 
@@ -311,7 +313,7 @@ export interface PublicUser {
 
 export interface Me {
   user: PublicUser;
-  workspace: { id: string; name: string };
+  workspace: { id: string; name: string; hasAgentKey?: boolean };
 }
 
 export interface ServiceStatus {

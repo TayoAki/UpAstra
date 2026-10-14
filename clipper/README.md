@@ -36,6 +36,29 @@ A standalone SaaS for clippers: paste a clipping campaign brief, get its rules, 
 
    Patterns are reliable after about 20–30 tracked posts.
 
+## Headless: MCP and API
+
+Everything in the dashboard can be run by an AI agent or a script. Create a key in **Settings → Agent access** (shown once, stored hashed, one per workspace). It works for every workspace action except account and key management. Agent actions are marked "agent" in Activity.
+
+- **Remote MCP server:** `https://<your-app>/mcp` (Streamable HTTP, stateless), with the header `Authorization: Bearer co_agent_…`.
+  - Claude Code: `claude mcp add --transport http clip-operator https://<your-app>/mcp --header "Authorization: Bearer co_agent_…"`
+- **Local stdio server** (Claude Desktop, or clients without remote MCP): `CLIP_API_URL=https://<your-app> CLIP_API_KEY=co_agent_… npm run mcp`
+- **Plain HTTP API:** the same `/api/...` routes the dashboard uses, with the same header.
+
+Tools:
+
+| Tool | What it does |
+| --- | --- |
+| `brief_to_shorts` | Takes a brief link or text, writes plans, approves the ones that pass, and queues renders. Plans that break a rule wait for review. |
+| `add_campaign`, `get_campaign`, `overview` | Campaigns, brief rules, footage, clips and earnings |
+| `find_moments` | Logs highlights in one footage file with the vision model |
+| `plan_clips`, `edit_clip`, `review_clip` | Write, change and approve or reject plans. QA re-runs on every change. |
+| `render_clip`, `wait_for_renders`, `get_clip` | Renders, then returns signed video links (valid 7 days, no login needed) |
+| `log_post`, `update_post_metrics`, `list_posts` | Track posts. Each views update is kept for the learning system. |
+| `whats_working` | The learning report, playbook and written findings |
+
+The `make_shorts` prompt runs the whole flow from a brief. Agents can't post to social platforms: you upload, then log the post.
+
 ## Layout
 
 - **Left rail:** overview, new campaign, review queue, posts & earnings, settings, and the account menu.

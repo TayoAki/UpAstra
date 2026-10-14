@@ -4,8 +4,10 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { campaignStats } from "../shared/rules";
 import type { Campaign, CampaignBrief, Clip, ClipStatus, Me, Platform, Post, PostStatus, ServiceStatus, SocialAccount, VoiceOption } from "../shared/types";
 import { CLIP_STATUSES, PLATFORMS, POST_STATUSES, VOICES } from "../shared/types";
-import { clearSession, clearThrottle, hashPassword, issueSession, requireWorkspace, throttle, verifyPassword } from "./auth";
-import { HttpError, emptyDoc, forgetTenant, getBackend, getDoc, log, newId, now, save, type UserRow } from "./db";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { bearerAgentKey, clearSession, clearThrottle, hashAgentKey, hashPassword, humansOnly, issueSession, newAgentKey, requireWorkspace, signVideoLink, throttle, verifyPassword, verifyVideoLink } from "./auth";
+import { HttpError, emptyDoc, forgetTenant, getBackend, getDoc, loadTenant, log, newId, now, runInWorkspace, save, type UserRow } from "./db";
+import { createMcpServer, httpApi } from "./mcp";
 import { extractBrief, normalizeBrief } from "./extract";
 import { aiLive, mediaLive, modelFor } from "./llm";
 import { analyzeFootage } from "./moments";
@@ -121,6 +123,27 @@ const scopeOf = (v: unknown) => {
 
 const platformOf = (v: unknown): Platform => ((PLATFORMS as string[]).includes(String(v)) ? (v as Platform) : "other");
 
+/** Where people reach this server (for links handed out to agents). */
+const publicBase = (req: Request) => (process.env.PUBLIC_URL ?? `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
+
+async function streamVideo(req: Request, res: Response, clip: Clip, workspaceId: string) {
+  const key = clip.render?.videoKey;
+  if (!key || !key.startsWith(`${workspaceId}/`)) throw new HttpError(404, "No video yet");
+  const m = String(req.headers.range ?? "").match(/^bytes=(\d*)-(\d*)$/);
+  const range = m && (m[1] || m[2]) ? { start: m[1] ? Number(m[1]) : 0, end: m[2] ? Number(m[2]) : undefined } : undefined;
+  const f = await videoStore().read(key, range);
+  res.setHeader("Content-Type", f.type);
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Cache-Control", "private, max-age=3600");
+  if (req.query.download) res.setHeader("Content-Disposition", `attachment; filename="${clip.title.replace(/[^\w\- ]+/g, "").slice(0, 60) || "clip"}.mp4"`);
+  if (range) {
+    res.status(206);
+    res.setHeader("Content-Range", `bytes ${f.start}-${f.end}/${f.size}`);
+  }
+  res.setHeader("Content-Length", String(f.end - f.start + 1));
+  f.stream.pipe(res);
+}
+
 export function createApp() {
   const app = express();
   app.disable("x-powered-by");
@@ -140,7 +163,7 @@ export function createApp() {
     const b = getBackend();
     const user = (await b.getUser(userId))!;
     const ws = (await b.workspaceForOwner(userId))!;
-    return { user: { id: user.id, email: user.email, name: user.name }, workspace: { id: ws.id, name: ws.name } };
+    return { user: { id: user.id, email: user.email, name: user.name }, workspace: { id: ws.id, name: ws.name, hasAgentKey: !!ws.hasAgentKey } };
   };
 
   app.post(
@@ -191,6 +214,7 @@ export function createApp() {
   app.delete(
     "/api/auth/account",
     requireWorkspace,
+    humansOnly,
     wrap(async (req, res) => {
       const b = getBackend();
       const user = (await b.getUser(req.userId!))!;
@@ -206,6 +230,53 @@ export function createApp() {
     }),
   );
 
+  // ---- Signed video links (no session) -------------------------------------
+  app.get(
+    "/v/:ws/:clip.mp4",
+    wrap(async (req, res) => {
+      const ws = String(req.params.ws);
+      const clipId = String(req.params.clip);
+      const e = Number(req.query.e);
+      const sig = String(req.query.s ?? "");
+      await loadTenant(ws).catch(() => {
+        throw new HttpError(404, "Not found");
+      });
+      await runInWorkspace(ws, undefined, async () => {
+        const clip = getDoc().clips.find((c) => c.id === clipId);
+        const key = clip?.render?.videoKey;
+        if (!clip || !key || !verifyVideoLink(ws, clipId, key, e, sig)) throw new HttpError(404, "This link has expired or the video was replaced");
+        await streamVideo(req, res, clip, ws);
+      });
+    }),
+  );
+
+  // ---- MCP (remote agents: Claude, ChatGPT, n8n, …) -------------------------
+  // Streamable HTTP, stateless. Authenticated with the workspace agent key; the
+  // tools call this same API over loopback, so they follow every rule the UI does.
+  app.all(
+    "/mcp",
+    express.json({ limit: "1mb" }),
+    wrap(async (req, res) => {
+      const key = bearerAgentKey(req);
+      if (!key || !(await getBackend().workspaceByAgentKey(hashAgentKey(key)))) {
+        res.status(401).json({ error: "Send your agent key: Authorization: Bearer co_agent_… (Settings → Agent access)" });
+        return;
+      }
+      if (req.method !== "POST") {
+        res.status(405).set("Allow", "POST").json({ error: "Use POST (stateless MCP)" });
+        return;
+      }
+      const server = createMcpServer(httpApi(`http://127.0.0.1:${req.socket.localPort}`, key));
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+      res.on("close", () => {
+        void transport.close();
+        void server.close();
+      });
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    }),
+  );
+
   // ---- Workspace data ------------------------------------------------------
   const api = express.Router();
   api.use(requireWorkspace);
@@ -214,10 +285,34 @@ export function createApp() {
 
   api.put(
     "/workspace",
+    humansOnly,
     wrap(async (req, res) => {
       const name = String(req.body?.name ?? "").trim().slice(0, 80);
       if (!name) throw new HttpError(400, "Name required");
       await getBackend().renameWorkspace(req.workspaceId!, name);
+      res.json(await me(req.userId!));
+    }),
+  );
+
+  // Agent key for the API and MCP. Shown once; only its hash is stored.
+  api.post(
+    "/workspace/agent-key",
+    humansOnly,
+    wrap(async (req, res) => {
+      const key = newAgentKey();
+      await getBackend().setAgentKey(req.workspaceId!, hashAgentKey(key));
+      log({ kind: "account", message: "Agent key created (any older key stopped working)." });
+      save();
+      res.status(201).json({ key, me: await me(req.userId!) });
+    }),
+  );
+  api.delete(
+    "/workspace/agent-key",
+    humansOnly,
+    wrap(async (req, res) => {
+      await getBackend().setAgentKey(req.workspaceId!, null);
+      log({ kind: "account", message: "Agent key revoked." });
+      save();
       res.json(await me(req.userId!));
     }),
   );
@@ -374,23 +469,17 @@ export function createApp() {
     "/clips/:id/video",
     wrap(async (req, res) => {
       const clip = findClip(String(req.params.id));
-      const key = clip.render?.videoKey;
-      if (!key || !key.startsWith(`${req.workspaceId}/`)) throw new HttpError(404, "No video yet");
-      const m = String(req.headers.range ?? "").match(/^bytes=(\d*)-(\d*)$/);
-      const range = m && (m[1] || m[2]) ? { start: m[1] ? Number(m[1]) : 0, end: m[2] ? Number(m[2]) : undefined } : undefined;
-      const f = await videoStore().read(key, range);
-      res.setHeader("Content-Type", f.type);
-      res.setHeader("Accept-Ranges", "bytes");
-      res.setHeader("Cache-Control", "private, max-age=3600");
-      if (req.query.download) res.setHeader("Content-Disposition", `attachment; filename="${clip.title.replace(/[^\w\- ]+/g, "").slice(0, 60) || "clip"}.mp4"`);
-      if (range) {
-        res.status(206);
-        res.setHeader("Content-Range", `bytes ${f.start}-${f.end}/${f.size}`);
-      }
-      res.setHeader("Content-Length", String(f.end - f.start + 1));
-      f.stream.pipe(res);
+      await streamVideo(req, res, clip, req.workspaceId!);
     }),
   );
+
+  // A shareable link to the finished video (expires in 7 days) — what agents hand to people and schedulers.
+  api.get("/clips/:id/link", (req, res) => {
+    const clip = findClip(String(req.params.id));
+    const key = clip.render?.videoKey;
+    if (!key || clip.render?.status !== "done") throw new HttpError(404, "No finished video yet");
+    res.json({ url: `${publicBase(req)}${signVideoLink(req.workspaceId!, clip.id, key)}`, expiresInDays: 7 });
+  });
 
   api.post(
     "/campaigns/:id/footage/:fid/analyze",
