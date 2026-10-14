@@ -1,0 +1,412 @@
+import fs from "node:fs";
+import path from "node:path";
+import express, { type NextFunction, type Request, type Response } from "express";
+import { campaignStats } from "../shared/rules";
+import type { Campaign, CampaignBrief, Clip, ClipStatus, Me, Platform, Post, PostStatus, ServiceStatus, SocialAccount } from "../shared/types";
+import { CLIP_STATUSES, PLATFORMS, POST_STATUSES } from "../shared/types";
+import { clearSession, clearThrottle, hashPassword, issueSession, requireWorkspace, throttle, verifyPassword } from "./auth";
+import { HttpError, emptyDoc, forgetTenant, getBackend, getDoc, log, newId, now, save, type UserRow } from "./db";
+import { extractBrief, normalizeBrief } from "./extract";
+import { aiLive, modelFor } from "./llm";
+import { checkClip } from "../shared/rules";
+import { planClips } from "./scripts";
+import { readBriefUrl, resolveFootage } from "./sources";
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const wrap = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => fn(req, res).catch(next);
+
+export function serviceStatus(): ServiceStatus {
+  return {
+    ai: aiLive() ? "live" : "simulated",
+    aiModel: aiLive() ? modelFor("script") : "rules",
+    render: process.env.RENDER_SERVICE_URL ? "connected" : "not-connected",
+    storage: getBackend().kind,
+  };
+}
+
+// AI calls cost money; cap them per workspace per day.
+const aiCalls = new Map<string, { day: string; n: number }>();
+function spendAI(workspaceId: string, n = 1) {
+  if (!aiLive()) return;
+  const day = new Date().toISOString().slice(0, 10);
+  const c = aiCalls.get(workspaceId);
+  const used = c?.day === day ? c.n : 0;
+  const limit = Number(process.env.AI_DAILY_LIMIT ?? 150);
+  if (used + n > limit) throw new HttpError(429, `Daily AI limit reached (${limit}). It resets at midnight UTC.`);
+  aiCalls.set(workspaceId, { day, n: used + n });
+}
+
+const findCampaign = (id: string) => {
+  const c = getDoc().campaigns.find((x) => x.id === id);
+  if (!c) throw new HttpError(404, "Campaign not found");
+  return c;
+};
+const findClip = (id: string) => {
+  const c = getDoc().clips.find((x) => x.id === id);
+  if (!c) throw new HttpError(404, "Clip not found");
+  return c;
+};
+const findPost = (id: string) => {
+  const p = getDoc().posts.find((x) => x.id === id);
+  if (!p) throw new HttpError(404, "Post not found");
+  return p;
+};
+
+const count = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+async function refreshFootage(c: Campaign) {
+  const { files, errors } = await resolveFootage(c.brief.footage);
+  // Keep ids stable so clip shots stay linked across refreshes.
+  const old = new Map(c.footage.map((f) => [f.sourceId, f.id]));
+  c.footage = files.map((f) => ({ ...f, id: old.get(f.sourceId) ?? f.id }));
+  c.footageCheckedAt = now();
+  c.footageError = errors.length ? errors.join(" · ") : undefined;
+  log({ campaignId: c.id, kind: "footage", message: `Footage checked: ${count(files.filter((f) => f.kind === "video").length, "video")}, ${count(files.filter((f) => f.kind === "image").length, "image")}${errors.length ? ` (${errors.length} link(s) failed)` : ""}.` });
+}
+
+function stateFor(): unknown {
+  const doc = getDoc();
+  return {
+    campaigns: doc.campaigns.map((c) => ({ ...c, stats: campaignStats(c.brief, doc.clips.filter((x) => x.campaignId === c.id), doc.posts.filter((p) => p.campaignId === c.id)) })),
+    clips: doc.clips,
+    posts: doc.posts,
+    accounts: doc.accounts,
+    activity: doc.activity.slice(0, 100),
+    status: serviceStatus(),
+  };
+}
+
+function sanitizeMetrics(m: unknown): Post["metrics"] {
+  const o = (m ?? {}) as Record<string, unknown>;
+  const n = (v: unknown) => Math.max(0, Math.round(Number(v) || 0));
+  return { views: n(o.views), likes: n(o.likes), comments: n(o.comments), shares: n(o.shares) };
+}
+
+const platformOf = (v: unknown): Platform => ((PLATFORMS as string[]).includes(String(v)) ? (v as Platform) : "other");
+
+export function createApp() {
+  const app = express();
+  app.disable("x-powered-by");
+  app.set("trust proxy", 1);
+  app.use((_req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("X-Frame-Options", "DENY");
+    next();
+  });
+  app.use("/api", express.json({ limit: "1mb" }));
+
+  app.get("/api/health", (_req, res) => res.json({ ok: true, ...serviceStatus() }));
+
+  // ---- Accounts --------------------------------------------------------------
+  const me = async (userId: string): Promise<Me> => {
+    const b = getBackend();
+    const user = (await b.getUser(userId))!;
+    const ws = (await b.workspaceForOwner(userId))!;
+    return { user: { id: user.id, email: user.email, name: user.name }, workspace: { id: ws.id, name: ws.name } };
+  };
+
+  app.post(
+    "/api/auth/signup",
+    wrap(async (req, res) => {
+      if (process.env.ALLOW_SIGNUP === "false") throw new HttpError(403, "Sign-ups are closed right now.");
+      const email = String(req.body?.email ?? "").trim().toLowerCase();
+      const password = String(req.body?.password ?? "");
+      const name = String(req.body?.name ?? "").trim().slice(0, 80) || email.split("@")[0];
+      if (!EMAIL.test(email)) throw new HttpError(400, "Enter a valid email");
+      if (password.length < 8) throw new HttpError(400, "Password must be at least 8 characters");
+      throttle(`signup:${req.ip}`);
+      const b = getBackend();
+      if (await b.findUserByEmail(email)) throw new HttpError(409, "An account with that email already exists");
+      const user: UserRow = { id: newId("usr"), email, name, passwordHash: await hashPassword(password), createdAt: now() };
+      await b.createUser(user);
+      await b.createWorkspace({ id: newId("ws"), ownerId: user.id, name: String(req.body?.workspaceName ?? "").trim().slice(0, 80) || `${name}'s clips`, createdAt: now() }, emptyDoc());
+      issueSession(res, user.id);
+      res.status(201).json(await me(user.id));
+    }),
+  );
+
+  app.post(
+    "/api/auth/login",
+    wrap(async (req, res) => {
+      const email = String(req.body?.email ?? "").trim().toLowerCase();
+      const key = `login:${req.ip}:${email}`;
+      throttle(key);
+      const user = await getBackend().findUserByEmail(email);
+      if (!user || !(await verifyPassword(String(req.body?.password ?? ""), user.passwordHash))) throw new HttpError(401, "Wrong email or password");
+      clearThrottle(key);
+      issueSession(res, user.id);
+      res.json(await me(user.id));
+    }),
+  );
+
+  app.post("/api/auth/logout", (_req, res) => {
+    clearSession(res);
+    res.json({ ok: true });
+  });
+
+  app.get(
+    "/api/auth/me",
+    requireWorkspace,
+    wrap(async (req, res) => res.json(await me(req.userId!))),
+  );
+
+  app.delete(
+    "/api/auth/account",
+    requireWorkspace,
+    wrap(async (req, res) => {
+      const b = getBackend();
+      const user = (await b.getUser(req.userId!))!;
+      if (!(await verifyPassword(String(req.body?.password ?? ""), user.passwordHash))) throw new HttpError(401, "Wrong password");
+      forgetTenant(req.workspaceId!);
+      await b.deleteWorkspace(req.workspaceId!);
+      await b.deleteUser(user.id);
+      clearSession(res);
+      res.json({ ok: true });
+    }),
+  );
+
+  // ---- Workspace data ------------------------------------------------------
+  const api = express.Router();
+  api.use(requireWorkspace);
+
+  api.get("/state", (_req, res) => res.json(stateFor()));
+
+  api.put(
+    "/workspace",
+    wrap(async (req, res) => {
+      const name = String(req.body?.name ?? "").trim().slice(0, 80);
+      if (!name) throw new HttpError(400, "Name required");
+      await getBackend().renameWorkspace(req.workspaceId!, name);
+      res.json(await me(req.userId!));
+    }),
+  );
+
+  // Campaigns: paste a brief (text or link) → extracted rules + footage.
+  api.post(
+    "/campaigns",
+    wrap(async (req, res) => {
+      const url = String(req.body?.url ?? "").trim();
+      let text = String(req.body?.text ?? "").trim();
+      let kind: Campaign["source"]["kind"] = "text";
+      let links: { label: string; url: string }[] = [];
+      if (!text && !url) throw new HttpError(400, "Paste the brief text or a link to it");
+      if (!text) {
+        const r = await readBriefUrl(url);
+        ({ text, links, kind } = r);
+      }
+      if (text.length > 60_000) text = text.slice(0, 60_000);
+      spendAI(req.workspaceId!);
+      const x = await extractBrief(text, links);
+      const at = now();
+      const c: Campaign = {
+        id: newId("cmp"),
+        name: x.brief.title,
+        status: "active",
+        source: { kind, url: url || undefined, text },
+        brief: x.brief,
+        extractedBy: x.by,
+        extractionModel: x.model,
+        footage: [],
+        notes: "",
+        createdAt: at,
+        updatedAt: at,
+      };
+      getDoc().campaigns.unshift(c);
+      log({ campaignId: c.id, kind: "campaign", message: `Campaign "${c.name}" added — brief read by ${x.by === "ai" ? x.model : "the rules extractor"}.`, cost: x.cost });
+      if (c.brief.footage.length) await refreshFootage(c).catch((e) => (c.footageError = (e as Error).message));
+      save();
+      res.status(201).json({ campaign: c, state: stateFor() });
+    }),
+  );
+
+  api.put("/campaigns/:id", (req, res) => {
+    const c = findCampaign(String(req.params.id));
+    const b = req.body ?? {};
+    if (typeof b.name === "string" && b.name.trim()) c.name = b.name.trim().slice(0, 120);
+    if (["active", "paused", "ended"].includes(b.status)) c.status = b.status;
+    if (typeof b.notes === "string") c.notes = b.notes.slice(0, 5000);
+    if (b.brief && typeof b.brief === "object") {
+      c.brief = normalizeBrief(b.brief as Partial<Record<keyof CampaignBrief, unknown>>, c.brief);
+      // The rules changed: re-check every plan that hasn't been posted.
+      for (const clip of getDoc().clips.filter((x) => x.campaignId === c.id && x.status !== "posted")) clip.qa = checkClip(clip, c.brief);
+    }
+    c.updatedAt = now();
+    save();
+    res.json(stateFor());
+  });
+
+  api.delete("/campaigns/:id", (req, res) => {
+    const doc = getDoc();
+    const c = findCampaign(String(req.params.id));
+    doc.campaigns = doc.campaigns.filter((x) => x.id !== c.id);
+    doc.clips = doc.clips.filter((x) => x.campaignId !== c.id);
+    doc.posts = doc.posts.filter((x) => x.campaignId !== c.id);
+    log({ kind: "campaign", message: `Campaign "${c.name}" deleted with its clips and posts.` });
+    save();
+    res.json(stateFor());
+  });
+
+  api.post(
+    "/campaigns/:id/reextract",
+    wrap(async (req, res) => {
+      const c = findCampaign(String(req.params.id));
+      let text = c.source.text;
+      let links: { label: string; url: string }[] = [];
+      if (c.source.url) ({ text, links } = await readBriefUrl(c.source.url));
+      spendAI(req.workspaceId!);
+      const x = await extractBrief(text, links);
+      c.source.text = text;
+      c.brief = x.brief;
+      c.extractedBy = x.by;
+      c.extractionModel = x.model;
+      c.updatedAt = now();
+      for (const clip of getDoc().clips.filter((y) => y.campaignId === c.id && y.status !== "posted")) clip.qa = checkClip(clip, c.brief);
+      log({ campaignId: c.id, kind: "campaign", message: `Brief re-read${c.source.url ? " from its link" : ""}.`, cost: x.cost });
+      await refreshFootage(c).catch(() => undefined);
+      save();
+      res.json(stateFor());
+    }),
+  );
+
+  api.post(
+    "/campaigns/:id/footage/refresh",
+    wrap(async (req, res) => {
+      const c = findCampaign(String(req.params.id));
+      await refreshFootage(c);
+      save();
+      res.json(stateFor());
+    }),
+  );
+
+  api.post(
+    "/campaigns/:id/clips",
+    wrap(async (req, res) => {
+      const c = findCampaign(String(req.params.id));
+      const n = Math.max(1, Math.min(10, Number(req.body?.count) || 3));
+      spendAI(req.workspaceId!, 2);
+      const doc = getDoc();
+      const existing = doc.clips.filter((x) => x.campaignId === c.id);
+      const r = await planClips(c, n, existing);
+      doc.clips.unshift(...r.clips);
+      const ok = r.clips.filter((x) => x.qa.pass).length;
+      log({ campaignId: c.id, kind: "clip", message: `${r.clips.length} clip plan(s) written by ${r.model} — ${ok} pass every rule.`, cost: r.cost });
+      save();
+      res.status(201).json(stateFor());
+    }),
+  );
+
+  api.put("/clips/:id", (req, res) => {
+    const clip = findClip(String(req.params.id));
+    const c = findCampaign(clip.campaignId);
+    const b = req.body ?? {};
+    for (const k of ["title", "angle", "hook", "narration", "cta", "caption"] as const) if (typeof b[k] === "string") clip[k] = b[k].slice(0, 4000);
+    if (Array.isArray(b.onScreenText)) clip.onScreenText = b.onScreenText.map(String).slice(0, 20);
+    if (Array.isArray(b.hashtags)) clip.hashtags = b.hashtags.map(String).slice(0, 30);
+    if (Number(b.lengthSec) > 0) clip.lengthSec = Math.min(600, Math.round(Number(b.lengthSec)));
+    if (CLIP_STATUSES.includes(b.status)) {
+      if (b.status === "approved" && !clip.qa.pass && !b.override) throw new HttpError(400, "This plan fails a rule. Fix it, or approve anyway.");
+      clip.status = b.status as ClipStatus;
+    }
+    clip.qa = checkClip(clip, c.brief);
+    clip.updatedAt = now();
+    save();
+    res.json(stateFor());
+  });
+
+  api.delete("/clips/:id", (req, res) => {
+    const doc = getDoc();
+    const clip = findClip(String(req.params.id));
+    doc.clips = doc.clips.filter((x) => x.id !== clip.id);
+    for (const p of doc.posts.filter((x) => x.clipId === clip.id)) p.clipId = undefined;
+    save();
+    res.json(stateFor());
+  });
+
+  // Posts: where a clip went live, and how it's doing.
+  api.post("/posts", (req, res) => {
+    const b = req.body ?? {};
+    const c = findCampaign(String(b.campaignId));
+    const clip: Clip | undefined = b.clipId ? findClip(String(b.clipId)) : undefined;
+    const url = String(b.url ?? "").trim();
+    if (url && !/^https?:\/\//.test(url)) throw new HttpError(400, "Post link must start with https://");
+    const post: Post = {
+      id: newId("post"),
+      campaignId: c.id,
+      clipId: clip?.id,
+      platform: platformOf(b.platform),
+      account: String(b.account ?? "").trim().slice(0, 80),
+      url,
+      postedAt: typeof b.postedAt === "string" && !Number.isNaN(Date.parse(b.postedAt)) ? new Date(b.postedAt).toISOString() : now(),
+      status: POST_STATUSES.includes(b.status) ? b.status : "live",
+      metrics: sanitizeMetrics(b.metrics),
+      metricsUpdatedAt: now(),
+      notes: String(b.notes ?? "").slice(0, 2000),
+    };
+    getDoc().posts.unshift(post);
+    if (clip) clip.status = "posted";
+    log({ campaignId: c.id, kind: "post", message: `Posted to ${post.platform}${post.account ? ` (@${post.account.replace(/^@/, "")})` : ""}.` });
+    save();
+    res.status(201).json(stateFor());
+  });
+
+  api.put("/posts/:id", (req, res) => {
+    const p = findPost(String(req.params.id));
+    const b = req.body ?? {};
+    if (b.metrics) {
+      p.metrics = sanitizeMetrics({ ...p.metrics, ...b.metrics });
+      p.metricsUpdatedAt = now();
+    }
+    if (POST_STATUSES.includes(b.status)) p.status = b.status as PostStatus;
+    if (b.paidAmount === null) p.paidAmount = undefined;
+    else if (Number.isFinite(Number(b.paidAmount)) && b.paidAmount !== "") p.paidAmount = Math.max(0, Number(b.paidAmount));
+    if (typeof b.url === "string") p.url = /^https?:\/\//.test(b.url) ? b.url : p.url;
+    if (typeof b.account === "string") p.account = b.account.slice(0, 80);
+    if (b.platform) p.platform = platformOf(b.platform);
+    if (typeof b.notes === "string") p.notes = b.notes.slice(0, 2000);
+    save();
+    res.json(stateFor());
+  });
+
+  api.delete("/posts/:id", (req, res) => {
+    const doc = getDoc();
+    findPost(String(req.params.id));
+    doc.posts = doc.posts.filter((x) => x.id !== req.params.id);
+    save();
+    res.json(stateFor());
+  });
+
+  // Accounts the user posts from (campaigns often restrict who may upload).
+  api.post("/accounts", (req, res) => {
+    const handle = String(req.body?.handle ?? "").trim().replace(/^@/, "").slice(0, 60);
+    if (!handle) throw new HttpError(400, "Handle required");
+    const a: SocialAccount = { id: newId("acct"), platform: platformOf(req.body?.platform), handle, niche: String(req.body?.niche ?? "").slice(0, 80), followers: Number(req.body?.followers) || undefined };
+    getDoc().accounts.push(a);
+    save();
+    res.status(201).json(stateFor());
+  });
+
+  api.delete("/accounts/:id", (req, res) => {
+    const doc = getDoc();
+    doc.accounts = doc.accounts.filter((a) => a.id !== req.params.id);
+    save();
+    res.json(stateFor());
+  });
+
+  app.use("/api", api);
+  app.use("/api", (_req, _res, next) => next(new HttpError(404, "Not found")));
+
+  // ---- Web app -------------------------------------------------------------
+  const dist = process.env.DIST_DIR ?? path.resolve(process.cwd(), "dist");
+  if (fs.existsSync(dist)) {
+    app.use(express.static(dist, { index: false, maxAge: "1h" }));
+    app.use((req, res, next) => (req.method === "GET" && !req.path.startsWith("/api") ? res.sendFile(path.join(dist, "index.html")) : next()));
+  }
+
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    const status = err instanceof HttpError ? err.status : (err as { status?: number })?.status === 400 ? 400 : 500;
+    if (status >= 500) console.error(err);
+    res.status(status).json({ error: status >= 500 ? "Something went wrong" : (err as Error).message });
+  });
+  return app;
+}
