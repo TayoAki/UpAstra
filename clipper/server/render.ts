@@ -8,7 +8,7 @@ import { buildAss, chunk, sentences, timeWords } from "./captions";
 import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, tenantLoadHooks } from "./db";
 import { mediaLive, speak } from "./llm";
 import { blackSpans, concat, compose, cutSegment, ffmpegAvailable, run, speechSpans } from "./media";
-import { footageSource } from "./footage-cache";
+import { footageSource, isCached } from "./footage-cache";
 import { analyzeFootage, pickMoment } from "./moments";
 import { videoStore } from "./storage";
 
@@ -134,9 +134,19 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     // for footage that is available: uploads and files already in storage.
     const substitutes: string[] = [];
     if (failed.size) {
-      const pool = c.footage.filter((v) => v.kind === "video" && !failed.has(v.id) && (v.storageKey || v.durationSec));
+      // Ready first (uploads, files already opened, files another workspace
+      // already cached), then a few others: Drive's limit is per file.
+      const others = c.footage.filter((v) => v.kind === "video" && !failed.has(v.id));
+      const ready: FootageFile[] = [];
+      for (const v of others) if (v.storageKey || v.durationSec || (await isCached(v).catch(() => false))) ready.push(v);
       const usable: FootageFile[] = [];
-      for (const v of pool) if (await ensure(v)) usable.push(v);
+      for (const v of ready) if (await ensure(v)) usable.push(v);
+      for (const v of others.filter((x) => !ready.includes(x)).slice(0, usable.length ? 0 : 4)) {
+        if (await ensure(v)) {
+          usable.push(v);
+          break;
+        }
+      }
       if (!usable.length) {
         const [id, why] = [...failed][0];
         throw new Error(`Couldn't open "${c.footage.find((v) => v.id === id)?.name}": ${why}`);
