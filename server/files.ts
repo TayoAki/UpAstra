@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import type { FileRef } from "../shared/types";
 import { HttpError } from "./store";
 
@@ -18,6 +18,8 @@ interface Store {
   kind: "s3" | "disk";
   put(key: string, body: Buffer, type: string): Promise<void>;
   get(key: string): Promise<{ body: Buffer; type: string }>;
+  /** Delete every object under a prefix (a whole workspace's uploads). */
+  deletePrefix(prefix: string): Promise<number>;
 }
 
 class DiskStore implements Store {
@@ -38,6 +40,13 @@ class DiskStore implements Store {
     const f = this.file(key);
     if (!fs.existsSync(f)) throw new HttpError(404, "File not found");
     return { body: fs.readFileSync(f), type: fs.existsSync(`${f}.type`) ? fs.readFileSync(`${f}.type`, "utf8") : "application/octet-stream" };
+  }
+  async deletePrefix(prefix: string) {
+    const dir = this.file(prefix.replace(/\/$/, ""));
+    if (!fs.existsSync(dir)) return 0;
+    const n = fs.readdirSync(dir).filter((f) => !f.endsWith(".type")).length;
+    fs.rmSync(dir, { recursive: true, force: true });
+    return n;
   }
 }
 
@@ -65,6 +74,20 @@ class S3Store implements Store {
     } catch {
       throw new HttpError(404, "File not found");
     }
+  }
+  async deletePrefix(prefix: string) {
+    let deleted = 0;
+    let token: string | undefined;
+    do {
+      const page = await this.client.send(new ListObjectsV2Command({ Bucket: this.bucket, Prefix: prefix, ContinuationToken: token }));
+      const keys = (page.Contents ?? []).map((o) => ({ Key: o.Key! }));
+      if (keys.length) {
+        await this.client.send(new DeleteObjectsCommand({ Bucket: this.bucket, Delete: { Objects: keys, Quiet: true } }));
+        deleted += keys.length;
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+    return deleted;
   }
 }
 

@@ -387,9 +387,13 @@ export async function startProduction(job: Job, opts: { await?: boolean } = {}) 
   touch(job);
   const run = runProduction(job).catch((err) => {
     job.running = false;
-    audit({ jobId: job.id, actor: "system", type: "policy", message: `Production stopped: ${(err as Error).message}` });
     job.stage = "qa";
-    touch(job);
+    try {
+      audit({ jobId: job.id, actor: "system", type: "policy", message: `Production stopped: ${(err as Error).message}` });
+      touch(job);
+    } catch {
+      // The workspace was deleted while this job was running — nothing left to record.
+    }
   });
   if (opts.await) await run;
 }

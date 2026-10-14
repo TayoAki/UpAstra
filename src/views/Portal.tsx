@@ -203,6 +203,7 @@ export function PortalView({ tab: initialTab, pkgId }: { tab?: string; pkgId?: s
                     <th>Company</th>
                     <th>Requests</th>
                     <th>Joined</th>
+                    <th />
                   </tr>
                 </thead>
                 <tbody>
@@ -219,6 +220,18 @@ export function PortalView({ tab: initialTab, pkgId }: { tab?: string; pkgId?: s
                       </td>
                       <td>{c.requests}</td>
                       <td className="small">{timeAgo(c.createdAt)}</td>
+                      <td className="num">
+                        <button
+                          className="btn sm"
+                          disabled={busy}
+                          onClick={() =>
+                            confirm(`Remove ${c.email}'s portal account? Their past requests stay in your jobs.`) &&
+                            run(() => api.removePortalClient(c.id), "Portal account removed").then((r) => r && api.portal().then(adopt))
+                          }
+                        >
+                          Remove
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

@@ -20,6 +20,12 @@ async function portalSlug(): Promise<string | null> {
   }
 }
 
+// Background polls that race a sign-out (or a deleted workspace) end in 401s;
+// the session gate already shows the sign-in screen, so they're not errors.
+window.addEventListener("unhandledrejection", (e) => {
+  if ((e.reason as { status?: number } | undefined)?.status === 401) e.preventDefault();
+});
+
 const root = createRoot(document.getElementById("root")!);
 portalSlug().then((slug) =>
   root.render(

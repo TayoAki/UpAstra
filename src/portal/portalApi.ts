@@ -62,6 +62,11 @@ export function portalApi(slug: string) {
       req<FileRef>("/uploads", { method: "POST", body: file, headers: { "Content-Type": file.type || "application/octet-stream", "X-File-Name": encodeURIComponent(file.name) } }),
     submit: (b: { packageId: string; addOnIds: string[]; answers: Record<string, string>; files: Record<string, FileRef[]>; title?: string }) =>
       req<ClientRequestView>("/requests", { method: "POST", json: b }),
+    deleteAccount: (password: string) =>
+      req<{ ok: true }>("/me", { method: "DELETE", json: { password } }).then(() => {
+        setToken(slug, "");
+        memoryToken = "";
+      }),
     request: (id: string) => req<ClientRequestView>(`/requests/${id}`),
     message: (id: string, body: string) => req<ClientRequestView>(`/requests/${id}/messages`, { method: "POST", json: { body } }),
     approve: (id: string) => req<ClientRequestView>(`/requests/${id}/approve`, { method: "POST", json: {} }),

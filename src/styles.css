@@ -1586,3 +1586,22 @@ a.btn {
   text-decoration: none;
   color: var(--text);
 }
+
+/* ---------- danger zone ---------- */
+.danger-row {
+  border: 1px solid color-mix(in srgb, var(--c-bad) 35%, var(--line));
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.danger-row .input {
+  max-width: 320px;
+}
+.btn.danger {
+  border-color: var(--c-bad);
+  color: var(--c-bad);
+}
+.btn.danger:hover:not(:disabled) {
+  background: var(--c-bad);
+  color: #fff;
+}

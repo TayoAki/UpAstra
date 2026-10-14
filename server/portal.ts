@@ -264,6 +264,20 @@ export function portalRouter(): Router {
     res.json({ user: publicUser(user), requests });
   });
 
+  // Clients can delete their own portal account. Their past requests stay with
+  // the studio as business records, but can no longer be opened from the portal.
+  p.delete(
+    "/me",
+    wrap(async (req, res) => {
+      const user = requireClient(req);
+      throttle(`portal-delete:${req.ip}`);
+      if (!(await verifyPassword(String(req.body?.password ?? ""), user.passwordHash))) throw new HttpError(401, "Wrong password");
+      removePortalUser(user.id);
+      audit({ actor: "system", type: "memory", message: `Portal client deleted their account: ${user.email}.` });
+      res.json({ ok: true });
+    }),
+  );
+
   p.post(
     "/uploads",
     express.raw({ type: () => true, limit: MAX_UPLOAD_BYTES }),
@@ -398,6 +412,14 @@ export async function isPortalHost(hostname: string): Promise<boolean> {
   const app = process.env.APP_URL ? new URL(process.env.APP_URL).hostname : "";
   if (!hostname || hostname === app || hostname === "localhost" || hostname === "127.0.0.1") return false;
   return !!(await slugForHost(hostname));
+}
+
+/** Remove a portal login; keep the jobs, unlinked from the deleted account. */
+export function removePortalUser(userId: string) {
+  const db = getDB();
+  db.portalUsers = db.portalUsers.filter((u) => u.id !== userId);
+  for (const j of db.jobs) if (j.portal?.clientUserId === userId) j.portal.clientUserId = "deleted";
+  save();
 }
 
 // ---------------------------------------------------------------------------

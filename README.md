@@ -33,6 +33,7 @@ All configuration is in [`.env.example`](.env.example).
 - **Roles:** owners and admins can change the policy, invites, members and the agent token. Members do the work.
 - **Platform guardrails:** `MAX_SPEND_PER_JOB_CEILING` caps per-job spend for every workspace, `RADAR_MAX_RUNS_PER_DAY` limits scraping, and login and signup are throttled.
 - **Keys:** OpenRouter, Higgsfield and Apify keys are platform-level environment variables and never reach the browser.
+- **Deleting:** users can delete their account under Settings → Workspace → Danger zone (password required). Workspaces where they're the only member are deleted with all their jobs, uploads and portal accounts. Shared workspaces they own pass to the next admin, or a member if there's no admin. Owners can also delete a single workspace, after typing its name to confirm. Portal clients can delete their own portal login; the studio keeps the jobs as business records.
 - **Not built yet:** billing (e.g. Stripe) and per-workspace usage metering. Run a single replica, because workspace documents are cached in memory.
 
 ## Client portal

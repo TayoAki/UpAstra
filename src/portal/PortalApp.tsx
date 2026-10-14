@@ -74,7 +74,21 @@ export function PortalApp({ slug }: { slug: string }) {
       <main className="pt-main">
         {route.name === "store" && <Storefront portal={portal} />}
         {route.name === "package" && <PackagePage portal={portal} id={route.id} api={api} me={me} onSignedIn={setMe} />}
-        {route.name === "requests" && (me ? <Requests api={api} /> : <AuthCard api={api} onSignedIn={(u) => (setMe(u), nav("/requests"))} />)}
+        {route.name === "requests" &&
+          (me ? (
+            <>
+              <Requests api={api} />
+              <DeleteAccount
+                api={api}
+                onDeleted={() => {
+                  setMe(null);
+                  nav("/");
+                }}
+              />
+            </>
+          ) : (
+            <AuthCard api={api} onSignedIn={(u) => (setMe(u), nav("/requests"))} />
+          ))}
         {route.name === "request" && (me ? <RequestPage api={api} id={route.id} /> : <AuthCard api={api} onSignedIn={setMe} />)}
       </main>
       {!embed && <footer className="pt-footer">Powered by Studio Operator</footer>}
@@ -335,6 +349,56 @@ function PackagePage({ portal, id, api, me, onSignedIn }: { portal: PortalPublic
         </ul>
       </aside>
     </div>
+  );
+}
+
+function DeleteAccount({ api, onDeleted }: { api: ReturnType<typeof portalApi>; onDeleted: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  if (!open)
+    return (
+      <p className="pt-small pt-muted pt-account">
+        <button className="pt-link pt-danger-link" onClick={() => setOpen(true)}>
+          Delete my account
+        </button>
+      </p>
+    );
+  return (
+    <form
+      className="pt-panel pt-account"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!confirm("Delete your account? You won't be able to open your requests here anymore.")) return;
+        setBusy(true);
+        setErr("");
+        try {
+          await api.deleteAccount(password);
+          onDeleted();
+        } catch (e) {
+          setErr((e as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <h2>Delete my account</h2>
+      <p className="pt-muted pt-small">Your login is removed. The studio keeps the records of work it did for you, but you won't be able to open them here.</p>
+      <label>
+        Password
+        <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+      </label>
+      {err && <p className="pt-error">{err}</p>}
+      <div className="pt-actions">
+        <button className="pt-btn pt-danger" disabled={busy || !password}>
+          {busy ? "Deleting…" : "Delete account"}
+        </button>
+        <button type="button" className="pt-link" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }
 

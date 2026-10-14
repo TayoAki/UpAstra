@@ -6,6 +6,69 @@ import { useAction, useApp, useSession } from "../store";
 
 type Tab = "workspace" | "profile" | "team" | "agents";
 
+function DangerZone({ wsName, isOwner, memberCount }: { wsName: string; isOwner: boolean; memberCount: number }) {
+  const { refreshMe, logout } = useSession();
+  const { toast } = useApp();
+  const { busy, run } = useAction();
+  const [confirmName, setConfirmName] = useState("");
+  const [password, setPassword] = useState("");
+  return (
+    <Panel title="Danger zone">
+      {isOwner && (
+        <div className="danger-row">
+          <div>
+            <strong>Delete this workspace</strong>
+            <p className="small muted">
+              Permanently deletes "{wsName}": every job, client, file, radar lead and portal account in it
+              {memberCount > 1 ? `, for all ${memberCount} members` : ""}. This can't be undone.
+            </p>
+            <div className="row gap wrap">
+              <input className="input" placeholder={`Type "${wsName}" to confirm`} value={confirmName} onChange={(e) => setConfirmName(e.target.value)} aria-label="Workspace name to confirm" />
+              <button
+                className="btn danger"
+                disabled={busy || confirmName.trim() !== wsName}
+                onClick={() =>
+                  run(() => api.deleteWorkspace(confirmName.trim()), "Workspace deleted").then((r) => {
+                    if (r) refreshMe().then(() => (window.location.hash = "/"));
+                  })
+                }
+              >
+                Delete workspace
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="danger-row">
+        <div>
+          <strong>Delete your account</strong>
+          <p className="small muted">
+            Deletes your login. Workspaces where you're the only member are deleted with it; shared workspaces you own pass to the next admin (or member).
+          </p>
+          <div className="row gap wrap">
+            <input className="input" type="password" autoComplete="current-password" placeholder="Your password" value={password} onChange={(e) => setPassword(e.target.value)} aria-label="Password to confirm" />
+            <button
+              className="btn danger"
+              disabled={busy || !password}
+              onClick={() =>
+                confirm("Delete your account permanently? This can't be undone.") &&
+                run(() => api.deleteAccount(password)).then((r) => {
+                  if (!r) return;
+                  const handed = r.transferredWorkspaces.map((w) => `${w.name} → ${w.newOwner}`).join(", ");
+                  toast(`Account deleted.${handed ? ` Ownership passed on: ${handed}.` : ""}`);
+                  logout();
+                })
+              }
+            >
+              Delete account
+            </button>
+          </div>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 export function SettingsView({ tab: initial }: { tab?: string }) {
   const { boot, toast } = useApp();
   const { me, refreshMe, switchWorkspace, workspaceId } = useSession();
@@ -118,6 +181,7 @@ export function SettingsView({ tab: initial }: { tab?: string }) {
             </div>
             <p className="small muted top-gap">You are {ws.role === "owner" ? "the owner" : `a${ws.role === "admin" ? "n" : ""} ${ws.role}`} of this workspace.</p>
           </Panel>
+          <DangerZone wsName={ws.name} isOwner={ws.role === "owner"} memberCount={ws.members.length} />
         </>
       ) : tab === "profile" && profile ? (
         <>

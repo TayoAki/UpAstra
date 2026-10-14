@@ -60,6 +60,9 @@ export interface Backend {
   listMembers(workspaceId: string): Promise<(MembershipRow & { email: string; name: string })[]>;
   createInvite(i: InviteRow): Promise<void>;
   takeInvite(code: string): Promise<InviteRow | undefined>;
+  deleteUser(id: string): Promise<void>;
+  /** Removes the workspace with its memberships, invites and document. */
+  deleteWorkspace(id: string): Promise<void>;
   loadData(workspaceId: string): Promise<unknown | undefined>;
   saveData(workspaceId: string, data: unknown): Promise<void>;
 }
@@ -185,6 +188,12 @@ class PgBackend implements Backend {
   async createInvite(i: InviteRow) {
     await this.q(`INSERT INTO invites (code, workspace_id, role, expires_at) VALUES ($1, $2, $3, $4)`, [i.code, i.workspaceId, i.role, i.expiresAt]);
   }
+  async deleteUser(id: string) {
+    await this.q(`DELETE FROM users WHERE id = $1`, [id]);
+  }
+  async deleteWorkspace(id: string) {
+    await this.q(`DELETE FROM workspaces WHERE id = $1`, [id]);
+  }
   async takeInvite(code: string) {
     const r = await this.q(`DELETE FROM invites WHERE code = $1 AND expires_at > now() RETURNING *`, [code]);
     const i = r.rows[0];
@@ -296,6 +305,18 @@ class FileBackend implements Backend {
   async createInvite(i: InviteRow) {
     this.p.invites.push(i);
     this.write();
+  }
+  async deleteUser(id: string) {
+    this.p.users = this.p.users.filter((u) => u.id !== id);
+    this.p.memberships = this.p.memberships.filter((m) => m.userId !== id);
+    this.write();
+  }
+  async deleteWorkspace(id: string) {
+    this.p.workspaces = this.p.workspaces.filter((w) => w.id !== id);
+    this.p.memberships = this.p.memberships.filter((m) => m.workspaceId !== id);
+    this.p.invites = this.p.invites.filter((i) => i.workspaceId !== id);
+    this.write();
+    fs.rmSync(this.wsFile(id), { force: true });
   }
   async takeInvite(code: string) {
     const i = this.p.invites.find((x) => x.code === code && x.expiresAt > new Date().toISOString());

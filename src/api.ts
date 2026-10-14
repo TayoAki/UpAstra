@@ -151,6 +151,10 @@ export const api = {
   login: (email: string, password: string) => req<Me>("/auth/login", { method: "POST", json: { email, password } }),
   logout: () => req<{ ok: true }>("/auth/logout", { method: "POST", json: {} }),
   join: (code: string) => req<Me>("/auth/join", { method: "POST", json: { code } }),
+  deleteAccount: (password: string) =>
+    req<{ ok: true; deletedWorkspaces: string[]; transferredWorkspaces: { name: string; newOwner: string }[]; leftWorkspaces: string[] }>("/auth/account", { method: "DELETE", json: { password } }),
+  deleteWorkspace: (confirmName: string) => req<{ ok: true }>("/workspace", { method: "DELETE", json: { confirmName } }),
+  removePortalClient: (id: string) => req<{ ok: true }>(`/portal/clients/${id}`, { method: "DELETE" }),
   createWorkspace: (name: string, demo: boolean) => req<Me & { workspace: { id: string } }>("/workspaces", { method: "POST", json: { name, demo } }),
 
   // workspace settings

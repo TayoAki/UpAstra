@@ -148,6 +148,14 @@ export async function ensureTenant(workspaceId: string): Promise<DB> {
   return (await p).db;
 }
 
+/** Drop a workspace from memory, cancelling any pending write (it's being deleted). */
+export async function evictTenant(workspaceId: string) {
+  const t = tenants.get(workspaceId);
+  if (t?.timer) clearTimeout(t.timer);
+  await t?.saving;
+  tenants.delete(workspaceId);
+}
+
 /** For tests: a single in-memory DB that every context resolves to. */
 export function useMemoryDB(): DB {
   memoryDB = emptyDB();

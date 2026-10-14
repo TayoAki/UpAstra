@@ -118,9 +118,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    api.bootstrap().then(setBoot);
-    refresh();
-    const t = setInterval(refresh, 4000);
+    // Polls fail harmlessly after sign-out or workspace deletion; the session gate handles 401s.
+    const poll = () => refresh().catch(() => undefined);
+    api.bootstrap().then(setBoot, () => undefined);
+    poll();
+    const t = setInterval(poll, 4000);
     return () => clearInterval(t);
   }, [refresh]);
 
@@ -181,7 +183,7 @@ export function useAction() {
       try {
         const r = await fn();
         if (ok) toast(ok);
-        refresh();
+        refresh().catch(() => undefined);
         return r;
       } catch (e) {
         toast((e as Error).message, "err");

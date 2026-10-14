@@ -526,3 +526,13 @@
     align-items: stretch;
   }
 }
+
+.pt-account {
+  margin-top: 24px;
+}
+.pt-danger-link {
+  color: var(--pt-bad) !important;
+}
+.pt-btn.pt-danger {
+  background: var(--pt-bad);
+}

@@ -43,7 +43,8 @@ import {
 } from "./pipeline";
 import { checkProposal, convertLeadToJob, draftProposal, newSearch, runSearch, scoreLead } from "./radar";
 import { seed } from "./seed";
-import { claimSlug, embedScript, isPortalHost, portalRouter, slugForHost } from "./portal";
+import { deleteAccount, deleteWorkspaceEverywhere } from "./accounts";
+import { claimSlug, embedScript, isPortalHost, portalRouter, removePortalUser, slugForHost } from "./portal";
 import { fileStore, keyBelongsTo } from "./files";
 import { RESERVED_SLUGS, SLUG_RE, defaultPackage, slugify } from "../shared/portal";
 import { DEFAULT_POLICY, HttpError, audit, currentActor, emptyDB, ensureTenant, findClient, findJob, getDB, newId, now, runWith, save } from "./store";
@@ -216,6 +217,17 @@ export function createApp(opts: { port: number }) {
       const uid = sessionUserId(req);
       if (!uid) throw new HttpError(401, "Sign in required");
       res.json(await me(uid));
+    }),
+  );
+
+  app.delete(
+    "/api/auth/account",
+    requireUser,
+    wrap(async (req, res) => {
+      throttle(`delete-account:${req.ip}`);
+      const result = await deleteAccount(req.userId!, String(req.body?.password ?? ""));
+      clearSession(res);
+      res.json({ ok: true, ...result });
     }),
   );
 
@@ -446,6 +458,18 @@ export function createApp(opts: { port: number }) {
     res.json(db.profile);
   });
 
+  api.delete(
+    "/workspace",
+    wrap(async (req, res) => {
+      requireRole(req, "owner");
+      const ws = await getBackend().getWorkspace(req.studio!.workspaceId);
+      if (!ws) throw new HttpError(404, "Workspace not found");
+      if (String(req.body?.confirmName ?? "").trim() !== ws.name) throw new HttpError(400, `Type the workspace name ("${ws.name}") to confirm`);
+      await deleteWorkspaceEverywhere(ws.id);
+      res.json({ ok: true });
+    }),
+  );
+
   api.post(
     "/workspace/invites",
     wrap(async (req, res) => {
@@ -584,6 +608,16 @@ export function createApp(opts: { port: number }) {
       res.json(portalInfo(req));
     }),
   );
+
+  api.delete("/portal/clients/:id", (req, res) => {
+    requireRole(req, "owner", "admin");
+    const db = getDB();
+    const user = db.portalUsers.find((u) => u.id === req.params.id);
+    if (!user) throw new HttpError(404, "Portal client not found");
+    removePortalUser(user.id);
+    audit({ actor: "human", type: "memory", message: `Portal account removed: ${user.email}. Their requests stay as jobs.` });
+    res.json({ ok: true });
+  });
 
   api.post("/portal/packages/default", (req, res) => {
     requireRole(req, "owner", "admin");
