@@ -139,8 +139,35 @@ export interface Clip {
   model: string;
   cost: number;
   render?: RenderInfo;
+  /** What the learning system compares across posts. */
+  traits?: ClipTraits;
   createdAt: string;
   updatedAt: string;
+}
+
+export type HookStyle = "question" | "challenge" | "bold-claim" | "pov" | "reveal" | "how-to" | "story" | "number" | "other";
+export const HOOK_STYLES: { id: HookStyle; label: string; example: string }[] = [
+  { id: "question", label: "Question", example: "Can you score from the wall?" },
+  { id: "challenge", label: "Challenge", example: "I challenged my friend to car soccer" },
+  { id: "bold-claim", label: "Bold claim", example: "This is the best soccer game on Roblox" },
+  { id: "pov", label: "POV", example: "POV: you finally hit the wall shot" },
+  { id: "reveal", label: "Reveal / curiosity", example: "Someone made Rocket League in Roblox…" },
+  { id: "how-to", label: "How-to / tip", example: "How to win every kickoff" },
+  { id: "story", label: "Story", example: "I was down 3-0 and then this happened" },
+  { id: "number", label: "Number / list", example: "3 shots every new player should learn" },
+  { id: "other", label: "Other", example: "" },
+];
+
+export type ClipFormat = "montage" | "single-moment" | "explainer";
+
+export interface ClipTraits {
+  hookStyle: HookStyle;
+  format: ClipFormat;
+  /** Moment type the clip opens on (from the render), e.g. "goal". */
+  opening?: string;
+  voice?: VoiceOption;
+  /** Planned to repeat a proven pattern, or to test something new. */
+  strategy?: "proven" | "test";
 }
 
 export type VoiceOption = "none" | "alloy" | "ash" | "ballad" | "coral" | "echo" | "sage" | "shimmer" | "verse";
@@ -199,6 +226,8 @@ export interface Post {
   /** What the campaign actually paid, once known. */
   paidAmount?: number;
   notes: string;
+  /** Every metrics update, so posts can be compared at the same age. */
+  history?: (PostMetrics & { at: string })[];
 }
 
 export interface SocialAccount {
@@ -213,7 +242,7 @@ export interface Activity {
   id: string;
   at: string;
   campaignId?: string;
-  kind: "campaign" | "footage" | "clip" | "post" | "account";
+  kind: "campaign" | "footage" | "clip" | "post" | "account" | "learning";
   message: string;
   cost?: number;
 }
@@ -225,6 +254,53 @@ export interface WorkspaceDoc {
   posts: Post[];
   accounts: SocialAccount[];
   activity: Activity[];
+  /** Written findings from the learning system, keyed by scope ("all" or a campaign id). */
+  insights?: Record<string, Insights>;
+}
+
+// ---------------------------------------------------------------------------
+// Learning
+
+export type Confidence = "too-early" | "early-signal" | "solid";
+
+/** How one trait value (e.g. hook style "challenge") has performed. */
+export interface TraitStat {
+  value: string;
+  label: string;
+  posts: number;
+  /** Median views of its posts at comparable age. */
+  medianViews: number;
+  /** Average performance vs. each post's account baseline (1 = normal, 2 = twice normal), shrunk toward 1 when data is thin. */
+  lift: number;
+  confidence: Confidence;
+}
+
+export interface LearningReport {
+  scope: string;
+  posts: number;
+  /** Posts old enough (≥ 24h) to count. */
+  maturePosts: number;
+  dimensions: { id: string; label: string; stats: TraitStat[] }[];
+  topHooks: { hook: string; views: number; lift: number; platform: Platform; postId: string; campaignId: string }[];
+  playbook: Playbook;
+}
+
+/** What the planner should lean on, avoid and test next. */
+export interface Playbook {
+  proven: { dimension: string; value: string; label: string; lift: number; posts: number }[];
+  weak: { dimension: string; value: string; label: string; lift: number; posts: number }[];
+  untested: { dimension: string; value: string; label: string }[];
+  winningHooks: string[];
+}
+
+export interface Insights {
+  generatedAt: string;
+  basedOnPosts: number;
+  findings: string[];
+  doMore: string[];
+  stopDoing: string[];
+  testNext: string[];
+  model: string;
 }
 
 export interface PublicUser {

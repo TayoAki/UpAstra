@@ -28,6 +28,14 @@ A standalone SaaS for clippers: paste a clipping campaign brief, get its rules, 
 
    A render of cached footage takes about a minute. Costs per clip: about $0.01 to analyze each new 8-minute footage file, and about $0.001 for the voice.
 
+6. **Learns what works** (the "What's working" page). Each clip records its traits: hook style (question, challenge, POV, reveal…), format, length, voice and the moment it opens on.
+   - **Fair comparison:** every post with a view count is compared with its own account's typical views at about 3 days old. Every views update is kept, so a post's 3-day number survives later updates; posts under a day old don't count yet.
+   - **Thin data:** a trait with only a few posts is pulled toward "normal" and labeled *too early*, *early signal* or *solid*, so one lucky post can't steer anything.
+   - **Playbook:** this lists proven patterns, ones to avoid, and what's still untested. New plans lean on what's proven and avoid what isn't working (with or without AI). About 30% of plans are tagged "Test" and try something untested, so the system keeps learning. A campaign uses its own data once it has 8 comparable posts; until then it uses the whole workspace.
+   - **Findings:** an AI summary of the numbers (do more, stop doing, test next), with a rules-only version when AI is off.
+
+   Patterns are reliable after about 20–30 tracked posts.
+
 ## Layout
 
 - **Left rail:** overview, new campaign, review queue, posts & earnings, settings, and the account menu.

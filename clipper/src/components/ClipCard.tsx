@@ -36,6 +36,11 @@ export function ClipCard({ clip, campaign, showCampaign }: { clip: Clip; campaig
         <div className="row wrap">
           <ClipBadge status={clip.status} />
           {clip.qa.pass ? <span className="badge ok">Follows the brief</span> : <span className="badge bad">{failing} rule(s) failing</span>}
+          {clip.traits?.strategy && (
+            <span className={`badge ${clip.traits.strategy === "test" ? "warn" : "info"}`} title={clip.traits.strategy === "test" ? "Tries something untested, so the system keeps learning" : "Leans on what has worked in your posts"}>
+              {clip.traits.strategy === "test" ? "Test" : "Proven pattern"}
+            </span>
+          )}
           <span className="small muted">
             {clip.angle} · {clip.lengthSec}s{showCampaign ? ` · ${campaign.name}` : ""}
           </span>

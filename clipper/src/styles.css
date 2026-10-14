@@ -906,3 +906,62 @@ label.field {
     max-width: 260px;
   }
 }
+
+/* What's working */
+.grid.stats + .panel,
+.grid.stats + p + .panel {
+  margin-top: 14px;
+}
+ul.tight {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+ul.tight li + li {
+  margin-top: 4px;
+}
+.lift-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1.2fr) minmax(90px, 2fr) 54px minmax(84px, auto) 92px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+.lift-row + .lift-row {
+  border-top: 1px solid var(--line);
+}
+.lift-row .badge {
+  justify-self: start;
+}
+.lift-track {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--sunk);
+}
+.lift-mid {
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--faint);
+}
+.lift-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px;
+}
+@media (max-width: 640px) {
+  .lift-row {
+    grid-template-columns: 1fr 54px;
+  }
+  .lift-row .lift-track {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .lift-row > .small,
+  .lift-row .badge {
+    display: none;
+  }
+}

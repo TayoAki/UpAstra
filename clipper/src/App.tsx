@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from "react";
-import { BarChart3, Clapperboard, Home, Inbox, LogOut, Play, Plus, Settings, ChevronRight, Search } from "lucide-react";
+import { BarChart3, Clapperboard, Home, Inbox, Lightbulb, LogOut, Play, Plus, Settings, ChevronRight, Search } from "lucide-react";
 import { fmtNum, fmtUSD } from "../shared/rules";
 import { api } from "./api";
 import { go, useApp, useRoute } from "./store";
 import { CampaignView, CampaignRight } from "./views/Campaign";
 import { NewCampaign } from "./views/NewCampaign";
+import { LearningView } from "./views/Learning";
 import { Overview, OverviewRight } from "./views/Overview";
 import { PostsView } from "./views/Posts";
 import { Review } from "./views/Review";
@@ -42,6 +43,7 @@ export function App() {
     right = <CampaignRight id={id} />;
   } else if (page === "review") view = <Review />;
   else if (page === "posts") view = <PostsView />;
+  else if (page === "learn") view = <LearningView scope={id ?? "all"} />;
   else if (page === "settings") view = <SettingsView tab={id ?? "workspace"} />;
   else {
     view = <Overview tab={id ?? "campaigns"} />;
@@ -87,6 +89,7 @@ export function App() {
         {railBtn("/new", page === "new", <Plus size={19} />, "New campaign")}
         {railBtn("/review", page === "review", <Inbox size={19} />, "Clips to review", toReview)}
         {railBtn("/posts", page === "posts", <BarChart3 size={19} />, "Posts & earnings")}
+        {railBtn("/learn", page === "learn", <Lightbulb size={19} />, "What's working")}
         {railBtn("/settings", page === "settings", <Settings size={19} />, "Settings")}
         <div className="spacer" />
         <div style={{ position: "relative" }}>

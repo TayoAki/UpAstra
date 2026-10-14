@@ -1,4 +1,4 @@
-import type { Activity, Campaign, CampaignBrief, CampaignStats, Clip, Me, Post, ServiceStatus, SocialAccount } from "../shared/types";
+import type { Activity, Campaign, CampaignBrief, CampaignStats, Clip, Insights, LearningReport, Me, Post, ServiceStatus, SocialAccount } from "../shared/types";
 
 export type CampaignWithStats = Campaign & { stats: CampaignStats };
 export interface State {
@@ -6,6 +6,7 @@ export interface State {
   clips: Clip[];
   posts: Post[];
   accounts: SocialAccount[];
+  insights: Record<string, Insights>;
   activity: Activity[];
   status: ServiceStatus;
 }
@@ -55,5 +56,6 @@ export const api = {
   updatePost: (id: string, b: Partial<Omit<Post, "metrics" | "paidAmount">> & { metrics?: Partial<Post["metrics"]>; paidAmount?: number | null }) => req<State>(`/posts/${id}`, "PUT", b),
   deletePost: (id: string) => req<State>(`/posts/${id}`, "DELETE"),
   addAccount: (b: Partial<SocialAccount>) => req<State>("/accounts", "POST", b),
+  writeInsights: (scope: string) => req<{ report: LearningReport; insights: Insights }>("/learning/insights", "POST", { scope }),
   deleteAccount2: (id: string) => req<State>(`/accounts/${id}`, "DELETE"),
 };

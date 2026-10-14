@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { traitsOf } from "../shared/learning";
 import { checkClip, round2 } from "../shared/rules";
 import type { Campaign, Clip, FootageFile, RenderInfo, VoiceOption } from "../shared/types";
 import { buildAss, chunk, sentences, timeWords } from "./captions";
@@ -173,6 +174,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     step(r, "rendering", "Cutting shots from the footage");
     const planned = shots.reduce((s, x) => s + Math.max(1, x.seconds), 0) || 1;
     const used = new Set<string>();
+    let opening: string | undefined;
     const segments: NonNullable<RenderInfo["segments"]> = [];
     const parts: string[] = [];
     let left = duration;
@@ -184,6 +186,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
       const total = f.durationSec ?? 0;
       const m = pickMoment(s.moment, f.moments ?? [], used);
       let start: number;
+      if (i === 0) opening = m?.type;
       if (m) {
         used.add(`${m.start}-${m.end}`);
         // Land goals and saves inside the shot with a beat after; everything else starts on the moment.
@@ -246,6 +249,8 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     } satisfies Partial<RenderInfo>);
     if (fresh.status === "rendering") fresh.status = "ready";
     fresh.lengthSec = Math.round(duration);
+    // What the learning system compares once this clip is posted.
+    fresh.traits = { ...traitsOf(fresh), voice: r.voice, opening };
     fresh.qa = checkClip(fresh, c.brief);
     log({ campaignId: c.id, kind: "clip", message: `Rendered "${fresh.title}" (${Math.round(duration)}s${r.voice !== "none" ? `, ${r.voice} voice` : ", no voice"}).`, cost: r.cost || undefined });
   } finally {

@@ -1,5 +1,7 @@
 import { checkClip, words, WORDS_PER_SECOND } from "../shared/rules";
-import type { Campaign, Clip, FootageFile } from "../shared/types";
+import { classifyHook, formatOf } from "../shared/learning";
+import type { Campaign, Clip, FootageFile, HookStyle, Playbook } from "../shared/types";
+import { HOOK_STYLES } from "../shared/types";
 import { newId, now } from "./db";
 import { aiLive, chatJSON } from "./llm";
 
@@ -13,10 +15,19 @@ Write clip plans a video editor can execute from the campaign's own footage. Eac
 - have a voiceover that says every required phrase out loud and ends with the call to action in the final line;
 - only state facts from keyFacts — never invent features, rewards, codes, partnerships or results, and never break bannedClaims;
 - fit the length: about ${WORDS_PER_SECOND} spoken words per second;
-- list 2-5 shots, each naming an exact footage file from the list and the moment to cut (e.g. "last-second goal").
-Return JSON {"clips":[{"title","angle","hook","narration","onScreenText":[...],"cta","shots":[{"footageName","moment","seconds"}],"lengthSec","caption","hashtags":[...]}]}.`;
+- list 2-5 shots, each naming an exact footage file from the list and the moment to cut (e.g. "last-second goal");
+- name its hook style, one of: ${HOOK_STYLES.filter((h) => h.id !== "other").map((h) => h.id).join(", ")}.
+When "learning" is given, it is what this creator's past posts showed. Plans marked "proven" lean on what worked (proven traits, the style of the winning hooks — never copy them word for word) and avoid what underperformed. Plans marked "test" each try one untested option from the list instead, so the system keeps learning.
+Return JSON {"clips":[{"title","angle","hookStyle","hook","narration","onScreenText":[...],"cta","shots":[{"footageName","moment","seconds"}],"lengthSec","caption","hashtags":[...]}]}.`;
 
-type Draft = Omit<Clip, "id" | "campaignId" | "status" | "qa" | "model" | "cost" | "createdAt" | "updatedAt">;
+type Draft = Omit<Clip, "id" | "campaignId" | "status" | "qa" | "model" | "cost" | "createdAt" | "updatedAt"> & { hookStyle?: HookStyle };
+
+/** What the learning system hands the planner: the playbook, and how many of the plans should be tests. */
+export interface PlanGuide {
+  playbook: Playbook;
+  tests: number;
+  basedOnPosts: number;
+}
 
 const toStr = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 const toList = (v: unknown) => (Array.isArray(v) ? v.map(toStr).filter(Boolean) : []);
@@ -34,7 +45,9 @@ function toDraft(raw: Record<string, unknown>, c: Campaign): Draft {
   });
   const narration = toStr(raw.narration);
   const lengthSec = Math.round(Number(raw.lengthSec) || Math.max(c.brief.lengthSec.min, Math.ceil(words(narration) / WORDS_PER_SECOND) + 2));
+  const style = toStr(raw.hookStyle) as HookStyle;
   return {
+    hookStyle: HOOK_STYLES.some((h) => h.id === style) ? style : undefined,
     title: toStr(raw.title) || toStr(raw.hook).slice(0, 60),
     angle: toStr(raw.angle),
     hook: toStr(raw.hook),
@@ -73,23 +86,48 @@ const ANGLES = [
   { angle: "Surprise reveal", line: (p: string) => `Wait — this is actually ${p}.` },
   { angle: "Big moment", line: (p: string) => `This might be the cleanest play I've seen in ${p}.` },
   { angle: "Challenge", line: (p: string) => `I tried ${p} for the first time. Here's how it went.` },
-  { angle: "How it works", line: (p: string) => `Here's ${p} in thirty seconds.` },
+  { angle: "How it works", line: (p: string) => `How to win your first match in ${p}.` },
   { angle: "Underrated pick", line: (p: string) => `Nobody is talking about ${p}, and that's a mistake.` },
+  { angle: "Question", line: (p: string) => `Can you actually score from the wall in ${p}?` },
+  { angle: "POV", line: (p: string) => `POV: you just found ${p}.` },
+  { angle: "Comeback story", line: (p: string) => `I was down three goals in ${p}, then this happened.` },
+  { angle: "Quick list", line: (p: string) => `3 things nobody tells you about ${p}.` },
+  { angle: "1v1", line: (p: string) => `I challenged a random player to a 1v1 in ${p}.` },
+  { angle: "Dare", line: (p: string) => `My friend said I couldn't win a match in ${p}. Challenge accepted.` },
+  { angle: "Bold take", line: (p: string) => `${p} is the most underrated game you're not playing.` },
+  { angle: "First-timer POV", line: (p: string) => `POV: your first goal in ${p}.` },
 ];
 
-function simulatedDrafts(c: Campaign, n: number, offset: number): Draft[] {
+/** Hook candidates for plan `i`, ordered by what the playbook wants for it. */
+function hookFor(i: number, product: string, examples: string[], used: Set<string>, want?: { prefer: Set<string>; avoid: Set<string> }) {
+  const all = [
+    ...examples.map((h) => ({ angle: "From the brief", hook: h.replace(/\.+$/, "") })),
+    ...ANGLES.map((a) => ({ angle: a.angle, hook: a.line(product) })),
+  ];
+  // Rotate so consecutive plans don't share a hook.
+  const rotated = all.map((_, k) => all[(i + k) % all.length]);
+  if (!want) return rotated[0];
+  const fresh = (x: { hook: string }) => !used.has(x.hook);
+  const preferred = rotated.filter((x) => want.prefer.has(classifyHook(x.hook)));
+  const allowed = rotated.filter((x) => !want.avoid.has(classifyHook(x.hook)));
+  return preferred.find(fresh) ?? preferred[0] ?? allowed.find(fresh) ?? allowed[0] ?? rotated[0];
+}
+
+function simulatedDrafts(c: Campaign, n: number, offset: number, plan?: (k: number) => { prefer: Set<string>; avoid: Set<string> } | undefined): Draft[] {
   const b = c.brief;
   const product = b.product || b.requiredPhrases[0] || "this";
   const video = c.footage.filter((f) => f.kind === "video");
   const facts = b.keyFacts.filter((f) => f.length < 140 && !/^you do not need/i.test(f));
+  const used = new Set<string>();
   return Array.from({ length: n }, (_, k) => {
     const i = offset + k;
-    const a = ANGLES[i % ANGLES.length];
-    const hook = b.hookExamples.length && i % 2 === 0 ? b.hookExamples[(i / 2) % b.hookExamples.length].replace(/\.+$/, "") : a.line(product);
+    const { angle, hook } = hookFor(i, product, b.hookExamples, used, plan?.(k));
+    used.add(hook);
+    const a = { angle };
     const f1 = facts[i % Math.max(facts.length, 1)] ?? `${product} is built for quick, competitive matches.`;
     const f2 = facts[(i + 1) % Math.max(facts.length, 1)] ?? "";
     const missing = b.requiredPhrases.filter((p) => !`${hook} ${f1} ${f2}`.toLowerCase().includes(p.toLowerCase()));
-    const narration = [`${hook}.`, missing.length ? `It's called ${missing.join(" and ")}.` : "", f1.replace(/\.?$/, "."), f2 ? f2.replace(/\.?$/, ".") : "", b.cta.text ? `${b.cta.text.replace(/[.!]+$/, "")} — link in bio.` : ""]
+    const narration = [/[.!?…]$/.test(hook) ? hook : `${hook}.`, missing.length ? `It's called ${missing.join(" and ")}.` : "", f1.replace(/\.?$/, "."), f2 ? f2.replace(/\.?$/, ".") : "", b.cta.text ? `${b.cta.text.replace(/[.!]+$/, "")} — link in bio.` : ""]
       .filter(Boolean)
       .join(" ");
     const shots = [0, 1, 2].map((s) => {
@@ -112,8 +150,24 @@ function simulatedDrafts(c: Campaign, n: number, offset: number): Draft[] {
   });
 }
 
+/** Output room for `n` plans (a full plan runs ~900 tokens; a cut-off reply is unusable JSON). */
+const tokensFor = (n: number) => Math.min(16_000, 1_500 + 1_300 * n);
+
 /** Write `n` new clip plans for a campaign, each QA-checked against the brief. */
-export async function planClips(c: Campaign, n: number, existing: Clip[]): Promise<{ clips: Clip[]; cost: number; model: string }> {
+export async function planClips(c: Campaign, n: number, existing: Clip[], guide?: PlanGuide): Promise<{ clips: Clip[]; cost: number; model: string }> {
+  // The first plans repeat what's proven; the last `tests` try something new.
+  const tests = guide ? Math.min(n, guide.tests) : n;
+  const strategyOf = (i: number): "proven" | "test" => (i < n - tests ? "proven" : "test");
+  const learning = guide && guide.basedOnPosts > 0
+    ? {
+        basedOnPosts: guide.basedOnPosts,
+        proven: guide.playbook.proven.map((p) => `${p.label} (${p.lift}× normal views over ${p.posts} posts)`),
+        avoid: guide.playbook.weak.map((p) => `${p.label} (${p.lift}× normal views over ${p.posts} posts)`),
+        winningHooks: guide.playbook.winningHooks,
+        untested: guide.playbook.untested.map((u) => u.label),
+        plans: Array.from({ length: n }, (_, i) => strategyOf(i)),
+      }
+    : undefined;
   let drafts: Draft[];
   let model = "rules";
   let cost = 0;
@@ -127,7 +181,8 @@ export async function planClips(c: Campaign, n: number, existing: Clip[]): Promi
       footage,
       count: n,
       avoidAngles: existing.map((x) => `${x.angle}: ${x.hook}`).slice(-20),
-    });
+      learning,
+    }, tokensFor(n));
     model = r.model;
     cost = r.cost;
     drafts = (r.json.clips ?? []).slice(0, n).map((x) => toDraft(x, c));
@@ -139,19 +194,23 @@ export async function planClips(c: Campaign, n: number, existing: Clip[]): Promi
         footage,
         count: failing.length,
         rewrite: failing.map((f) => ({ plan: drafts[f.i], failedChecks: f.qa.checks.filter((x) => !x.pass) })),
-        instruction: "Rewrite each plan so every failed check passes. Keep the angle and hook.",
-      });
+        instruction: "Rewrite each plan so every failed check passes. Keep the angle, hook and hookStyle.",
+      }, tokensFor(failing.length));
       cost += fix.cost;
       (fix.json.clips ?? []).forEach((x, k) => {
         if (failing[k]) drafts[failing[k].i] = toDraft(x, c);
       });
     }
   } else {
-    drafts = simulatedDrafts(c, n, existing.length);
+    // Without AI the playbook still steers which hooks get used.
+    const pb = guide?.playbook;
+    const hookSet = (xs: { dimension: string; value: string }[] = []) => new Set(xs.filter((x) => x.dimension === "hookStyle").map((x) => x.value));
+    drafts = simulatedDrafts(c, n, existing.length, learning && pb ? (k) => ({ prefer: strategyOf(k) === "proven" ? hookSet(pb.proven) : hookSet(pb.untested), avoid: hookSet(pb.weak) }) : undefined);
   }
   const at = now();
-  const clips = drafts.map<Clip>((d) => ({
+  const clips = drafts.map<Clip>(({ hookStyle, ...d }, i) => ({
     ...d,
+    traits: { hookStyle: hookStyle ?? classifyHook(d.hook), format: formatOf(d), strategy: learning ? strategyOf(i) : undefined },
     id: newId("clip"),
     campaignId: c.id,
     status: "draft",

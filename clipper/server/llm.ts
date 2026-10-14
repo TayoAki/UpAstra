@@ -81,6 +81,7 @@ export async function chatJSON<T>(role: AIRole, system: string, user: unknown, m
   if (!res.ok) throw new Error(`AI ${res.status}: ${res.text.slice(0, 300)}`);
   const data = JSON.parse(res.text);
   const msg = data.choices?.[0]?.message?.content ?? "";
+  if (data.choices?.[0]?.finish_reason === "length") console.warn(`[ai] ${role} reply hit max_tokens (${maxTokens})`);
   return { json: parseJSON<T>(typeof msg === "string" ? msg : JSON.stringify(msg)), model: data.model ?? model, cost: typeof data.usage?.cost === "number" ? data.usage.cost : 0 };
 }
 

@@ -13,7 +13,9 @@ import { enqueueRender, renderAvailable } from "./render";
 import { saveUpload } from "./footage-cache";
 import { storageKind, videoStore } from "./storage";
 import { checkClip } from "../shared/rules";
-import { planClips } from "./scripts";
+import { planClips, type PlanGuide } from "./scripts";
+import { analyze, testShare } from "../shared/learning";
+import { writeInsights } from "./insights";
 import { driveThumb, readBriefUrl, resolveFootage } from "./sources";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -86,6 +88,7 @@ function stateFor(): unknown {
     clips: doc.clips,
     posts: doc.posts,
     accounts: doc.accounts,
+    insights: doc.insights ?? {},
     activity: doc.activity.slice(0, 100),
     status: serviceStatus(),
   };
@@ -96,6 +99,25 @@ function sanitizeMetrics(m: unknown): Post["metrics"] {
   const n = (v: unknown) => Math.max(0, Math.round(Number(v) || 0));
   return { views: n(o.views), likes: n(o.likes), comments: n(o.comments), shares: n(o.shares) };
 }
+
+/** Keep a dated copy of each metrics update so posts can be compared at the same age. */
+function snapshot(p: Post) {
+  p.history = [...(p.history ?? []), { ...p.metrics, at: p.metricsUpdatedAt ?? now() }].slice(-40);
+}
+
+/** The playbook for new plans: this campaign's own data once it has enough, else the whole workspace's. */
+function guideFor(campaignId: string, n: number): PlanGuide {
+  const doc = getDoc();
+  const own = analyze(doc, campaignId);
+  const r = own.maturePosts >= 8 ? own : analyze(doc, "all");
+  return { playbook: r.playbook, tests: testShare(n, r.playbook), basedOnPosts: r.maturePosts };
+}
+
+const scopeOf = (v: unknown) => {
+  const s = String(v ?? "all");
+  if (s !== "all") findCampaign(s);
+  return s;
+};
 
 const platformOf = (v: unknown): Platform => ((PLATFORMS as string[]).includes(String(v)) ? (v as Platform) : "other");
 
@@ -260,6 +282,7 @@ export function createApp() {
     doc.campaigns = doc.campaigns.filter((x) => x.id !== c.id);
     doc.clips = doc.clips.filter((x) => x.campaignId !== c.id);
     doc.posts = doc.posts.filter((x) => x.campaignId !== c.id);
+    if (doc.insights) delete doc.insights[c.id];
     log({ kind: "campaign", message: `Campaign "${c.name}" deleted with its clips and posts.` });
     save();
     res.json(stateFor());
@@ -305,10 +328,12 @@ export function createApp() {
       spendAI(req.workspaceId!, 2);
       const doc = getDoc();
       const existing = doc.clips.filter((x) => x.campaignId === c.id);
-      const r = await planClips(c, n, existing);
+      const guide = guideFor(c.id, n);
+      const r = await planClips(c, n, existing, guide);
       doc.clips.unshift(...r.clips);
       const ok = r.clips.filter((x) => x.qa.pass).length;
-      log({ campaignId: c.id, kind: "clip", message: `${r.clips.length} clip plan(s) written by ${r.model} — ${ok} pass every rule.`, cost: r.cost });
+      const learned = guide.basedOnPosts ? ` Guided by ${count(guide.basedOnPosts, "post")}: ${count(r.clips.filter((x) => x.traits?.strategy === "test").length, "test")}.` : "";
+      log({ campaignId: c.id, kind: "clip", message: `${r.clips.length} clip plan(s) written by ${r.model} — ${ok} pass every rule.${learned}`, cost: r.cost });
       save();
       res.status(201).json(stateFor());
     }),
@@ -445,6 +470,7 @@ export function createApp() {
       metricsUpdatedAt: now(),
       notes: String(b.notes ?? "").slice(0, 2000),
     };
+    if (post.metrics.views) snapshot(post);
     getDoc().posts.unshift(post);
     if (clip) clip.status = "posted";
     log({ campaignId: c.id, kind: "post", message: `Posted to ${post.platform}${post.account ? ` (@${post.account.replace(/^@/, "")})` : ""}.` });
@@ -458,6 +484,7 @@ export function createApp() {
     if (b.metrics) {
       p.metrics = sanitizeMetrics({ ...p.metrics, ...b.metrics });
       p.metricsUpdatedAt = now();
+      snapshot(p);
     }
     if (POST_STATUSES.includes(b.status)) p.status = b.status as PostStatus;
     if (b.paidAmount === null) p.paidAmount = undefined;
@@ -477,6 +504,28 @@ export function createApp() {
     save();
     res.json(stateFor());
   });
+
+  // Learning: what's working across posted clips, and written findings.
+  api.get("/learning", (req, res) => {
+    const doc = getDoc();
+    const scope = scopeOf(req.query.scope);
+    res.json({ report: analyze(doc, scope), insights: doc.insights?.[scope] });
+  });
+
+  api.post(
+    "/learning/insights",
+    wrap(async (req, res) => {
+      const doc = getDoc();
+      const scope = scopeOf(req.body?.scope);
+      const report = analyze(doc, scope);
+      if (report.maturePosts) spendAI(req.workspaceId!, 1);
+      const { insights, cost } = await writeInsights(report);
+      doc.insights = { ...doc.insights, [scope]: insights };
+      log({ campaignId: scope === "all" ? undefined : scope, kind: "learning", message: `Findings refreshed from ${count(report.maturePosts, "post")} (${insights.model}).`, cost: cost || undefined });
+      save();
+      res.json({ report, insights });
+    }),
+  );
 
   // Accounts the user posts from (campaigns often restrict who may upload).
   api.post("/accounts", (req, res) => {
