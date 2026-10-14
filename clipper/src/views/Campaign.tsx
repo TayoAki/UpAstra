@@ -7,6 +7,7 @@ import { api, type CampaignWithStats } from "../api";
 import { Tabs } from "../App";
 import { ClipCard } from "../components/ClipCard";
 import { PostForm } from "../components/PostForm";
+import { UploadFootage } from "../components/Upload";
 import { ago, Empty, ListEdit, Panel, PostBadge, Stat } from "../components/ui";
 import { go, useApp } from "../store";
 
@@ -424,12 +425,16 @@ function FootageTab({ c }: { c: CampaignWithStats }) {
         <div>
           <h1>Footage</h1>
           <p className="muted" style={{ margin: 0 }}>
-            Listed from the brief's footage links {c.footageCheckedAt ? ago(c.footageCheckedAt) : ""}. Backup copies of the same file are skipped.
+            Listed from the brief's footage links {c.footageCheckedAt ? ago(c.footageCheckedAt) : ""}. Each file is fetched once and watched for its best moments when a clip first uses it. If
+            Google Drive refuses a download (its per-file limit), download the file in your browser and upload your copy here.
           </p>
         </div>
-        <button className="btn" disabled={busy || !c.brief.footage.length} onClick={() => run(() => api.refreshFootage(c.id), "Footage refreshed")}>
-          <RefreshCw size={14} /> Refresh
-        </button>
+        <div className="row wrap">
+          <UploadFootage campaignId={c.id} label="Upload footage" />
+          <button className="btn" disabled={busy || !c.brief.footage.length} onClick={() => run(() => api.refreshFootage(c.id), "Footage refreshed")}>
+            <RefreshCw size={14} /> Refresh
+          </button>
+        </div>
       </div>
       {c.footageError && <p className="badge bad">{c.footageError}</p>}
       {!files.length && <Empty>{c.brief.footage.length ? "No files found in the footage links." : "The brief has no footage links. Add one on the Brief tab."}</Empty>}
@@ -440,17 +445,48 @@ function FootageTab({ c }: { c: CampaignWithStats }) {
             {files
               .filter((f) => f.folderLabel === folder)
               .map((f) => (
-                <a key={f.id} className="card footage-card" href={f.viewUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "none", color: "inherit" }}>
-                  <div className="img" style={f.thumbUrl ? { backgroundImage: `url("${f.thumbUrl}")` } : undefined}>
+                <div key={f.id} className="card footage-card" style={{ cursor: "default" }}>
+                  <a className="img" href={f.viewUrl} target="_blank" rel="noreferrer" style={f.thumbUrl ? { backgroundImage: `url("${f.thumbUrl}")` } : undefined} aria-label={`Open ${f.name}`}>
                     {!f.thumbUrl && (f.kind === "image" ? <ImageIcon size={24} /> : <Film size={24} />)}
-                  </div>
+                  </a>
                   <div className="body">
-                    <div className="ellipsis" style={{ fontWeight: 600 }}>
+                    <div className="ellipsis" style={{ fontWeight: 600 }} title={f.name}>
                       {f.name}
                     </div>
-                    <div className="small muted">{f.kind}</div>
+                    <div className="small muted">
+                      {f.kind}
+                      {f.durationSec ? ` · ${Math.floor(f.durationSec / 60)}:${String(Math.round(f.durationSec % 60)).padStart(2, "0")}` : ""}
+                      {f.moments?.length ? ` · ${f.moments.length} moments` : ""}
+                      {f.storageKey ? " · your copy" : ""}
+                    </div>
+                    {f.analysisError && <div className="small warn-text">{f.analysisError}</div>}
+                    {f.moments && f.moments.length > 0 && (
+                      <details>
+                        <summary className="small" style={{ cursor: "pointer" }}>
+                          Moments
+                        </summary>
+                        <ul className="moments">
+                          {f.moments.map((m, i) => (
+                            <li key={i}>
+                              <strong>
+                                {Math.floor(m.start / 60)}:{String(Math.floor(m.start % 60)).padStart(2, "0")}
+                              </strong>{" "}
+                              <span className="badge">{m.type}</span> {m.description}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                    {f.kind === "video" && f.folderUrl && !f.storageKey && /download limit|Couldn't|isn't public/i.test(f.analysisError ?? "") && (
+                      <UploadFootage campaignId={c.id} replace={f.id} label="Upload your copy" small />
+                    )}
+                    {f.kind === "video" && !f.analyzedAt && (
+                      <button className="btn sm" disabled={busy} onClick={() => run(() => api.analyzeFootage(c.id, f.id), `Moments found in ${f.name}`)} title="Fetch this video once and let the AI log its best moments">
+                        Find moments
+                      </button>
+                    )}
                   </div>
-                </a>
+                </div>
               ))}
           </div>
         </div>

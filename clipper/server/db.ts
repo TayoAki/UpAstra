@@ -202,8 +202,13 @@ export async function loadTenant(workspaceId: string) {
   if (tenants.has(workspaceId)) return;
   const doc = await getBackend().loadDoc(workspaceId);
   if (!doc) throw new HttpError(404, "Workspace not found");
-  tenants.set(workspaceId, { doc: { ...emptyDoc(), ...doc } });
+  const full = { ...emptyDoc(), ...doc };
+  for (const hook of tenantLoadHooks) hook(workspaceId, full);
+  tenants.set(workspaceId, { doc: full });
 }
+
+/** Run when a workspace document is loaded into memory (e.g. to fix up work interrupted by a restart). */
+export const tenantLoadHooks: ((workspaceId: string, doc: WorkspaceDoc) => void)[] = [];
 
 export function getDoc(): WorkspaceDoc {
   const id = currentWorkspaceId();

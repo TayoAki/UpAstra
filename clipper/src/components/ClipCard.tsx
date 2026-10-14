@@ -6,6 +6,7 @@ import { api } from "../api";
 import { useApp } from "../store";
 import { Checks, ClipBadge } from "./ui";
 import { PostForm } from "./PostForm";
+import { RenderPanel } from "./RenderPanel";
 
 export function ClipCard({ clip, campaign, showCampaign }: { clip: Clip; campaign: Campaign; showCampaign?: boolean }) {
   const { run, busy, toast } = useApp();
@@ -134,15 +135,12 @@ export function ClipCard({ clip, campaign, showCampaign }: { clip: Clip; campaig
         <Checks checks={clip.qa.checks} />
       </details>
 
+      {clip.status !== "rejected" && (clip.status !== "draft" || clip.render) && <RenderPanel clip={clip} />}
+
       <div className="row wrap mt">
         {clip.status === "draft" && (
           <button className="btn sm primary" disabled={busy} onClick={approve}>
             <Check size={14} /> Approve
-          </button>
-        )}
-        {(clip.status === "approved" || clip.status === "ready") && (
-          <button className="btn sm" disabled title="Connect the render service to turn approved plans into videos">
-            Render video (soon)
           </button>
         )}
         {clip.status !== "posted" && clip.status !== "rejected" && (

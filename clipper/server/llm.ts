@@ -1,11 +1,15 @@
 // The one place the app talks to a language model (OpenRouter, or any
 // OpenAI-compatible endpoint). Without a key, callers fall back to rules.
 
-export type AIRole = "extract" | "script";
+export type AIRole = "extract" | "script" | "moments" | "voice";
 
 const DEFAULTS: Record<AIRole, { env: string; model: string }> = {
   extract: { env: "EXTRACT_MODEL", model: "anthropic/claude-haiku-5.5" },
   script: { env: "SCRIPT_MODEL", model: "anthropic/claude-sonnet-5.5" },
+  // Watches footage: Gemini takes video input through OpenRouter.
+  moments: { env: "MOMENT_MODEL", model: "google/gemini-3.5-flash-lite" },
+  // Speaks voiceovers: an audio-output model on OpenRouter.
+  voice: { env: "VOICE_MODEL", model: "openai/gpt-audio-mini" },
 };
 
 let forcedOff = false;
@@ -44,15 +48,19 @@ export interface AIResult<T> {
   cost: number;
 }
 
-export async function chatJSON<T>(role: AIRole, system: string, user: unknown, maxTokens = 4000): Promise<AIResult<T>> {
+/** OpenRouter only: video input and audio output aren't part of the plain OpenAI API. */
+export const mediaLive = () => !forcedOff && !!process.env.OPENROUTER_API_KEY;
+
+export async function chatJSON<T>(role: AIRole, system: string, user: unknown, maxTokens = 4000, media: unknown[] = []): Promise<AIResult<T>> {
   const p = provider();
   if (!p) throw new Error("No AI provider configured");
   const model = modelFor(role);
+  const text = typeof user === "string" ? user : JSON.stringify(user, null, 1);
   const body: Record<string, unknown> = {
     model,
     messages: [
       { role: "system", content: `${system}\nRespond with a single JSON object only.` },
-      { role: "user", content: typeof user === "string" ? user : JSON.stringify(user, null, 1) },
+      { role: "user", content: media.length ? [{ type: "text", text }, ...media] : text },
     ],
     response_format: { type: "json_object" },
     max_tokens: maxTokens,
@@ -74,4 +82,54 @@ export async function chatJSON<T>(role: AIRole, system: string, user: unknown, m
   const data = JSON.parse(res.text);
   const msg = data.choices?.[0]?.message?.content ?? "";
   return { json: parseJSON<T>(typeof msg === "string" ? msg : JSON.stringify(msg)), model: data.model ?? model, cost: typeof data.usage?.cost === "number" ? data.usage.cost : 0 };
+}
+
+/** Read a script aloud. Returns 24 kHz mono 16-bit PCM and the provider's cost. */
+export async function speak(script: string, voice: string): Promise<{ pcm: Buffer; cost: number; transcript: string }> {
+  if (!mediaLive()) throw new Error("Voiceover needs OPENROUTER_API_KEY");
+  const res = await fetch(`${process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1"}/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, "Content-Type": "application/json", "X-Title": "Clip Operator" },
+    body: JSON.stringify({
+      model: modelFor("voice"),
+      modalities: ["text", "audio"],
+      audio: { voice, format: "pcm16" },
+      stream: true,
+      usage: { include: true },
+      messages: [
+        { role: "system", content: "You are a voiceover artist for short-form videos. Read the user's script aloud exactly as written, word for word, with energetic, natural delivery. Never add, skip or change words." },
+        { role: "user", content: script },
+      ],
+    }),
+    signal: AbortSignal.timeout(180_000),
+  });
+  if (!res.ok || !res.body) throw new Error(`Voice ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const chunks: Buffer[] = [];
+  let transcript = "";
+  let cost = 0;
+  let buf = "";
+  const decoder = new TextDecoder();
+  for await (const part of res.body as unknown as AsyncIterable<Uint8Array>) {
+    buf += decoder.decode(part, { stream: true });
+    let i: number;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
+      try {
+        const d = JSON.parse(line.slice(6));
+        if (typeof d.usage?.cost === "number") cost = d.usage.cost;
+        for (const c of d.choices ?? []) {
+          const a = c.delta?.audio;
+          if (a?.data) chunks.push(Buffer.from(a.data, "base64"));
+          if (a?.transcript) transcript += a.transcript;
+        }
+      } catch {
+        /* keep-alive comments and partial lines */
+      }
+    }
+  }
+  const pcm = Buffer.concat(chunks);
+  if (pcm.length < 4800) throw new Error("The voice model returned no audio");
+  return { pcm, cost, transcript };
 }

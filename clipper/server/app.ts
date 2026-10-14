@@ -2,15 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { campaignStats } from "../shared/rules";
-import type { Campaign, CampaignBrief, Clip, ClipStatus, Me, Platform, Post, PostStatus, ServiceStatus, SocialAccount } from "../shared/types";
-import { CLIP_STATUSES, PLATFORMS, POST_STATUSES } from "../shared/types";
+import type { Campaign, CampaignBrief, Clip, ClipStatus, Me, Platform, Post, PostStatus, ServiceStatus, SocialAccount, VoiceOption } from "../shared/types";
+import { CLIP_STATUSES, PLATFORMS, POST_STATUSES, VOICES } from "../shared/types";
 import { clearSession, clearThrottle, hashPassword, issueSession, requireWorkspace, throttle, verifyPassword } from "./auth";
 import { HttpError, emptyDoc, forgetTenant, getBackend, getDoc, log, newId, now, save, type UserRow } from "./db";
 import { extractBrief, normalizeBrief } from "./extract";
-import { aiLive, modelFor } from "./llm";
+import { aiLive, mediaLive, modelFor } from "./llm";
+import { analyzeFootage } from "./moments";
+import { enqueueRender, renderAvailable } from "./render";
+import { saveUpload } from "./footage-cache";
+import { storageKind, videoStore } from "./storage";
 import { checkClip } from "../shared/rules";
 import { planClips } from "./scripts";
-import { readBriefUrl, resolveFootage } from "./sources";
+import { driveThumb, readBriefUrl, resolveFootage } from "./sources";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const wrap = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => fn(req, res).catch(next);
@@ -19,7 +23,8 @@ export function serviceStatus(): ServiceStatus {
   return {
     ai: aiLive() ? "live" : "simulated",
     aiModel: aiLive() ? modelFor("script") : "rules",
-    render: process.env.RENDER_SERVICE_URL ? "connected" : "not-connected",
+    render: renderAvailable() ? "connected" : "not-connected",
+    voice: mediaLive() ? "live" : "off",
     storage: getBackend().kind,
   };
 }
@@ -57,8 +62,14 @@ const count = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 async function refreshFootage(c: Campaign) {
   const { files, errors } = await resolveFootage(c.brief.footage);
   // Keep ids stable so clip shots stay linked across refreshes.
-  const old = new Map(c.footage.map((f) => [f.sourceId, f.id]));
-  c.footage = files.map((f) => ({ ...f, id: old.get(f.sourceId) ?? f.id }));
+  // Keep ids (clip shots point at them) and any moments already found.
+  const old = new Map(c.footage.map((f) => [f.sourceId, f]));
+  c.footage = files.map((f) => {
+    const prev = old.get(f.sourceId);
+    return prev ? { ...f, id: prev.id, storageKey: prev.storageKey, sizeBytes: prev.sizeBytes, durationSec: prev.durationSec, hasAudio: prev.hasAudio, moments: prev.moments, analyzedAt: prev.analyzedAt, analysisError: prev.analysisError } : f;
+  });
+  // Uploaded files aren't behind any link: keep them.
+  c.footage.push(...[...old.values()].filter((f) => f.storageKey && !f.folderUrl));
   c.footageCheckedAt = now();
   c.footageError = errors.length ? errors.join(" · ") : undefined;
   log({ campaignId: c.id, kind: "footage", message: `Footage checked: ${count(files.filter((f) => f.kind === "video").length, "video")}, ${count(files.filter((f) => f.kind === "image").length, "image")}${errors.length ? ` (${errors.length} link(s) failed)` : ""}.` });
@@ -67,7 +78,11 @@ async function refreshFootage(c: Campaign) {
 function stateFor(): unknown {
   const doc = getDoc();
   return {
-    campaigns: doc.campaigns.map((c) => ({ ...c, stats: campaignStats(c.brief, doc.clips.filter((x) => x.campaignId === c.id), doc.posts.filter((p) => p.campaignId === c.id)) })),
+    campaigns: doc.campaigns.map((c) => ({
+      ...c,
+      // Older campaigns stored Drive's expiring thumbnail links.
+      footage: c.footage.map((f) => (f.thumbUrl && /drive\.google\.com\/file\//.test(f.viewUrl) ? { ...f, thumbUrl: driveThumb(f.sourceId) } : f)),
+      stats: campaignStats(c.brief, doc.clips.filter((x) => x.campaignId === c.id), doc.posts.filter((p) => p.campaignId === c.id)) })),
     clips: doc.clips,
     posts: doc.posts,
     accounts: doc.accounts,
@@ -96,7 +111,7 @@ export function createApp() {
   });
   app.use("/api", express.json({ limit: "1mb" }));
 
-  app.get("/api/health", (_req, res) => res.json({ ok: true, ...serviceStatus() }));
+  app.get("/api/health", (_req, res) => res.json({ ok: true, ...serviceStatus(), videos: storageKind() }));
 
   // ---- Accounts --------------------------------------------------------------
   const me = async (userId: string): Promise<Me> => {
@@ -159,6 +174,9 @@ export function createApp() {
       const user = (await b.getUser(req.userId!))!;
       if (!(await verifyPassword(String(req.body?.password ?? ""), user.passwordHash))) throw new HttpError(401, "Wrong password");
       forgetTenant(req.workspaceId!);
+      await videoStore()
+        .deletePrefix(`${req.workspaceId}/`)
+        .catch((e) => console.error("[account] video cleanup failed:", e));
       await b.deleteWorkspace(req.workspaceId!);
       await b.deleteUser(user.id);
       clearSession(res);
@@ -313,6 +331,90 @@ export function createApp() {
     save();
     res.json(stateFor());
   });
+
+  // Rendering: approved plan → finished 9:16 video.
+  api.post("/clips/:id/render", (req, res) => {
+    const clip = findClip(String(req.params.id));
+    const voice = String(req.body?.voice ?? "ash") as VoiceOption;
+    if (!VOICES.some((v) => v.id === voice)) throw new HttpError(400, "Unknown voice");
+    if (clip.status === "draft" && !req.body?.override) throw new HttpError(400, "Approve the plan before rendering it");
+    if (voice !== "none") spendAI(req.workspaceId!, 1);
+    enqueueRender(req.workspaceId!, clip, voice);
+    log({ campaignId: clip.campaignId, kind: "clip", message: `Render queued for "${clip.title}".` });
+    save();
+    res.status(202).json(stateFor());
+  });
+
+  api.get(
+    "/clips/:id/video",
+    wrap(async (req, res) => {
+      const clip = findClip(String(req.params.id));
+      const key = clip.render?.videoKey;
+      if (!key || !key.startsWith(`${req.workspaceId}/`)) throw new HttpError(404, "No video yet");
+      const m = String(req.headers.range ?? "").match(/^bytes=(\d*)-(\d*)$/);
+      const range = m && (m[1] || m[2]) ? { start: m[1] ? Number(m[1]) : 0, end: m[2] ? Number(m[2]) : undefined } : undefined;
+      const f = await videoStore().read(key, range);
+      res.setHeader("Content-Type", f.type);
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      if (req.query.download) res.setHeader("Content-Disposition", `attachment; filename="${clip.title.replace(/[^\w\- ]+/g, "").slice(0, 60) || "clip"}.mp4"`);
+      if (range) {
+        res.status(206);
+        res.setHeader("Content-Range", `bytes ${f.start}-${f.end}/${f.size}`);
+      }
+      res.setHeader("Content-Length", String(f.end - f.start + 1));
+      f.stream.pipe(res);
+    }),
+  );
+
+  api.post(
+    "/campaigns/:id/footage/:fid/analyze",
+    wrap(async (req, res) => {
+      const c = findCampaign(String(req.params.id));
+      const f = c.footage.find((x) => x.id === String(req.params.fid));
+      if (!f || f.kind !== "video") throw new HttpError(404, "Video not found");
+      if (!renderAvailable()) throw new HttpError(503, "Footage analysis isn't available on this server");
+      spendAI(req.workspaceId!, 1);
+      try {
+        const r = await analyzeFootage(f, c.brief);
+        log({ campaignId: c.id, kind: "footage", message: `Found ${f.moments?.length ?? 0} moments in "${f.name}".`, cost: r.cost || undefined });
+      } catch (err) {
+        f.analysisError = (err as Error).message.slice(0, 300);
+        throw new HttpError(422, `Couldn't analyze "${f.name}": ${f.analysisError}`);
+      } finally {
+        save();
+      }
+      res.json(stateFor());
+    }),
+  );
+
+  // Footage upload: a new file, or the user's own copy of a linked file Drive won't serve.
+  api.post(
+    "/campaigns/:id/footage/upload",
+    wrap(async (req, res) => {
+      const c = findCampaign(String(req.params.id));
+      const type = String(req.headers["content-type"] ?? "").split(";")[0];
+      if (!/^(video\/(mp4|quicktime|webm|x-matroska|x-m4v)|application\/octet-stream)$/.test(type)) throw new HttpError(415, "Upload a video file (MP4, MOV, WebM or MKV)");
+      const name = decodeURIComponent(String(req.headers["x-file-name"] ?? "footage.mp4")).slice(0, 120);
+      const target = req.query.replace ? c.footage.find((f) => f.id === String(req.query.replace)) : undefined;
+      if (req.query.replace && !target) throw new HttpError(404, "Footage not found");
+      let saved: { key: string; size: number };
+      try {
+        saved = await saveUpload(req.workspaceId!, name, req);
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+      if (target) {
+        Object.assign(target, { storageKey: saved.key, sizeBytes: saved.size, analyzedAt: undefined, analysisError: undefined, moments: undefined, durationSec: undefined });
+        log({ campaignId: c.id, kind: "footage", message: `Uploaded your copy of "${target.name}" (${Math.round(saved.size / 1e6)} MB).` });
+      } else {
+        c.footage.push({ id: newId("ftg"), sourceId: saved.key, name, kind: "video", viewUrl: "", folderUrl: "", folderLabel: "Your uploads", storageKey: saved.key, sizeBytes: saved.size });
+        log({ campaignId: c.id, kind: "footage", message: `Uploaded "${name}" (${Math.round(saved.size / 1e6)} MB).` });
+      }
+      save();
+      res.status(201).json(stateFor());
+    }),
+  );
 
   api.delete("/clips/:id", (req, res) => {
     const doc = getDoc();

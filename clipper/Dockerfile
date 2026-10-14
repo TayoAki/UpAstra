@@ -7,6 +7,10 @@ COPY . .
 RUN npm run build && npm prune --omit=dev
 
 FROM node:22-slim
+# ffmpeg cuts and encodes clips; DejaVu is the caption font.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/node_modules ./node_modules

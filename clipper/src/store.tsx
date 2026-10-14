@@ -39,6 +39,14 @@ export function AppProvider({ me, setMe, children }: { me: Me; setMe: (m: Me | n
     void refresh();
   }, [refresh]);
 
+  // While a render is running, keep its progress fresh.
+  const rendering = !!state?.clips.some((c) => c.render && !["done", "failed"].includes(c.render.status));
+  useEffect(() => {
+    if (!rendering) return;
+    const t = setInterval(() => void refresh(), 4000);
+    return () => clearInterval(t);
+  }, [rendering, refresh]);
+
   const run = useCallback(
     async <T,>(fn: () => Promise<T>, ok?: string) => {
       setBusy(true);

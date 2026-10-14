@@ -118,7 +118,10 @@ export async function planClips(c: Campaign, n: number, existing: Clip[]): Promi
   let model = "rules";
   let cost = 0;
   if (aiLive() && !process.env.CLIP_SIMULATE) {
-    const footage = c.footage.filter((f) => f.kind === "video").map((f) => f.name);
+    // Analyzed files come with their logged moments, so shots can ask for real ones.
+    const footage = c.footage
+      .filter((f) => f.kind === "video")
+      .map((f) => (f.moments?.length ? { name: f.name, moments: f.moments.slice(0, 8).map((m) => `${m.type}: ${m.description}`) } : f.name));
     const r = await chatJSON<{ clips?: Record<string, unknown>[] }>("script", SYSTEM, {
       campaign: briefForModel(c),
       footage,

@@ -62,6 +62,15 @@ export interface CampaignBrief {
 
 export type CampaignStatus = "active" | "paused" | "ended";
 
+/** A highlight found in a footage file by the vision model. */
+export interface Moment {
+  start: number;
+  end: number;
+  type: "goal" | "save" | "near-miss" | "boost" | "funny" | "reveal" | "menu" | "other";
+  description: string;
+  score: number;
+}
+
 export interface FootageFile {
   id: string;
   /** Provider id (e.g. the Google Drive file id). */
@@ -73,6 +82,15 @@ export interface FootageFile {
   thumbUrl?: string;
   folderUrl: string;
   folderLabel: string;
+  /** Set when the file lives in our storage: an upload, or a copy the user supplied for a link. */
+  storageKey?: string;
+  sizeBytes?: number;
+  /** Filled in when the file is analyzed for moments. */
+  durationSec?: number;
+  hasAudio?: boolean;
+  moments?: Moment[];
+  analyzedAt?: string;
+  analysisError?: string;
 }
 
 export interface Campaign {
@@ -120,9 +138,40 @@ export interface Clip {
   qa: { pass: boolean; checks: QACheck[] };
   model: string;
   cost: number;
-  videoUrl?: string;
+  render?: RenderInfo;
   createdAt: string;
   updatedAt: string;
+}
+
+export type VoiceOption = "none" | "alloy" | "ash" | "ballad" | "coral" | "echo" | "sage" | "shimmer" | "verse";
+export const VOICES: { id: VoiceOption; label: string }[] = [
+  { id: "ash", label: "Ash — warm, upbeat" },
+  { id: "echo", label: "Echo — clear, neutral" },
+  { id: "coral", label: "Coral — bright, friendly" },
+  { id: "verse", label: "Verse — energetic" },
+  { id: "sage", label: "Sage — calm" },
+  { id: "alloy", label: "Alloy — balanced" },
+  { id: "ballad", label: "Ballad — expressive" },
+  { id: "shimmer", label: "Shimmer — light" },
+  { id: "none", label: "No voice — captions only (record your own)" },
+];
+
+export type RenderStatus = "queued" | "analyzing" | "voicing" | "rendering" | "done" | "failed";
+
+/** One render of a clip plan into a finished 9:16 video. */
+export interface RenderInfo {
+  status: RenderStatus;
+  step: string;
+  voice: VoiceOption;
+  requestedAt: string;
+  finishedAt?: string;
+  error?: string;
+  cost: number;
+  videoKey?: string;
+  durationSec?: number;
+  sizeBytes?: number;
+  /** Where each shot was cut from. */
+  segments?: { footageName: string; start: number; seconds: number; moment?: string }[];
 }
 
 export type PostStatus = "live" | "submitted" | "approved" | "rejected" | "paid";
@@ -193,6 +242,7 @@ export interface ServiceStatus {
   ai: "live" | "simulated";
   aiModel: string;
   render: "not-connected" | "connected";
+  voice: "live" | "off";
   storage: "postgres" | "file";
 }
 

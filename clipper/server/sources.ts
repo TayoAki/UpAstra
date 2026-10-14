@@ -24,7 +24,8 @@ export async function safeFetch(url: string, init: RequestInit = {}, hops = 4): 
   if (u.protocol !== "https:" && u.protocol !== "http:") throw new HttpError(400, "Only http(s) links can be read");
   const addrs = isIP(u.hostname) ? [{ address: u.hostname }] : await lookup(u.hostname, { all: true }).catch(() => []);
   if (!addrs.length) throw new HttpError(422, `Couldn't find ${u.hostname}`);
-  if (addrs.some((a) => privateIP(a.address))) throw new HttpError(400, "That address can't be fetched");
+  // Tests serve footage from localhost; nothing else may reach private networks.
+  if (addrs.some((a) => privateIP(a.address)) && process.env.ALLOW_PRIVATE_FETCH !== "1") throw new HttpError(400, "That address can't be fetched");
   const res = await fetch(u, { ...init, redirect: "manual", headers: { "User-Agent": UA, ...(init.headers ?? {}) }, signal: init.signal ?? AbortSignal.timeout(15_000) });
   if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
     if (hops <= 0) throw new HttpError(422, "Too many redirects");
@@ -68,6 +69,9 @@ export const htmlText = (html: string) =>
     .replace(/[ \t]+/g, " ")
     .replace(/\n\s*\n+/g, "\n")
     .trim();
+
+/** Drive's own thumbnail links expire within hours; this endpoint doesn't (for public files). */
+export const driveThumb = (fileId: string) => `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w480`;
 
 export const googleDocId = (url: string) => url.match(/docs\.google\.com\/document\/(?:u\/\d+\/)?d\/([\w-]{20,})/)?.[1];
 export const driveFolderId = (url: string) => url.match(/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?folders\/|open\?id=)([\w-]{20,})/)?.[1];
@@ -133,7 +137,7 @@ export async function listDriveFolder(link: LinkRef): Promise<FootageFile[]> {
       kind: kindOf(mime, name),
       mime,
       viewUrl: decode(href),
-      thumbUrl: thumb && /^https:\/\/lh\d\.googleusercontent\.com\//.test(thumb) ? decode(thumb) : undefined,
+      thumbUrl: thumb ? driveThumb(sourceId) : undefined,
       folderUrl: link.url,
       folderLabel: link.label,
     });
@@ -150,7 +154,14 @@ export async function resolveFootage(links: LinkRef[]): Promise<{ files: Footage
       if (driveFolderId(link.url)) files.push(...(await listDriveFolder(link)));
       else {
         const fileId = driveFileId(link.url);
-        files.push({ id: newId("ftg"), sourceId: fileId ?? link.url, name: link.label, kind: "other", viewUrl: link.url, folderUrl: link.url, folderLabel: link.label });
+        const pathName = (() => {
+          try {
+            return new URL(link.url).pathname;
+          } catch {
+            return "";
+          }
+        })();
+        files.push({ id: newId("ftg"), sourceId: fileId ?? link.url, name: link.label, kind: kindOf(undefined, pathName), viewUrl: link.url, folderUrl: link.url, folderLabel: link.label });
       }
     } catch (err) {
       errors.push((err as Error).message);
