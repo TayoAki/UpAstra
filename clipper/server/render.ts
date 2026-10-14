@@ -112,8 +112,9 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     // 1. Moments in each footage file this clip uses.
     const shots = clip.shots.length ? clip.shots : [{ moment: clip.hook, seconds: clip.lengthSec }];
     const files = shots.map((s, i) => footageFor(c, s.footageId, i));
-    for (const f of [...new Map(files.map((x) => [x.id, x])).values()]) {
-      if (f.analyzedAt && f.durationSec) continue;
+    const failed = new Map<string, string>();
+    const ensure = async (f: FootageFile) => {
+      if (f.analyzedAt && f.durationSec) return true;
       step(r, "analyzing", `Fetching and watching "${f.name}"`);
       try {
         const a = await analyzeFootage(f, c.brief);
@@ -121,9 +122,32 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
         log({ campaignId: c.id, kind: "footage", message: `Found ${f.moments?.length ?? 0} moments in "${f.name}".`, cost: a.cost || undefined });
       } catch (err) {
         f.analysisError = (err as Error).message.slice(0, 300);
-        if (!f.durationSec) throw new Error(`Couldn't open "${f.name}": ${f.analysisError}`);
       }
       save();
+      if (!f.durationSec) failed.set(f.id, f.analysisError ?? "couldn't open it");
+      return !!f.durationSec;
+    };
+    for (const f of [...new Map(files.map((x) => [x.id, x])).values()]) await ensure(f);
+
+    // Footage that couldn't be fetched (usually Drive's download limit) is swapped
+    // for footage that is available: uploads and files already in storage.
+    const substitutes: string[] = [];
+    if (failed.size) {
+      const pool = c.footage.filter((v) => v.kind === "video" && !failed.has(v.id) && (v.storageKey || v.durationSec));
+      const usable: FootageFile[] = [];
+      for (const v of pool) if (await ensure(v)) usable.push(v);
+      if (!usable.length) {
+        const [id, why] = [...failed][0];
+        throw new Error(`Couldn't open "${c.footage.find((v) => v.id === id)?.name}": ${why}`);
+      }
+      let k = 0;
+      for (let i = 0; i < files.length; i++)
+        if (failed.has(files[i].id)) {
+          const sub = usable[k++ % usable.length];
+          substitutes.push(`${files[i].name} → ${sub.name}`);
+          files[i] = sub;
+        }
+      log({ campaignId: c.id, kind: "clip", message: `Couldn't fetch ${failed.size} footage file(s) for "${clip.title}"; used available footage instead (${substitutes.join(", ")}).` });
     }
 
     // 2. Voiceover.
@@ -170,7 +194,8 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
       const out = path.join(tmp, `seg${i}.mp4`);
       await cutSegment(await footageSource(f), start, len, f.hasAudio !== false, out);
       parts.push(out);
-      segments.push({ footageName: f.name, start: Math.round(start * 10) / 10, seconds: Math.round(len * 10) / 10, moment: m?.description });
+      const swapped = substitutes.find((x) => x.endsWith(`→ ${f.name}`) && x.startsWith(s.footageName ?? "\u0000"));
+      segments.push({ footageName: f.name, start: Math.round(start * 10) / 10, seconds: Math.round(len * 10) / 10, moment: [swapped ? `(instead of ${s.footageName})` : "", m?.description ?? ""].filter(Boolean).join(" ") || undefined });
     }
     const list = path.join(tmp, "list.txt");
     fs.writeFileSync(list, parts.map((p) => `file '${p}'`).join("\n"));
