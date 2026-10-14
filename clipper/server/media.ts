@@ -160,3 +160,9 @@ export async function speechSpans(wav: string, total: number): Promise<{ start: 
   if (total - cursor > 0.15) spans.push({ start: cursor, end: total });
   return spans;
 }
+
+/** Stretches of (near) black in a video — game transitions, fades, loading screens. */
+export async function blackSpans(file: string): Promise<{ start: number; end: number }[]> {
+  const { stderr } = await run("ffmpeg", ["-v", "info", "-i", file, "-an", "-vf", "blackdetect=d=0.25:pix_th=0.10", "-f", "null", "-"]);
+  return [...stderr.matchAll(/black_start:([\d.]+) black_end:([\d.]+)/g)].map((m) => ({ start: Number(m[1]), end: Number(m[2]) }));
+}

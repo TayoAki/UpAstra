@@ -6,7 +6,7 @@ import type { Campaign, Clip, FootageFile, RenderInfo, VoiceOption } from "../sh
 import { buildAss, chunk, sentences, timeWords } from "./captions";
 import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, tenantLoadHooks } from "./db";
 import { mediaLive, speak } from "./llm";
-import { concat, compose, cutSegment, ffmpegAvailable, run, speechSpans } from "./media";
+import { blackSpans, concat, compose, cutSegment, ffmpegAvailable, run, speechSpans } from "./media";
 import { footageSource } from "./footage-cache";
 import { analyzeFootage, pickMoment } from "./moments";
 import { videoStore } from "./storage";
@@ -192,7 +192,21 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
       start = Math.max(0, Math.min(start, Math.max(0, total - len - 0.5)));
       step(r, "rendering", `Cutting shot ${i + 1} of ${shots.length} from "${f.name}"`);
       const out = path.join(tmp, `seg${i}.mp4`);
-      await cutSegment(await footageSource(f), start, len, f.hasAudio !== false, out);
+      const src = await footageSource(f);
+      await cutSegment(src, start, len, f.hasAudio !== false, out);
+      // Goals often fade to black before the replay: if a shot has more than a
+      // moment of black, slide it away from the black and cut again.
+      const black = (await blackSpans(out)).reduce((t, b) => t + (b.end - b.start), 0);
+      if (black > 0.5 && total > len + 2) {
+        const first = (await blackSpans(out))[0];
+        const shift = first.start < len / 2 ? first.end + 0.3 : -(len - first.start + 0.3);
+        const moved = Math.max(0, Math.min(start + shift, total - len - 0.5));
+        if (Math.abs(moved - start) > 0.2) {
+          await cutSegment(src, moved, len, f.hasAudio !== false, out);
+          if ((await blackSpans(out)).reduce((t, b) => t + (b.end - b.start), 0) < black) start = moved;
+          else await cutSegment(src, start, len, f.hasAudio !== false, out);
+        }
+      }
       parts.push(out);
       const swapped = substitutes.find((x) => x.endsWith(`→ ${f.name}`) && x.startsWith(s.footageName ?? "\u0000"));
       segments.push({ footageName: f.name, start: Math.round(start * 10) / 10, seconds: Math.round(len * 10) / 10, moment: [swapped ? `(instead of ${s.footageName})` : "", m?.description ?? ""].filter(Boolean).join(" ") || undefined });
