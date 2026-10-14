@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { getModel } from "../../shared/catalog";
-import { copyToMarkdown, words } from "../../shared/copy";
+import { copyToMarkdown, isEmailFormat, words } from "../../shared/copy";
 import { fmtUSD } from "../../shared/economics";
 import type { CopyPiece, CopySpec, Deliverable, Generation } from "../../shared/types";
 import { useApp } from "../store";
@@ -13,7 +13,7 @@ function download(name: string, text: string) {
   URL.revokeObjectURL(url);
 }
 
-const pieceLabel = (spec: CopySpec, i: number) => (spec.format === "cold-email" ? `Email ${i + 1}` : spec.format === "grant-proposal" ? "Proposal" : `Variant ${i + 1}`);
+const pieceLabel = (spec: CopySpec, i: number) => (isEmailFormat(spec) ? `Email ${i + 1}` : spec.format === "grant-proposal" ? "Proposal" : `Variant ${i + 1}`);
 
 function Field({ label, value, maxChars, maxWords, minWords, long }: { label: string; value: string; maxChars?: number; maxWords?: number; minWords?: number; long?: boolean }) {
   const n = maxChars ? value.length : words(value);

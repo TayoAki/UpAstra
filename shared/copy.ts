@@ -43,9 +43,12 @@ export function copyUnits(d: Pick<DeliverableSpec, "quantity" | "copy">): number
   return Math.round(((outputTokens + promptTokens) / 1000) * 100) / 100;
 }
 
+/** Email formats (cold outreach and marketing/lifecycle campaigns) share most handling. */
+export const isEmailFormat = (spec?: Pick<CopySpec, "format">) => spec?.format === "cold-email" || spec?.format === "marketing-email";
+
 /** The piece's "lead" — used to check that hooks differ across pieces. */
 function lead(p: CopyPiece, spec: CopySpec): string {
-  const key = spec.format === "cold-email" ? "body" : (spec.fields[0]?.key ?? "headline");
+  const key = isEmailFormat(spec) ? "body" : (spec.fields[0]?.key ?? "headline");
   return (p[key] ?? "")
     .replace(/\{\{[^}]+\}\}/g, "")
     .replace(/^(hi|hey|hello)\b[^\n,]*,?\s*/i, "")
@@ -80,7 +83,7 @@ export function checkCopy(
     if (fix) fixes.push(fix);
   };
   const pass = (rule: string) => checks.push({ rule, pass: true });
-  const label = (i: number) => (spec.format === "cold-email" ? `Email ${i + 1}` : spec.format === "grant-proposal" ? "Proposal" : `Variant ${i + 1}`);
+  const label = (i: number) => (isEmailFormat(spec) ? `Email ${i + 1}` : spec.format === "grant-proposal" ? "Proposal" : `Variant ${i + 1}`);
   const grant = spec.format === "grant-proposal";
 
   // 1. Count
@@ -198,7 +201,7 @@ export function checkCopy(
   // 7. Distinct hooks
   const leads = pieces.map((p) => lead(p, spec)).filter(Boolean);
   const dupes = leads.filter((l, i) => leads.indexOf(l) !== i);
-  const hookRule = spec.format === "cold-email" ? "Each email opens with a different angle" : "Each variant uses a distinct hook";
+  const hookRule = isEmailFormat(spec) ? "Each email opens with a different angle" : "Each variant uses a distinct hook";
   if (dupes.length) fail(hookRule, `Repeated opening: "${dupes[0]}…"`, "regenerate");
   else pass(hookRule);
 
@@ -214,7 +217,7 @@ export function copyToMarkdown(title: string, label: string, spec: CopySpec | un
       for (const f of spec.fields) if (p[f.key] !== undefined) lines.push(`### ${f.label}`, "", p[f.key], "");
       return;
     }
-    lines.push(`### ${spec?.format === "cold-email" ? `Email ${i + 1}` : `Variant ${i + 1}`}`, "");
+    lines.push(`### ${isEmailFormat(spec) ? `Email ${i + 1}` : `Variant ${i + 1}`}`, "");
     for (const f of spec?.fields ?? Object.keys(p).map((key) => ({ key, label: key }))) {
       if (p[f.key] !== undefined) lines.push(`**${f.label}:** ${p[f.key].includes("\n") ? `\n\n${p[f.key]}` : p[f.key]}`, "");
     }

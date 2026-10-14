@@ -1,5 +1,5 @@
 import { getModel } from "../shared/catalog";
-import { SPAM_PHRASES, words } from "../shared/copy";
+import { SPAM_PHRASES, isEmailFormat, words } from "../shared/copy";
 import type { ClientMemory, CopyPiece, CopySpec, Deliverable, Job } from "../shared/types";
 import { astraMode } from "./astra";
 import { chatJSON, modelFor, type LLMRole } from "./llm";
@@ -113,7 +113,7 @@ async function liveWrite(req: WriteRequest): Promise<WriteResult> {
           task:
             spec.format === "grant-proposal"
               ? "One grant proposal narrative: a single piece whose keys are the section keys. Use ONLY statistics found in `facts` or `brief`; if a number is needed but missing, write [DATA NEEDED] instead of inventing it. Name the funder and state the requested amount."
-              : `${d.quantity} ${spec.format === "cold-email" ? "emails in one coherent sequence" : `${spec.platform ?? "Meta"} ad variants`}`,
+              : `${d.quantity} ${spec.format === "cold-email" ? "emails in one coherent sequence" : spec.format === "marketing-email" ? "campaign emails, each with its own angle" : `${spec.platform ?? "Meta"} ad variants`}`,
           funder: spec.funder,
           ask: spec.ask,
           fields: spec.fields,
@@ -221,7 +221,7 @@ type Defect = "length" | "spam" | "tag" | "cta" | "claim" | "dupe" | null;
 function pickDefect(seed: string, attempt: number, format: CopySpec["format"]): Defect {
   if (attempt > 1) return null;
   const roll = hash(seed) % 100;
-  const options: Defect[] = format === "cold-email" ? ["length", "spam", "tag", "cta"] : ["length", "spam", "cta", "dupe"];
+  const options: Defect[] = format === "cold-email" || format === "marketing-email" ? ["length", "spam", "tag", "cta"] : ["length", "spam", "cta", "dupe"];
   if (roll < 12) return "claim";
   if (roll < 55) return options[roll % options.length];
   return null;
@@ -244,7 +244,7 @@ function simulateWrite(req: WriteRequest): WriteResult {
       pieces = [writeGrant(b, spec, req.feedback)];
       injectGrantDefect(pieces[0], spec, req.attempt === 1 ? hash(req.seed) % 100 : 100);
     } else {
-      pieces = spec.format === "cold-email" ? writeEmails(b, d.quantity, spec, req.feedback) : writeAds(b, d.quantity, spec, req.feedback);
+      pieces = isEmailFormat(spec) ? writeEmails(b, d.quantity, spec, req.feedback) : writeAds(b, d.quantity, spec, req.feedback);
       injectDefect(pieces, spec, defect, b);
     }
   }
@@ -258,8 +258,12 @@ function writeEmails(b: B, n: number, spec: CopySpec, feedback?: string): CopyPi
   return Array.from({ length: n }, (_, i) => {
     const a = EMAIL_ANGLES[i % EMAIL_ANGLES.length];
     let body = a.body(b, ctas[i % ctas.length]);
+    // Lists for marketing emails rarely carry company names.
+    if (!spec.mergeTags?.includes("{{company}}")) body = body.replace(/the team at \{\{company\}\}/g, "your team").replace(/\{\{company\}\}/g, "your business");
     if (feedback && i === 0) body = body.replace("Most ", "Quick one — most ");
-    return { subject: a.subject(b).slice(0, spec.fields[0]?.maxChars ?? 60), body };
+    const piece: CopyPiece = { subject: a.subject(b).slice(0, spec.fields[0]?.maxChars ?? 60), body };
+    if (spec.fields.some((f) => f.key === "preview")) piece.preview = fit(body.split(/(?<=[.?!])\s/).find((x) => x.length > 20 && !/^hi\b/i.test(x)) ?? body, 90);
+    return piece;
   });
 }
 
@@ -355,10 +359,10 @@ function injectDefect(pieces: CopyPiece[], spec: CopySpec, defect: Defect, b: B)
   const i = Math.min(1, pieces.length - 1);
   const p = pieces[i];
   if (!p || !defect) return;
-  const mainKey = spec.format === "cold-email" ? "body" : spec.fields.find((f) => f.key === "primaryText")?.key ?? spec.fields[0].key;
+  const mainKey = isEmailFormat(spec) ? "body" : spec.fields.find((f) => f.key === "primaryText")?.key ?? spec.fields[0].key;
   switch (defect) {
     case "length":
-      if (spec.format === "cold-email")
+      if (isEmailFormat(spec))
         p.body = p.body.replace(/\n\n([^\n]+)$/, `\n\nWe've also put a lot of thought into onboarding, reporting, integrations with the tools you already use, and a support team that answers within the hour, because we know how much ${b.audience} juggle every single day and how little time there is to evaluate yet another vendor properly.\n\n$1`);
       else p.headline = `${p.headline} — ${"and everything else you need ".repeat(4).trim()}`;
       break;
@@ -410,7 +414,7 @@ function simulateEdit(previous: CopyPiece[], spec: CopySpec): CopyPiece[] {
     }
     const text = Object.values(p).join("\n");
     if (!/\?\s*$/m.test(text) && !/\b(reply|book|shop|get|order|try|learn|call|chat|demo|see how|join)\b/i.test(text)) {
-      if (spec.format === "cold-email") p.body = `${p.body}\n\n${spec.cta ?? "Worth a quick chat next week?"}`;
+      if (isEmailFormat(spec)) p.body = `${p.body}\n\n${spec.cta ?? "Worth a quick chat next week?"}`;
       else {
         const k = spec.fields.find((f) => f.key === "description") ?? spec.fields[spec.fields.length - 1];
         p[k.key] = fit(spec.cta ?? "Shop now", k.maxChars);

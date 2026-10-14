@@ -195,6 +195,47 @@ export const SERVICE_TEMPLATES: ServiceTemplate[] = [
     approvalPoints: ["Final delivery"],
   },
   {
+    id: "email-campaign",
+    name: "Email Campaign Pack",
+    buyer: "DTC brands, course creators and coaches emailing their own list",
+    description: "Marketing emails to an existing list — newsletters, launches, promos, nurture and post-event follow-ups — written in the brand's voice.",
+    basePrice: 300,
+    turnaroundDays: 3,
+    deliverables: [
+      {
+        id: "emails",
+        label: "Campaign emails",
+        kind: "text",
+        format: "md",
+        aspect: "—",
+        quantity: 4,
+        copy: {
+          format: "marketing-email",
+          fields: [
+            { key: "subject", label: "Subject", maxChars: 60 },
+            { key: "preview", label: "Preview text", maxChars: 90 },
+            { key: "body", label: "Body", maxWords: 300, minWords: 40 },
+          ],
+          tone: "Warm, specific, on-brand — never hype",
+          mergeTags: ["{{first_name}}"],
+        },
+      },
+    ],
+    recipe: [
+      { id: "angles", label: "Explore angles & hooks", kind: "text", intent: "explore", preserve: "none", lane: "copy", units: 2 },
+      { id: "write", label: "Write the campaign emails", deliverableId: "emails", kind: "text", intent: "final", preserve: "words", lane: "copy", units: 4 },
+    ],
+    rulebook: [
+      "Subject ≤ 60 characters and preview text ≤ 90, no ALL CAPS or clickbait",
+      "Each body 40–300 words",
+      "Exactly one clear call to action per email",
+      "On-brand voice; no spam-trigger phrases",
+      "Only approved claims — no invented results or testimonials",
+      "Each email has its own angle",
+    ],
+    approvalPoints: ["Final delivery"],
+  },
+  {
     id: "ad-copy-pack",
     name: "Ad Copy Pack",
     buyer: "DTC brands and media buyers",

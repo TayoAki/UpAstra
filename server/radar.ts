@@ -7,6 +7,7 @@ import type { AutonomyPolicy, Channel, DeliverableSpec, FirmProfile, IntakeAnaly
 import { analyzeBrief, astraMode, pickTemplate } from "./astra";
 import { apifyConfigured, buildInput, defaultActor, normalizeItem, runActor, simulatedItems } from "./apify";
 import { chatJSON, modelFor } from "./llm";
+import { connectedProviders } from "./providers";
 import { createJob } from "./pipeline";
 import { HttpError, audit, currentWorkspaceId, ensureTenant, getDB, isSimulatedContext, newId, now, runWith, save } from "./store";
 import { getBackend } from "./persist";
@@ -39,6 +40,24 @@ export function estimateCost(templateId: string, deliverables: DeliverableSpec[]
 }
 
 const SERVICE_SIGNAL = /\b(images?|photos?|photography|pictures?|lifestyle|product shots?|renders?|mockups?|videos?|reels?|ugc|ads?|ad copy|headlines?|copy(?:writ\w*)?|e-?mails?|outreach|sequence|grants?|proposal|loi|letter of (?:inquiry|intent)|funder|posters?|graphics?|creatives?|localiz\w*|franchise|spec sheet|trade ?show)\b/i;
+// The tool sells finished deliverables. These signal a job that is really a
+// seat on the client's team, or hands-on work in their tools.
+const ROLE = /\b(in-house|full[- ]time|part[- ]time|join (?:our|the) team|long[- ]term role|this (?:is an? )?(?:ongoing |long-term )?role\b|employee|salary|virtual assistant|\d+\s*(?:-|to|–)\s*\d+\s*hours? (?:per|a|\/) ?(?:week|day)|hours? per (?:week|day))/i;
+const OPS: [RegExp, string][] = [
+  [/\b(?:instantly|smartlead|lemlist|apollo|clay(?:gent)?|gohighlevel|ghl|hubspot|salesforce)\b/i, "running their sales/CRM tools"],
+  [/\b(?:deliverability|warm-?up|spf|dkim|dmarc|inboxes|sending domains?)\b/i, "email infrastructure"],
+  [/\b(?:media buy(?:er|ing)|manage (?:our |the )?(?:ad )?(?:campaigns|ads|ad accounts?)|ads? manager|budget allocation|roas|bidding)\b/i, "media buying"],
+  [/\b(?:audit|second opinion|troubleshoot\w*|diagnos\w*)\b/i, "an audit/troubleshooting"],
+  [/\b(?:landing pages?|funnels?|wordpress|woocommerce|kajabi|teachable|thinkific|shopify (?:store|setup|uploads?)|website (?:build|redesign))\b/i, "building pages/funnels/courses"],
+  [/\b(?:weekly report\w*|reporting|dashboards?|kpis? tracking)\b/i, "reporting"],
+  [/\b(?:video edit\w*|editor\b|capcut|premiere|shoot(?:ing)?|film(?:ing)?)\b/i, "video editing/shooting"],
+  [/\b(?:list building|lead lists?|prospect lists?|data sourcing|scrap(?:e|ing))\b/i, "list building"],
+];
+// Writing and design work the studio doesn't sell, even though it shares words like "copy" or "images".
+const NOT_OFFERED = /\b(blog(?: posts?)?|articles?|seo (?:content|writing)|ghostwrit\w*|substack|e-?books?|course (?:content|creat\w*|lessons?)|youtube scripts?|transcription|translation|data entry|3d (?:model\w*|sculpt\w*)|logo design|web design|app design|ui\/ux)\b/i;
+const VISUAL = /\b(images?|photos?|pictures?|visuals?|graphics?|creatives?|renders?|mockups?|banners?|design\w*|illustrat\w*|videos?|reels?|statics?)\b/i;
+const NO_AI = /\bno ai\b|\bnot (?:use |using )?ai\b|without (?:using )?ai\b|don'?t use (?:chat ?gpt|ai)|not (?:be )?(?:written|made|generated) (?:with|by) ai|no ai[- ]generated/i;
+
 const SCAM = /\b(free (?:test|sample|trial work)|unpaid (?:test|sample)|whats ?app|telegram|contact me (?:on|via) (?:email|skype|whatsapp|telegram)|pay (?:you )?after|crypto payment)\b/i;
 
 function suggestedPrice(lead: Lead, base: number): number {
@@ -71,14 +90,26 @@ export async function scoreLead(lead: Lead, policy: AutonomyPolicy): Promise<Lea
   const breakdown: LeadFit["breakdown"] = [];
   const add = (label: string, points: number, max: number) => breakdown.push({ label, points: Math.round(Math.max(0, Math.min(points, max))), max });
 
-  // 1. Service fit (30)
-  const matchesService = SERVICE_SIGNAL.test(text);
+  // 1. Service fit (30): does the tool produce the thing they're paying for?
+  const visualTemplate = t.deliverables.some((d) => d.kind !== "text");
+  const offMenu = text.match(NOT_OFFERED)?.[0];
+  const matchesService = SERVICE_SIGNAL.test(text) && !(visualTemplate && !VISUAL.test(text)) && !(offMenu && NOT_OFFERED.test(lead.title));
+  const isRole = ROLE.test(text);
+  const ops = OPS.filter(([re]) => re.test(text)).map(([, label]) => label);
+  const noAI = NO_AI.test(text);
+  const needsVideo = analysis.deliverables.some((d) => d.kind === "video");
+  const videoLive = isSimulatedContext() || (connectedProviders() ?? ["higgsfield"]).includes("higgsfield");
+  const scope: string[] = [];
+  if (isRole) scope.push("An ongoing role, not a project — the tool makes the deliverables, but you'd be signing up for the hours");
+  if (ops.length >= 2 || ops.includes("video editing/shooting") || ops.includes("building pages/funnels/courses")) scope.push(`Needs hands-on work the tool doesn't do: ${ops.join(", ")}`);
+  if (needsVideo && !videoLive) scope.push("Needs video, and no video provider is connected");
   if (matchesService) {
-    add("Service fit", 30, 30);
-    reasons.push(`Matches your ${t.name} service`);
+    add("Service fit", 30 - (isRole ? 10 : 0) - (ops.length >= 2 ? 10 : ops.length ? 4 : 0) - (needsVideo && !videoLive ? 15 : 0), 30);
+    if (!scope.length) reasons.push(`Matches your ${t.name} service`);
+    redFlags.push(...scope);
   } else {
     add("Service fit", 0, 30);
-    redFlags.push("Not a service the firm offers");
+    redFlags.push(offMenu ? `Not a service the firm offers (${offMenu.toLowerCase()})` : "Not a service the firm offers");
   }
 
   // 2. Budget & margin (25)
@@ -136,8 +167,12 @@ export async function scoreLead(lead: Lead, policy: AutonomyPolicy): Promise<Lea
   if (lead.budget && price < 15) redFlags.push("Budget under $15");
 
   const score = breakdown.reduce((s, b) => s + b.points, 0);
-  const blocking = scam || analysis.recommendation === "reject" || !matchesService;
-  const verdict: LeadFit["verdict"] = blocking ? "skip" : score >= 70 ? "good" : score >= 45 ? "maybe" : "skip";
+  if (noAI) redFlags.push("The client doesn't want AI-made work");
+  if (analysis.recommendation === "reject") redFlags.push(`Astra advises passing: ${analysis.reasoning || analysis.summary || "outside what the studio delivers"}`);
+  const blocking = scam || noAI || analysis.recommendation === "reject" || !matchesService;
+  // A job that needs the tool plus a lot of manual work can still be worth a look, never an automatic "good".
+  const verdict: LeadFit["verdict"] = blocking ? "skip" : score >= 70 && !scope.length ? "good" : score >= 45 ? "maybe" : "skip";
+  if (verdict === "skip" && !redFlags.length) redFlags.push(score < 45 ? `Low overall fit (${score}/100)` : "Skipped by policy");
   return {
     score,
     verdict,
@@ -158,7 +193,7 @@ export async function scoreLead(lead: Lead, policy: AutonomyPolicy): Promise<Lea
 
 const PROPOSAL_SYSTEM = `You write marketplace proposals (Upwork/Fiverr cover letters) for a small AI-native creative studio.
 Write like a sharp human freelancer: open with the client's specific problem in their words, then a concrete plan for THIS job,
-one or two proof points (only from the firm profile — never invent clients, numbers or reviews), deliverables + timeline + price,
+one or two proof points (only from the firm profile — never invent clients, numbers or reviews; if it has none, offer a small paid sample instead), deliverables + timeline + price (quote exactly as given in "pricing": an hourly rate for hourly posts, a project price for fixed ones),
 and end with one smart question. 120–220 words. No "Dear Sir/Madam", no buzzwords, no guarantees, no mention of AI unless the client asks.
 Return JSON {"text": "..."}.`;
 
@@ -178,11 +213,13 @@ export function checkProposal(text: string, lead: Lead, fit: LeadFit): QACheck[]
     { rule: "No spam phrases or guarantees", pass: !spam.length && !/\bguarantee/i.test(text), note: spam.join(", ") || undefined },
     { rule: "No generic greeting", pass: !/dear (sir|madam|hiring manager)|to whom it may concern/i.test(text) },
     { rule: `Priced at or above cost (${fmtUSD(fit.estimatedCost)})`, pass: fit.suggestedPrice > fit.estimatedCost },
+    ...(lead.budget?.type === "hourly" ? [{ rule: "Quotes an hourly rate for an hourly post", pass: /\$\s?\d[\d,.]*\s?(?:\/|per|an?)\s?(?:hr|hour)/i.test(text) }] : []),
   ];
 }
 
 const OPENERS: Record<string, string> = {
   "cold-email-sequence": "Outbound only works when every email reads like it was written for one person, and each one earns the next.",
+  "email-campaign": "Emails to your own list work when each one sounds like the brand and gives readers a reason to open the next.",
   "ad-copy-pack": "Ads fatigue fast; what keeps them working is a steady supply of genuinely different hooks that stay inside platform limits and your approved claims.",
   "grant-proposal": "Funders read stacks of proposals; the ones that get funded tie every number to real program data and speak directly to the funder's priorities.",
   "product-still-pack": "Product images sell when the product looks exactly like the real thing (label, color, shape) in a scene buyers want to be in.",
@@ -223,6 +260,7 @@ function quickQuestion(templateId: string): string {
   return (
     {
       "cold-email-sequence": "who's the best-fit customer you've closed recently, and what made them say yes?",
+      "email-campaign": "could you share one or two past emails that performed well, so I can match the voice?",
       "ad-copy-pack": "which ad is performing best right now, so I can beat it rather than repeat it?",
       "grant-proposal": "could you share the funder's guidelines and your most recent program outcomes?",
       "launch-video": "is there a reference video whose pacing you love?",
@@ -249,7 +287,11 @@ export async function draftProposal(lead: Lead): Promise<ProposalDraft> {
         job: { title: lead.title, description: lead.description, budget: lead.budget, skills: lead.skills },
         firm: db.profile,
         service: { name: t.name, deliverables: t.deliverables.map((d) => d.label), turnaroundDays: t.turnaroundDays, howWeWork: t.recipe.map((s) => s.label), qualityRules: t.rulebook },
-        price: fit.suggestedPrice,
+        // Hourly posts get an hourly quote inside the client's range; fixed posts a project price.
+        pricing:
+          lead.budget?.type === "hourly"
+            ? { type: "hourly", quoteRate: lead.budget.max ?? lead.budget.min, clientRange: `${fmtUSD(lead.budget.min ?? 0)}–${fmtUSD(lead.budget.max ?? lead.budget.min ?? 0)}/hr` }
+            : { type: "fixed", price: fit.suggestedPrice },
         mustAsk: quickQuestion(t.id),
       },
     });
@@ -271,6 +313,8 @@ export async function draftProposal(lead: Lead): Promise<ProposalDraft> {
 // ---------------------------------------------------------------------------
 // Searches
 
+/** Leads being scored right now, per workspace, so overlapping runs don't store duplicates. */
+const inFlight: Record<string, Set<string>> = {};
 const runsToday = new Map<string, { day: string; n: number }>();
 const maxRunsPerDay = () => Number(process.env.RADAR_MAX_RUNS_PER_DAY ?? 24);
 
@@ -299,15 +343,27 @@ export async function runSearch(search: SavedSearch): Promise<{ added: number; s
   }
 
   const known = new Set(db.radar.leads.map((l) => `${l.source}:${l.externalId}`));
+  const claimed = (inFlight[wsKey] ??= new Set());
   const fresh: Lead[] = [];
+  const mine: string[] = [];
+  try {
   for (const raw of items) {
     const lead = normalizeItem(raw, search.source, search.id);
-    if (!lead || known.has(`${lead.source}:${lead.externalId}`)) continue;
-    known.add(`${lead.source}:${lead.externalId}`);
+    if (!lead) continue;
+    // Searches overlap (the same job matches "ad copy" and "copywriter") and can run at once.
+    const key = `${lead.source}:${lead.externalId}`;
+    if (known.has(key) || claimed.has(key)) continue;
+    known.add(key);
+    claimed.add(key);
+    mine.push(key);
     lead.fit = await scoreLead(lead, db.policy);
     fresh.push(lead);
   }
-  db.radar.leads.unshift(...fresh);
+  } finally {
+    for (const k of mine) claimed.delete(k);
+  }
+  const stored = new Set(db.radar.leads.map((l) => `${l.source}:${l.externalId}`));
+  db.radar.leads.unshift(...fresh.filter((l) => !stored.has(`${l.source}:${l.externalId}`)));
   // Keep the newest 500, but never drop leads someone acted on.
   if (db.radar.leads.length > 500) {
     const keep = db.radar.leads.filter((l, i) => i < 500 || ["shortlisted", "applied", "won"].includes(l.status));

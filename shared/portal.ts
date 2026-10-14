@@ -62,6 +62,15 @@ export const DEFAULT_QUESTIONS: Record<string, PortalQuestion[]> = {
     q("emails", "How many emails?", "select", true, { options: ["3", "4", "5", "6"] }),
     DEADLINE,
   ],
+  "email-campaign": [
+    BRIEF,
+    q("audience", "Who's on the list, and what do they already know about you?", "textarea", true),
+    q("goal", "What should these emails achieve? (launch, promo, nurture, event follow-up)", "text", true),
+    q("offer", "Products, offers or dates to feature", "textarea", false),
+    q("voice", "Paste one or two past emails you liked (for voice)", "textarea", false),
+    q("emails", "How many emails?", "select", true, { options: ["2", "3", "4", "6"] }),
+    DEADLINE,
+  ],
   "ad-copy-pack": [
     BRIEF,
     q("platform", "Platform", "select", true, { options: ["Meta (Facebook / Instagram)", "Google Search", "LinkedIn", "TikTok"] }),

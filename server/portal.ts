@@ -95,6 +95,11 @@ export function composeBrief(pkgName: string, templateId: string, answers: { que
       if (a("cta")) lines.push(`CTA is ${a("cta")}.`);
       if (a("proof")) lines.push(`Proof we can use: ${a("proof")}`);
       break;
+    case "email-campaign":
+      lines.push(`Need ${a("emails") || "4"} marketing emails to our list${a("goal") ? ` for ${a("goal")}` : ""}${a("audience") ? `. Audience: ${a("audience")}` : ""}.`);
+      if (a("offer")) lines.push(`Feature: ${a("offer")}`);
+      if (a("voice")) lines.push(`Voice reference: ${a("voice")}`);
+      break;
     case "ad-copy-pack":
       lines.push(`Ad copy for ${a("platform") || "Meta"}${a("product") ? ` for ${a("product")}` : ""}${a("audience") ? `, aimed at ${a("audience")}` : ""}.`);
       break;

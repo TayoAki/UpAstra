@@ -54,7 +54,7 @@ risks (rights, likeness, claims, timing, budget), revisionRisks (what is likely 
 clientQuestions (the SMALLEST useful set, max 3, only questions whose answers change the output),
 recommendation ("accept"|"review"|"reject") and reasoning.
 Do not compute prices or margins. Prefer the template whose deliverables best match the brief.
-For copy templates (cold-email-sequence, ad-copy-pack, grant-proposal) return one deliverable with kind "text", quantity = number of pieces,
+For copy templates (cold-email-sequence = outreach to strangers, email-campaign = emails to the brand's own list, ad-copy-pack, grant-proposal) return one deliverable with kind "text", quantity = number of pieces,
 and copy: {format, platform?, fields?, tone?, audience?, offer?, cta?, funder?, ask?} extracted from the brief. Never invent facts.`;
 
 export async function analyzeBrief(input: {
@@ -110,6 +110,9 @@ export function pickTemplate(text: string): ServiceTemplate {
   const s = text.toLowerCase();
   // Copy first: "ad copy" and "email" briefs must not fall into the visual templates.
   if (has(s, /\bgrants?\b|\brfp\b|letter of (?:inquiry|intent)|\bloi\b|\bfunders?\b|foundation (?:proposal|application)|501\(c\)|nonprofit proposal/)) return getTemplate("grant-proposal");
+  // Emails to the brand's own list (newsletters, launches, nurture) are not cold outreach.
+  const coldSignal = has(s, /\bcold\b|outbound|prospect|\bsdrs?\b|lead gen/);
+  if (!coldSignal && has(s, /newsletter|nurture|lifecycle|klaviyo|mailchimp|promo(?:tional)? e-?mails?|campaign e-?mails?|launch e-?mails?|post-(?:purchase|event|webinar)|e-?mail (?:campaigns?|copywrit\w*|marketing)|welcome (?:series|flow)|abandon(?:ed|ment)? cart|(?:e-?mail|our) list\b/)) return getTemplate("email-campaign");
   if (has(s, /cold (?:e-?mails?|outreach)|outbound|e-?mail sequence|outreach sequence|sales e-?mails?|follow-?up e-?mails?|\bsdrs?\b|\d+[- ](?:e-?mail|touch|step) (?:sequence|cadence)/)) return getTemplate("cold-email-sequence");
   if (has(s, /ad copy|ads? copy|primary text|headlines? (?:and|&) (?:descriptions?|primary|body)|google ads? (?:copy|headlines|text)|(?:facebook|meta|linkedin|tiktok) ad (?:copy|text)|ad (?:variations|variants|text)|copywrit/)) return getTemplate("ad-copy-pack");
   if (has(s, /franchise|locations?\b|per[- ]store|local versions/)) return getTemplate("franchise-localization");
@@ -269,7 +272,13 @@ function simulateCopyIntake(
     questions.push(question);
   };
 
-  if (spec.format === "cold-email") {
+  if (spec.format === "marketing-email") {
+    const n = s.match(/\b(\d{1,2})\s+(?:[\w-]+\s+){0,2}?e-?mails?\b/);
+    if (n) quantity = Math.min(Math.max(Number(n[1]), 1), 12);
+    if (!spec.audience) need("Who's on the list", "Who's on the list, and what have they bought or signed up for?");
+    if (!spec.offer) need("What to feature", "Which products, offers or dates should these emails feature?");
+    revisionRisks.push("Brand voice: ask for one or two past emails they liked");
+  } else if (spec.format === "cold-email") {
     const n = s.match(/\b(\d{1,2})[- ](?:e-?mails?|touch(?:es)?|steps?)\b/);
     if (n) quantity = Math.min(Math.max(Number(n[1]), 1), 10);
     if (!spec.audience) need("Ideal customer profile (title, company type, size)", "Who exactly are we emailing — job titles, company type and size?");
@@ -318,7 +327,7 @@ function simulateCopyIntake(
   if (memory?.rejectedStyles?.length) revisionRisks.push(`Client previously rejected: ${memory.rejectedStyles.join(", ")}`);
   const clientQuestions = questions.slice(0, 3);
   const recommendation: IntakeAnalysis["recommendation"] = missingInputs.filter((m) => m !== "Deadline").length >= 2 || risks.length ? "review" : "accept";
-  const unit = spec.format === "cold-email" ? "email sequence" : spec.format === "ad-copy" ? `${spec.platform} ad copy` : spec.fields.length <= 4 ? "letter of inquiry" : "grant proposal";
+  const unit = spec.format === "cold-email" ? "email sequence" : spec.format === "marketing-email" ? "email campaign" : spec.format === "ad-copy" ? `${spec.platform} ad copy` : spec.fields.length <= 4 ? "letter of inquiry" : "grant proposal";
 
   return {
     summary: `${input.channel === "direct" ? "Direct lead" : `${input.channel[0].toUpperCase()}${input.channel.slice(1)} job`} for ${spec.format === "grant-proposal" ? `a ${unit}${spec.funder ? ` to ${spec.funder}` : ""}${spec.ask ? ` requesting ${spec.ask}` : ""}` : `${quantity}-piece ${unit}`} — best fit: ${template.name}.`,

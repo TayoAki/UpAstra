@@ -65,7 +65,7 @@ export interface CopyField {
 }
 
 export interface CopySpec {
-  format: "cold-email" | "ad-copy" | "grant-proposal";
+  format: "cold-email" | "marketing-email" | "ad-copy" | "grant-proposal";
   funder?: string; // grants: who is being asked
   ask?: string; // grants: requested amount, e.g. "$50,000"
   platform?: string; // e.g. "Meta", "Google Search", "LinkedIn"
