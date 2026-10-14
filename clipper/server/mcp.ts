@@ -12,11 +12,11 @@ import { HOOK_STYLES, PLATFORMS, VOICES } from "../shared/types";
 export type ApiCall = <T = unknown>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown) => Promise<T>;
 
 /** Calls the Clip Operator HTTP API with a workspace agent key. */
-export function httpApi(baseUrl: string, key: string): ApiCall {
+export function httpApi(baseUrl: string, key: string, extraHeaders: Record<string, string> = {}): ApiCall {
   return async (method, path, body) => {
     const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api${path}`, {
       method,
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}`, ...extraHeaders },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(10 * 60_000),
     });

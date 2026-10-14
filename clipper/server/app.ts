@@ -124,7 +124,14 @@ const scopeOf = (v: unknown) => {
 const platformOf = (v: unknown): Platform => ((PLATFORMS as string[]).includes(String(v)) ? (v as Platform) : "other");
 
 /** Where people reach this server (for links handed out to agents). */
-const publicBase = (req: Request) => (process.env.PUBLIC_URL ?? `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
+const LOOPBACK = /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/;
+const publicBase = (req: Request) => {
+  if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/$/, "");
+  // MCP tools call the API over loopback; they pass on the address the agent used.
+  const relayed = LOOPBACK.test(req.socket.remoteAddress ?? "") ? req.get("x-clip-public-base") : undefined;
+  if (relayed && /^https?:\/\/[\w.:-]+$/.test(relayed)) return relayed;
+  return `${req.protocol}://${req.get("host")}`;
+};
 
 async function streamVideo(req: Request, res: Response, clip: Clip, workspaceId: string) {
   const key = clip.render?.videoKey;
@@ -266,7 +273,7 @@ export function createApp() {
         res.status(405).set("Allow", "POST").json({ error: "Use POST (stateless MCP)" });
         return;
       }
-      const server = createMcpServer(httpApi(`http://127.0.0.1:${req.socket.localPort}`, key));
+      const server = createMcpServer(httpApi(`http://127.0.0.1:${req.socket.localPort}`, key, { "X-Clip-Public-Base": publicBase(req) }));
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on("close", () => {
         void transport.close();
