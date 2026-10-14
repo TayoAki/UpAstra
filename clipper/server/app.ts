@@ -466,7 +466,7 @@ export function createApp() {
     if (!VOICES.some((v) => v.id === voice)) throw new HttpError(400, "Unknown voice");
     if (clip.status === "draft" && !req.body?.override) throw new HttpError(400, "Approve the plan before rendering it");
     if (voice !== "none") spendAI(req.workspaceId!, 1);
-    enqueueRender(req.workspaceId!, clip, voice);
+    enqueueRender(req.workspaceId!, clip, voice, req.actor);
     log({ campaignId: clip.campaignId, kind: "clip", message: `Render queued for "${clip.title}".` });
     save();
     res.status(202).json(stateFor());

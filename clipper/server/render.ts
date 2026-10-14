@@ -23,6 +23,8 @@ import { videoStore } from "./storage";
 interface Job {
   workspaceId: string;
   clipId: string;
+  /** Who asked for it, so its Activity entries are attributed the same way. */
+  actor?: "human" | "agent";
 }
 const queue: Job[] = [];
 const active = new Set<string>();
@@ -40,12 +42,12 @@ tenantLoadHooks.push((_ws, doc) => {
     }
 });
 
-export function enqueueRender(workspaceId: string, clip: Clip, voice: VoiceOption) {
+export function enqueueRender(workspaceId: string, clip: Clip, voice: VoiceOption, actor?: "human" | "agent") {
   if (!ffmpegAvailable()) throw new HttpError(503, "Rendering isn't available on this server (ffmpeg missing)");
   if (active.has(clip.id) || queue.some((j) => j.clipId === clip.id)) throw new HttpError(409, "This clip is already rendering");
   clip.render = { status: "queued", step: "Waiting in the render queue", voice, requestedAt: now(), cost: 0 };
   clip.status = "rendering";
-  queue.push({ workspaceId, clipId: clip.id });
+  queue.push({ workspaceId, clipId: clip.id, actor });
   setImmediate(pump);
 }
 
@@ -89,7 +91,7 @@ async function process_(job: Job) {
     } finally {
       save();
     }
-  });
+  }, job.actor);
 }
 
 const step = (r: RenderInfo, status: RenderInfo["status"], text: string) => {
