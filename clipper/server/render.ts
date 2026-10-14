@@ -212,7 +212,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     const ass = path.join(tmp, "subs.ass");
     fs.writeFileSync(ass, buildAss({ hook: clip.hook, captions: chunk(words), cta: ctaText, ctaFrom: Math.max(1, Math.min(lastSentenceStart, duration - 2.5)), duration }));
     const final = path.join(tmp, "final.mp4");
-    await compose({ video: joined, ass, voice: voicePath, duration, out: final, fontsDir: process.env.FONTS_DIR });
+    await compose({ video: joined, ass, voice: voicePath, duration, out: final, fontsDir: process.env.FONTS_DIR, workDir: tmp });
 
     step(r, "rendering", "Uploading the video");
     const key = `${workspaceId}/clips/${clip.id}-${Date.now()}.mp4`;

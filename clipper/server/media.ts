@@ -32,7 +32,10 @@ export function run(cmd: "ffmpeg" | "ffprobe", args: string[], timeoutMs = 20 * 
     p.on("close", (code) => {
       clearTimeout(timer);
       if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`${cmd} failed (${code}): ${stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 400)}`));
+      else {
+        console.error(`[ffmpeg] ${cmd} ${args.filter((a) => !/^https?:/.test(a)).join(" ").slice(0, 600)}\n${stderr.trim().split("\n").slice(-12).join("\n")}`);
+        reject(new Error(`${cmd} failed (${code}): ${stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 400)}`));
+      }
     });
   });
 }
@@ -106,22 +109,35 @@ export async function concat(listFile: string, out: string) {
   await run("ffmpeg", ["-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", out]);
 }
 
-/** Burn captions, lay the voiceover over ducked game audio, and finish for upload. */
-export async function compose(opts: { video: string; ass: string; voice?: string; duration: number; out: string; fontsDir?: string }) {
+/**
+ * Burn captions, lay the voiceover over ducked game audio, and finish for
+ * upload. Audio is mixed in its own pass from plain 44.1 kHz stereo WAVs, so
+ * the final encode never sees mismatched audio formats (older ffmpeg builds
+ * refuse to change filter inputs mid-stream).
+ */
+export async function compose(opts: { video: string; ass: string; voice?: string; duration: number; out: string; fontsDir?: string; workDir: string }) {
+  const wav = (name: string) => `${opts.workDir}/${name}.wav`;
+  const pcm = ["-vn", "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le"];
+  await run("ffmpeg", ["-v", "error", "-y", "-i", opts.video, ...pcm, "-t", opts.duration.toFixed(2), wav("game")]);
+  if (opts.voice) {
+    await run("ffmpeg", ["-v", "error", "-y", "-i", opts.voice, ...pcm, wav("voice")]);
+    await run("ffmpeg", [
+      "-v", "error", "-y",
+      "-i", wav("game"), "-i", wav("voice"),
+      "-filter_complex", "[0:a]volume=0.22[g];[1:a]volume=1.6,apad[v];[g][v]amix=inputs=2:duration=first:dropout_transition=0,volume=2,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=44100[a]",
+      "-map", "[a]", "-ac", "2", "-c:a", "pcm_s16le", wav("mix"),
+    ]);
+  } else {
+    await run("ffmpeg", ["-v", "error", "-y", "-i", wav("game"), "-af", "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=44100", "-ac", "2", "-c:a", "pcm_s16le", wav("mix")]);
+  }
   const assEsc = opts.ass.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
   const fonts = opts.fontsDir ? `:fontsdir=${opts.fontsDir.replace(/:/g, "\\:")}` : "";
-  const filter = [
-    `[0:v]ass='${assEsc}'${fonts}[v]`,
-    opts.voice
-      ? `[0:a]volume=0.22[g];[1:a]aresample=44100,aformat=channel_layouts=stereo,volume=1.6[vo];[g][vo]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=44100[a]`
-      : `[0:a]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=44100[a]`,
-  ].join(";");
   await run("ffmpeg", [
     "-v", "error", "-y",
     "-i", opts.video,
-    ...(opts.voice ? ["-i", opts.voice] : []),
-    "-filter_complex", filter,
-    "-map", "[v]", "-map", "[a]",
+    "-i", wav("mix"),
+    "-filter_complex", `[0:v]ass='${assEsc}'${fonts}[v]`,
+    "-map", "[v]", "-map", "1:a",
     "-t", opts.duration.toFixed(2),
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-b:a", "160k",
