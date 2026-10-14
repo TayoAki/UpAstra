@@ -31,7 +31,7 @@ const CTA_PATTERNS = [
 
 const CLAIM_PATTERN = /(\d+(?:\.\d+)?\s?%|\b\d+x\b|#1\b|\bnumber one\b|\bbest[- ]in[- ]class\b|\bfastest\b|\bcheapest\b|\bclinically\b|\bproven\b)/gi;
 
-const ACRONYMS = new Set(["SAAS", "CRM", "ROI", "B2B", "B2C", "SEO", "API", "USA", "CEO", "CFO", "CTO", "VP", "HR", "DTC", "SKU", "FAQ", "AI"]);
+const ACRONYMS = new Set(["SAAS", "CRM", "ROI", "B2B", "B2C", "SEO", "API", "USA", "CEO", "CFO", "CTO", "VP", "HR", "DTC", "SKU", "FAQ", "AI", "EBITDA", "COGS", "KPI", "KPIS", "LLC", "NYC", "GDPR", "HIPAA", "SOC", "PPC", "CPA", "CPC", "ROAS", "LTV", "CAC", "MRR", "ARR", "P&L", "IRS", "US", "UK", "EU"]);
 
 export const words = (s: string) => (s.trim() ? s.trim().split(/\s+/).length : 0);
 
@@ -118,7 +118,8 @@ export function checkCopy(
     const text = Object.values(p).join(" ");
     const lower = text.toLowerCase();
     for (const s of SPAM_PHRASES) if (lower.includes(s)) spam.push(`${label(i)}: "${s}"`);
-    const caps = (text.match(/\b[A-Z]{4,}\b/g) ?? []).filter((w) => !ACRONYMS.has(w));
+    // Shouting = a long all-caps word or a run of caps words; short lone caps words are acronyms (COGS, KPI, EBITDA aside).
+    const caps = [...(text.match(/\b[A-Z]{7,}\b/g) ?? []), ...(text.match(/\b[A-Z]{2,}(?:\s+[A-Z]{2,})+\b/g) ?? [])].filter((w) => !ACRONYMS.has(w) && !w.split(/\s+/).every((x) => ACRONYMS.has(x)));
     if (caps.length) spam.push(`${label(i)}: ALL CAPS "${caps[0]}"`);
     if ((text.match(/!/g) ?? []).length > 1) spam.push(`${label(i)}: multiple "!"`);
   });

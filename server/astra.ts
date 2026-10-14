@@ -18,6 +18,7 @@ import { hash } from "./higgsfield";
 import { chatJSON, llmConfigured, modelFor } from "./llm";
 import { isSimulatedContext } from "./store";
 import { extractAudience, extractFacts, extractOffer } from "./writer";
+import { referenceImages, toDataUrl } from "./files";
 
 // Astra is the orchestrator: it handles judgment (reading briefs, writing
 // prompts, inspecting outputs, interpreting feedback). Prices, margins and
@@ -78,6 +79,14 @@ export async function analyzeBrief(input: {
   return simulateIntake(input);
 }
 
+/** Models sometimes answer a list with a string, objects or nothing — coerce to string[]. */
+function strings(v: unknown): string[] {
+  const list = Array.isArray(v) ? v : typeof v === "string" && v.trim() ? [v] : [];
+  return list
+    .map((x) => (typeof x === "string" ? x : x && typeof x === "object" ? String(Object.values(x).find((y) => typeof y === "string") ?? "") : ""))
+    .filter(Boolean);
+}
+
 function normalizeAnalysis(a: IntakeAnalysis): IntakeAnalysis {
   const t = getTemplate(a.templateId);
   return {
@@ -86,12 +95,12 @@ function normalizeAnalysis(a: IntakeAnalysis): IntakeAnalysis {
     deliverables: (a.deliverables?.length ? a.deliverables : t.deliverables).map((d) =>
       t.deliverables[0]?.kind === "text" ? { ...t.deliverables[0], ...d, kind: "text", copy: { ...t.deliverables[0].copy!, ...(d.copy ?? {}) } } : d,
     ),
-    exactCopy: a.exactCopy ?? [],
-    suppliedAssets: a.suppliedAssets ?? [],
-    missingInputs: a.missingInputs ?? [],
-    risks: a.risks ?? [],
-    revisionRisks: a.revisionRisks ?? [],
-    clientQuestions: (a.clientQuestions ?? []).slice(0, 3),
+    exactCopy: strings(a.exactCopy),
+    suppliedAssets: strings(a.suppliedAssets),
+    missingInputs: strings(a.missingInputs),
+    risks: strings(a.risks),
+    revisionRisks: strings(a.revisionRisks),
+    clientQuestions: strings(a.clientQuestions).slice(0, 3),
   };
 }
 
@@ -340,11 +349,13 @@ export function buildPrompt(step: RecipeStep, job: Job, client?: ClientMemory, f
     `${step.label} for ${client?.name ?? "the client"}.`,
     job.analysis?.summary ?? "",
     d ? `Deliverable: ${d.label}, ${d.aspect} ${d.format}${d.durationSec ? `, ${d.durationSec}s` : ""}.` : "",
+    d && d.kind !== "text" && d.quantity > 1 ? `This render is ONE of ${d.quantity} separate ${d.kind === "video" ? "clips" : "images"}: show one single scene, never a grid or collage of several.` : "",
     d?.exactCopy ? `Render this copy exactly: "${d.exactCopy}".` : "",
     client?.colors.length ? `Palette: ${client.colors.join(", ")}.` : "",
     client?.likes.length ? `Client likes: ${client.likes.join("; ")}.` : "",
     client?.rejectedStyles.length ? `Avoid: ${client.rejectedStyles.join("; ")}.` : "",
     step.preserve !== "none" ? `Preserve the ${step.preserve} exactly as in the reference.` : "",
+    step.kind === "image" && step.lane !== "typography" && !d?.exactCopy ? "Add no text, logos or wordmarks beyond what the real product already shows." : "",
     feedback ? `Revision feedback: ${feedback}` : "",
   ];
   return parts.filter(Boolean).join(" ");
@@ -354,13 +365,18 @@ export function buildPrompt(step: RecipeStep, job: Job, client?: ClientMemory, f
 // Prompt 5 — quality assurance against the approved brief
 
 const QA_SYSTEM = `You are Astra, QA lead. Check one generated asset against the approved brief, the template rulebook and client memory.
+The first attached image is the asset. Any further images are the client's own reference photos — compare the product against them.
+Each asset is ONE of the deliverable's items, so judge it as a single image (quantity is met by separate renders).
+A rule with nothing to check against (no palette, no exact copy, no references) passes as "not applicable" — never fail or escalate for missing inputs.
 Return JSON {verdict:"ready"|"edit"|"regenerate"|"human", score:0-100, checks:[{rule,pass,note}], summary}.
+"ready" = a client would accept it as is.
 "edit" = a controlled local fix (label, one object, headline) keeps everything else.
 "regenerate" = composition, motion or concept is wrong.
-"human" = subjective, legal or claim question a person must decide.`;
+"human" = only for a real legal, claim or brand-risk question a person must decide.`;
 
 const COPY_QA_SYSTEM = `You are Astra, copy chief. The copy already passed mechanical checks (lengths, CTA, spam, merge tags, claims).
 Judge only what code cannot: voice vs. the brief, specificity, persuasiveness, and fit with the client's likes/dislikes.
+Say "ready" when a demanding client would accept it as is — don't hold good copy back for optional polish. Use "edit" only for problems they'd send back.
 Return JSON {"verdict":"ready"|"edit"|"regenerate", "summary": string, "fixes": string[]} — fixes are concrete line edits.`;
 
 function copyQA(generation: Generation, job: Job, client?: ClientMemory): QAResult {
@@ -394,7 +410,10 @@ export async function qaOutput(args: {
     try {
       const d = job.deliverables.find((x) => x.id === generation.deliverableId);
       const j = await askJSON<{ verdict: QAVerdict; summary: string; fixes?: string[] }>(COPY_QA_SYSTEM, { brief: job.rawBrief, spec: d?.copy, client, copy: generation.copy });
-      if (j.verdict !== "ready") {
+      // Mechanically clean copy that already had one polish pass ships; another
+      // round of taste notes would only loop.
+      const polished = qa.verdict === "ready" && generation.purpose === "edit";
+      if (j.verdict !== "ready" && !polished) {
         qa.checks.push({ rule: "Voice & persuasiveness (Astra)", pass: false, note: j.summary });
         return { ...qa, verdict: j.verdict === "regenerate" ? "regenerate" : "edit", fixes: j.fixes ?? [j.summary], summary: j.summary, source: "astra" };
       }
@@ -411,7 +430,7 @@ export async function qaOutput(args: {
       const out = await askJSON<Omit<QAResult, "source">>(
         QA_SYSTEM,
         { deliverable: d, rulebook: template.rulebook, exactCopy: job.analysis?.exactCopy, client, prompt: generation.prompt },
-        generation.outputUrl ? [generation.outputUrl] : [],
+        await visionInputs(generation.outputUrl, referenceImages(job).slice(0, 2)),
       );
       return { ...out, source: "astra" };
     } catch (err) {
@@ -521,4 +540,12 @@ export function draftDeliveryMessage(job: Job, client?: ClientMemory): string {
 export function draftQuestionsMessage(questions: string[], client?: ClientMemory): string {
   const name = client?.contact?.split(" ")[0] ?? "there";
   return `Hi ${name}, thanks for the brief! A few quick questions so we get it right the first time:\n\n${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}`;
+}
+
+/** The output as something a vision model can see (stored renders inlined; SVG proofs skipped). */
+async function visionInputs(url: string | undefined, references: string[]): Promise<string[]> {
+  const out = url ? await toDataUrl(url) : null;
+  if (!out) return [];
+  const refs = await Promise.all(references.map(toDataUrl));
+  return [out, ...refs.filter((r): r is string => !!r)];
 }

@@ -62,7 +62,26 @@ Every workspace gets a public, branded portal where its own clients request work
 
 - **Provider:** with `OPENROUTER_API_KEY` set it calls OpenRouter's OpenAI-compatible API, including attribution headers and usage-based cost reporting. `OPENAI_API_KEY` + `OPENAI_BASE_URL` work as an alternative.
 - **Models:** set a model per role with `ASTRA_MODEL`, `COPY_FAST_MODEL`, `COPY_PRO_MODEL`, `COPY_EDIT_MODEL` and `PROPOSAL_MODEL`. Unset roles fall back to `ASTRA_MODEL`, then to `openrouter/auto`.
+- **Recommended models:** `anthropic/claude-haiku-5.5` for `ASTRA_MODEL`, `COPY_FAST_MODEL` and `COPY_EDIT_MODEL` (cheap, and it can see images for QA). `anthropic/claude-sonnet-5.5` for `COPY_PRO_MODEL` and `PROPOSAL_MODEL`.
 - **Swapping it out:** to plug in your own OpenRouter client, replace the body of `chatJSON()`. Nothing else needs to change.
+
+### Images on OpenRouter
+
+The same key also renders images (`server/openrouter-images.ts`), so Higgsfield is optional for still work:
+
+| Model | Lanes | ~Cost/image |
+| --- | --- | --- |
+| Nano Banana Pro (`google/gemini-3-pro-image`) | people, product, typography | $0.14 |
+| Nano Banana 2 (`google/gemini-3.1-flash-image`) | product, people, repair | $0.08 |
+| Nano Banana (`google/gemini-2.5-flash-image`) | repair, exploration | $0.04 |
+| Nano Banana Lite (`google/gemini-3.1-flash-lite-image`) | exploration | $0.034 |
+| GPT-5 Image / Mini (`openai/gpt-5-image[-mini]`) | typography | $0.22 / $0.045 |
+
+- **Routing:** the router prefers models whose provider is connected. With only OpenRouter, image lanes use the models above, and Higgsfield-only finishing passes (Topaz) are skipped instead of faked.
+- **References:** client photos uploaded through the portal go to the model as references, and QA compares each render against them.
+- **Storage:** renders go to the file store (the S3 bucket in production), never into the workspace document. The browser gets signed links (`/f/<expiry>/<sig>/<key>`) that expire after about 6 hours.
+- **Billing:** the actual OpenRouter charge is recorded per generation.
+- **Video:** OpenRouter has no video models. Video steps stay simulated until `HIGGSFIELD_API_KEY` (or another video API) is connected.
 
 ## Job Radar: Apify
 
@@ -79,7 +98,7 @@ Every workspace gets a public, branded portal where its own clients request work
 4. **Proposals:** good fits get a draft proposal written from your **firm profile**, which never invents proof. Each draft is checked for length, specificity, a closing question, spam, and pricing above cost. You can edit it, copy it, and mark it applied. **It never submits proposals for you.**
 5. **Won jobs** convert into a Studio Operator job in one click, and from there intake, pricing and production take over.
 
-`APIFY_TOKEN` enables live scraping. Set the default actor per source with `APIFY_ACTOR_UPWORK` etc., or set it per search. Actor input formats differ, so check each actor's input schema on Apify. Without a token, runs return a realistic simulated sample.
+`APIFY_TOKEN` enables live scraping. Upwork works out of the box with the `flash_mage~upwork` actor (about $0.003 per job). Override the default actor per source with `APIFY_ACTOR_UPWORK` etc. (plus `APIFY_INPUT_<SOURCE>` JSON), or set it per search. Actor input formats differ, so check each actor's input schema on Apify. Without a token, runs return a realistic simulated sample.
 
 ## Deploying to Railway
 

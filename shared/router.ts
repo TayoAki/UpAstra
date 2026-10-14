@@ -1,5 +1,5 @@
-import { MODEL_CATALOG, getModel, stepCost } from "./catalog";
-import type { AutonomyPolicy, Lane, ModelSpec, RecipeStep } from "./types";
+import { MODEL_CATALOG, getModel, providerOf, stepCost } from "./catalog";
+import type { AutonomyPolicy, Lane, ModelProvider, ModelSpec, RecipeStep } from "./types";
 
 // The model router turns the catalog into a production system: for every step
 // it answers the four questions (what medium, new vs repair, explore vs final,
@@ -37,7 +37,13 @@ const LANE_WHY: Record<Lane, string> = {
   "copy-edit": "the copy is close — fix specific lines and keep the rest",
 };
 
-export type PolicyGate = Pick<AutonomyPolicy, "blockedFamilies" | "blockedOrigins">;
+export type PolicyGate = Pick<AutonomyPolicy, "blockedFamilies" | "blockedOrigins"> & {
+  /** Providers with live keys. When set, a model on an unconnected provider is
+   *  skipped as long as a connected model can do the step instead. */
+  connected?: ModelProvider[] | null;
+};
+
+const PROVIDER_NAME: Record<ModelProvider, string> = { higgsfield: "Higgsfield", openrouter: "OpenRouter", builtin: "Built-in AI" };
 
 export function modelBlockReason(m: ModelSpec, policy: PolicyGate): string | null {
   if (policy.blockedFamilies.includes(m.family)) return `family "${m.family}" is blocked by autonomy policy`;
@@ -99,6 +105,14 @@ export function routeStep(
     blocked: modelBlockReason(m, policy),
     inLane: primary.includes(m),
   }));
+
+  const connected = policy.connected;
+  if (connected?.length) {
+    const live = (id: string) => connected.includes(providerOf(getModel(id)!));
+    if (options.some((o) => !o.blocked && live(o.modelId))) {
+      for (const o of options) if (!o.blocked && !live(o.modelId)) o.blocked = `${PROVIDER_NAME[providerOf(getModel(o.modelId)!)]} isn't connected`;
+    }
+  }
 
   const pick = options.find((o) => !o.blocked);
   if (!pick) {

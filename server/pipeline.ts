@@ -1,6 +1,6 @@
 import { getModel, stepCost } from "../shared/catalog";
 import { computeEconomics, fmtPct, fmtUSD, round2 } from "../shared/economics";
-import { modelBlockReason, routeStep } from "../shared/router";
+import { modelBlockReason, routeStep, type PolicyGate } from "../shared/router";
 import { getTemplate } from "../shared/templates";
 import type {
   Channel,
@@ -22,10 +22,12 @@ import {
   qaOutput,
   readClientMessage,
 } from "./astra";
-import { getProvider, simulatedProvider, type ProductionProvider } from "./higgsfield";
+import { simulatedProvider, type ProductionProvider } from "./higgsfield";
+import { connectedProviders, providerFor } from "./providers";
+import { persistOutput, referenceImages } from "./files";
 import { renderCopyProof, writeCopy } from "./writer";
 import { copyUnits } from "../shared/copy";
-import { HttpError, audit, currentActor, findClient, getDB, isSimulatedContext, newId, now, save, touch } from "./store";
+import { HttpError, audit, currentActor, currentWorkspaceId, findClient, getDB, isSimulatedContext, newId, now, save, touch } from "./store";
 
 // The production engine: moves a job through intake → plan → production → QA
 // → approval → delivery, enforcing the autonomy policy at every step and
@@ -34,7 +36,10 @@ import { HttpError, audit, currentActor, findClient, getDB, isSimulatedContext, 
 let providerOverride: ProductionProvider | null = null;
 export const useProvider = (p: ProductionProvider | null) => (providerOverride = p);
 let simulated: ProductionProvider | null = null;
-const provider = () => providerOverride ?? (isSimulatedContext() ? (simulated ??= simulatedProvider(0)) : getProvider());
+const provider = (modelId: string) => providerOverride ?? (isSimulatedContext() ? (simulated ??= simulatedProvider(0)) : providerFor(modelId));
+
+/** Autonomy policy plus which providers are live, so routing prefers connected models. */
+const routingPolicy = () => ({ ...getDB().policy, connected: isSimulatedContext() || providerOverride ? null : connectedProviders() });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -237,7 +242,6 @@ async function analyzeJob(job: Job, client: ClientMemory, opts: Pick<NewJobInput
 
 function planJob(job: Job) {
   const template = getTemplate(job.templateId);
-  const policy = getDB().policy;
   const used = new Set<string>();
   const steps: RecipeStep[] = [];
 
@@ -271,7 +275,7 @@ function planJob(job: Job) {
       status: "pending",
     });
   }
-  for (const s of steps) applyRoute(s, policy);
+  for (const s of steps) applyRoute(s);
   job.steps = steps;
   const econ = jobEconomics(job);
   audit({
@@ -288,7 +292,7 @@ function deliverableUnits(d: Deliverable): number {
   return d.kind === "video" ? d.quantity * (d.durationSec ?? 5) : d.quantity;
 }
 
-function applyRoute(step: RecipeStep, policy = getDB().policy) {
+function applyRoute(step: RecipeStep, policy: PolicyGate = routingPolicy()) {
   const decision = routeStep(step, policy);
   step.modelId = decision.modelId ?? "";
   step.rationale = decision.rationale;
@@ -335,7 +339,7 @@ export function overrideRoute(job: Job, stepId: string, modelId: string | null) 
     if (model.kind !== step.kind && step.lane !== "finishing") throw new HttpError(400, `${model.name} produces ${model.kind}, step needs ${step.kind}`);
     const blocked = modelBlockReason(model, getDB().policy);
     if (blocked) throw new HttpError(400, `${model.name}: ${blocked}`);
-    const suggested = routeStep(step, getDB().policy).modelId;
+    const suggested = routeStep(step, routingPolicy()).modelId;
     step.modelId = model.id;
     step.routedBy = "human";
     step.status = "pending";
@@ -423,6 +427,14 @@ async function runStep(job: Job, step: RecipeStep): Promise<"ok" | "halt"> {
   touch(job);
   const d = job.deliverables.find((x) => x.id === step.deliverableId);
   if (!d) {
+    // A finishing pass on a provider that isn't connected would only add a
+    // simulated proof to a live job — skip it rather than fake it.
+    if (!providerOverride && !isSimulatedContext() && provider(step.modelId).mode === "simulated" && connectedProviders()) {
+      step.status = "done";
+      audit({ jobId: job.id, actor: "system", type: "policy", message: `Skipped "${step.label}": ${getModel(step.modelId)?.name ?? step.modelId} needs a provider that isn't connected.` });
+      touch(job);
+      return "ok";
+    }
     const purpose = step.intent === "finish" ? "finish" : "generate";
     if (!withinBudget(job, step.modelId, step.units, step.label)) return halt(step);
     const g = await generate(job, step, { modelId: step.modelId, units: step.units, purpose, attempt: 1 });
@@ -514,7 +526,7 @@ async function produceItem(job: Job, step: RecipeStep, d: Deliverable, units: nu
     let repairModel = step.modelId;
     if (qa.verdict === "edit" && (d.kind === "image" || d.kind === "text")) {
       const lane = d.kind === "text" ? "copy-edit" : "repair";
-      const r = routeStep({ lane, kind: d.kind, intent: "repair", preserve: step.preserve, units, label: "repair" }, policy);
+      const r = routeStep({ lane, kind: d.kind, intent: "repair", preserve: step.preserve, units, label: "repair" }, routingPolicy());
       if (r.modelId) repairModel = r.modelId;
     }
     const repairCost = stepCost(getModel(repairModel)!, units);
@@ -547,7 +559,7 @@ async function generate(
   o: { modelId: string; units: number; purpose: Generation["purpose"]; attempt: number; sourceUrl?: string; deliverable?: Deliverable; previous?: Generation },
 ): Promise<Generation> {
   if (step.kind === "text") return generateCopy(job, step, o);
-  const p = provider();
+  const p = provider(o.modelId);
   const model = getModel(o.modelId)!;
   const client = findClient(job.clientId);
   const g: Generation = {
@@ -556,7 +568,7 @@ async function generate(
     stepId: step.id,
     deliverableId: o.deliverable?.id,
     modelId: o.modelId,
-    prompt: buildPrompt(step, job, client, step.feedback),
+    prompt: withQANotes(buildPrompt(step, job, client, step.feedback), o.previous),
     attempt: o.attempt,
     purpose: o.purpose,
     status: "queued",
@@ -573,7 +585,7 @@ async function generate(
       units: o.units,
       aspect: o.deliverable?.aspect ?? (step.kind === "video" ? "9:16" : "1:1"),
       durationSec: o.deliverable?.durationSec,
-      referenceUrls: job.referenceAssets.filter((a) => /^https?:/.test(a)),
+      referenceUrls: referenceImages(job),
       sourceUrl: o.sourceUrl,
       label: o.deliverable ? `${o.deliverable.label}${o.attempt > 1 ? ` · v${o.attempt}` : ""}` : step.label,
       palette: client?.colors ?? [],
@@ -588,7 +600,7 @@ async function generate(
       const r = await p.check(requestId);
       if (r.status === "completed" || r.status === "failed") {
         g.status = r.status;
-        g.outputUrl = r.outputUrl;
+        g.outputUrl = await persistOutput(currentWorkspaceId() ?? "local", g.id, r.outputUrl);
         g.actualCost = r.cost ?? (r.status === "completed" ? g.estimatedCost : 0);
         g.error = r.error;
         break;
@@ -611,6 +623,14 @@ async function generate(
   });
   touch(job);
   return g;
+}
+
+/** A repair attempt must know what QA rejected, or it just rerolls the dice. */
+function withQANotes(prompt: string, previous?: Generation): string {
+  const qa = previous?.qa;
+  if (!qa) return prompt;
+  const notes = qa.checks.filter((c) => !c.pass).map((c) => c.note);
+  return `${prompt} Fix from QA of the previous attempt: ${(notes.length ? notes : [qa.summary]).join(" ")}`;
 }
 
 async function generateCopy(

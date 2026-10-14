@@ -4,6 +4,7 @@ import { copyToMarkdown } from "../shared/copy";
 import { MODEL_CATALOG } from "../shared/catalog";
 import { SERVICE_TEMPLATES } from "../shared/templates";
 import type { Checkpoint, ClientMemory, Generation, Job } from "../shared/types";
+import { viewUrl } from "./files";
 
 // MCP server for Studio Operator. Lets an outside agent — Claude (Desktop,
 // Code, claude.ai connectors) or Astra via any MCP-capable client — run the
@@ -41,7 +42,10 @@ const text = (value: unknown) => ({ content: [{ type: "text" as const, text: typ
 const fail = (err: unknown) => ({ content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true });
 
 /** Data URIs and raw HTML are noise for a model — keep only http(s) URLs. */
-const url = (u?: string) => (u && /^https?:/.test(u) ? u : undefined);
+const url = (u?: string) => {
+  const v = viewUrl(u, true);
+  return v && /^https?:/.test(v) ? v : undefined;
+};
 
 function summarizeJob(d: JobDetail) {
   const { job } = d;

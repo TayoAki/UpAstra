@@ -47,7 +47,13 @@ export interface ModelSpec {
   strengths: string;
   watchOuts: string;
   quality: number; // 1–5, used to break ties for final work
+  /** Who runs it. Defaults: media → "higgsfield", text → "builtin" (the built-in AI). */
+  provider?: ModelProvider;
+  /** The provider's own model id, when it differs from ours (e.g. an OpenRouter slug). */
+  remoteId?: string;
 }
+
+export type ModelProvider = "higgsfield" | "openrouter" | "builtin";
 
 /** A field inside one piece of copy, e.g. an email's subject or an ad's headline. */
 export interface CopyField {
@@ -341,6 +347,10 @@ export interface FirmStats {
 export interface ProviderStatus {
   astra: { mode: "live" | "simulated"; model: string };
   higgsfield: { mode: "live" | "simulated"; baseUrl: string };
+  /** Who renders images: OpenRouter image models, Higgsfield, or the simulator. */
+  images: "openrouter" | "higgsfield" | "openrouter+higgsfield" | "simulated";
+  /** Providers with live keys. Null when nothing is connected (everything simulated). */
+  connected: ModelProvider[] | null;
 }
 
 // ---------------------------------------------------------------------------

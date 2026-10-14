@@ -145,7 +145,7 @@ export function PlaybookView({ tab, item }: { tab?: string; item?: string }) {
             <div>
               <h1>Model router primer</h1>
               <p className="muted">
-                One Higgsfield key for every visual lane; copy lanes run on the Astra endpoint. Prices shown are list estimates per unit. Models blocked by your autonomy policy are marked and never routed.
+                Image lanes run on OpenRouter (Nano Banana, GPT-5 Image) or Higgsfield, video on Higgsfield, copy on the built-in AI. When a provider isn't connected, the router picks a connected model instead. Prices are list estimates per unit; models blocked by your autonomy policy are marked and never routed.
               </p>
             </div>
           </header>
@@ -174,6 +174,7 @@ export function PlaybookView({ tab, item }: { tab?: string; item?: string }) {
                           </td>
                           <td className="small">
                             {m.vendor} · {m.origin}
+                            <div className="muted">via {m.provider === "openrouter" ? "OpenRouter" : m.kind === "text" ? "built-in AI" : "Higgsfield"}</div>
                           </td>
                           <td className="small">{m.strengths}</td>
                           <td className="small muted">{m.watchOuts}</td>

@@ -318,7 +318,7 @@ function ProductionTab({ d, setD }: TabProps) {
       </div>
       <div className="steps">
         {job.steps.map((s, i) => {
-          const decision = routeStep(s, boot.policy);
+          const decision = routeStep(s, { ...boot.policy, connected: boot.providers.connected });
           const model = getModel(s.modelId);
           const editable = s.status === "pending" || s.status === "blocked";
           const gens = gensByStep(s.id);

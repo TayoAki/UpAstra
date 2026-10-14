@@ -152,7 +152,11 @@ export function SettingsView({ tab: initial }: { tab?: string }) {
               <span className={boot?.providers.astra.mode === "live" ? "pos" : "muted"}>{boot?.providers.astra.mode === "live" ? `${boot.providers.ai} · ${boot.providers.astra.model}` : "simulated"}</span>
             </div>
             <div className="row between">
-              <span>Higgsfield</span>
+              <span>Image models</span>
+              <span className={boot?.providers.images !== "simulated" ? "pos" : "muted"}>{boot?.providers.images}</span>
+            </div>
+            <div className="row between">
+              <span>Higgsfield (video)</span>
               <span className={boot?.providers.higgsfield.mode === "live" ? "pos" : "muted"}>{boot?.providers.higgsfield.mode}</span>
             </div>
             <div className="row between">

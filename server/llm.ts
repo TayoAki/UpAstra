@@ -72,7 +72,7 @@ export async function chatJSON<T>(opts: { role: LLMRole; system: string; user: u
   if (!p) throw new Error("No AI provider configured (set OPENROUTER_API_KEY)");
   const model = modelFor(opts.role);
   const content: unknown[] = [{ type: "text", text: typeof opts.user === "string" ? opts.user : JSON.stringify(opts.user, null, 1) }];
-  for (const url of opts.images ?? []) if (/^https?:/.test(url)) content.push({ type: "image_url", image_url: { url } });
+  for (const url of opts.images ?? []) if (/^(https?:|data:image\/(png|jpe?g|webp|gif);base64,)/.test(url)) content.push({ type: "image_url", image_url: { url } });
 
   const body: Record<string, unknown> = {
     model,

@@ -108,7 +108,9 @@ export function App() {
           <span className={`mode-dot ${boot?.providers.astra.mode}`} /> Astra {boot?.providers.astra.mode ?? "…"}
           {boot?.providers.astra.mode === "live" ? ` (${boot.providers.astra.model})` : ""}
           <span className="sep">·</span>
-          <span className={`mode-dot ${boot?.providers.higgsfield.mode}`} /> Higgsfield {boot?.providers.higgsfield.mode ?? "…"}
+          <span className={`mode-dot ${boot && boot.providers.images !== "simulated" ? "live" : "simulated"}`} /> Images {boot ? (boot.providers.images === "simulated" ? "simulated" : `live (${boot.providers.images})`) : "…"}
+          <span className="sep">·</span>
+          <span className={`mode-dot ${boot?.providers.higgsfield.mode}`} /> Video {boot?.providers.higgsfield.mode ?? "…"}
           <span className="sep">·</span>
           <span className={`mode-dot ${boot?.providers.apify}`} /> Apify {boot?.providers.apify ?? "…"}
         </span>

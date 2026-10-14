@@ -24,6 +24,9 @@ export function initAuth() {
   }
 }
 
+/** The server's HMAC secret (sessions, signed file links). */
+export const signingSecret = () => secret;
+
 export async function hashPassword(pw: string): Promise<string> {
   const salt = randomBytes(16);
   const key = await scrypt(pw, salt, 64);

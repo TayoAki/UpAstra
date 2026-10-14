@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import type { FileRef } from "../shared/types";
-import { HttpError } from "./store";
+import type { FileRef, Job } from "../shared/types";
+import { HttpError, currentWorkspaceId } from "./store";
+import { signingSecret } from "./auth";
 
 // File storage for client uploads. An S3-compatible bucket in production
 // (Railway buckets, S3, R2 — set S3_BUCKET + credentials), local disk in dev.
@@ -109,3 +110,65 @@ export async function saveUpload(workspaceId: string, name: string, type: string
 }
 
 export const keyBelongsTo = (key: string, workspaceId: string) => key.startsWith(`${workspaceId}/`) && !key.includes("..");
+
+// ---------------------------------------------------------------------------
+// Generated outputs. Real renders are megabytes, so they live in the store
+// (never in the workspace document); the generation keeps a "file:<key>"
+// pointer and the browser gets short-lived signed links.
+
+const EXT: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
+
+/** Move a base64 image output into the store. Small SVG proofs stay inline. */
+export async function persistOutput(workspaceId: string, name: string, url: string | undefined): Promise<string | undefined> {
+  const m = url?.match(/^data:(image\/[\w+.-]+);base64,(.*)$/s);
+  if (!m || m[1] === "image/svg+xml") return url;
+  const key = `${workspaceId}/gen/${name}.${EXT[m[1]] ?? "bin"}`;
+  await fileStore().put(key, Buffer.from(m[2], "base64"), m[1]);
+  return `file:${key}`;
+}
+
+/** An image a model can look at: http(s) as-is, stored files inlined. SVG and other tenants' files are refused. */
+export async function toDataUrl(url: string): Promise<string | null> {
+  if (/^https?:\/\//.test(url)) return url;
+  if (/^data:image\/(png|jpe?g|webp|gif);base64,/.test(url)) return url;
+  if (!url.startsWith("file:")) return null;
+  const key = url.slice(5);
+  const ws = currentWorkspaceId();
+  if (!ws || !keyBelongsTo(key, ws)) return null;
+  try {
+    const f = await fileStore().get(key);
+    if (!/^image\/(png|jpe?g|webp|gif)$/.test(f.type) || f.body.length > 8 * 1024 * 1024) return null;
+    return `data:${f.type};base64,${f.body.toString("base64")}`;
+  } catch {
+    return null;
+  }
+}
+
+const LINK_TTL_S = 6 * 3600;
+const sign = (exp: number, key: string) => createHmac("sha256", signingSecret()).update(`file:${exp}:${key}`).digest("base64url");
+
+/** Browser-safe link for a stored output; data/http URLs pass through. Expiry is
+ *  rounded up to the hour so the link stays stable across polls (no image flicker). */
+export function viewUrl(url: string | undefined, absolute = false): string | undefined {
+  if (!url?.startsWith("file:")) return url;
+  const key = url.slice(5);
+  const exp = Math.ceil((Date.now() / 1000 + LINK_TTL_S) / 3600) * 3600;
+  const path = `/f/${exp}/${sign(exp, key)}/${key.split("/").map(encodeURIComponent).join("/")}`;
+  return absolute ? `${(process.env.APP_URL ?? "").replace(/\/$/, "")}${path}` : path;
+}
+
+export function verifyFileLink(exp: string, sig: string, key: string): boolean {
+  const e = Number(exp);
+  if (!Number.isFinite(e) || e * 1000 < Date.now()) return false;
+  const want = Buffer.from(sign(e, key));
+  const got = Buffer.from(sig);
+  return want.length === got.length && timingSafeEqual(want, got);
+}
+
+/** A job's visual references: client photos from the portal brief first, then linked URLs. */
+export function referenceImages(job: Pick<Job, "portal" | "referenceAssets">): string[] {
+  return [
+    ...(job.portal?.files ?? []).filter((f) => /^image\/(png|jpe?g|webp|gif)$/.test(f.type)).map((f) => `file:${f.key}`),
+    ...job.referenceAssets.filter((a) => /^https?:/.test(a)),
+  ];
+}

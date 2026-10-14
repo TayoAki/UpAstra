@@ -1,4 +1,4 @@
-import type { ModelSpec } from "./types";
+import type { ModelProvider, ModelSpec } from "./types";
 
 // Model catalog grouped by production lane, following the primer:
 //   Soul → people · Seedream/Flux → products · Ideogram/Recraft → words & layout
@@ -264,6 +264,104 @@ export const MODEL_CATALOG: ModelSpec[] = [
   // Text models run through the Astra (OpenAI-compatible) endpoint, not
   // Higgsfield. Model IDs are configured per tier on the server:
   // COPY_FAST_MODEL, COPY_PRO_MODEL, COPY_EDIT_MODEL (all default to ASTRA_MODEL).
+  // OpenRouter image models: live through the same key as the built-in AI.
+  // Prices are measured per ~1K image (OpenRouter bills the exact amount).
+  {
+    id: "or-gemini-3-pro-image",
+    name: "Nano Banana Pro",
+    family: "gemini-image",
+    vendor: "Google",
+    origin: "US",
+    kind: "image",
+    lanes: ["people", "product", "typography"],
+    price: 0.14,
+    unit: "image",
+    strengths: "Best all-rounder: realistic people, products kept faithful to reference photos, and legible headline text.",
+    watchOuts: "Small legal copy and exact logos still need a QA pass.",
+    quality: 5,
+    provider: "openrouter",
+    remoteId: "google/gemini-3-pro-image",
+  },
+  {
+    id: "or-gemini-3.1-flash-image",
+    name: "Nano Banana 2",
+    family: "gemini-image",
+    vendor: "Google",
+    origin: "US",
+    kind: "image",
+    lanes: ["product", "people", "repair"],
+    price: 0.08,
+    unit: "image",
+    strengths: "Fast product and lifestyle scenes from reference photos; precise edits that keep the rest of the image.",
+    watchOuts: "Dense typography is weaker than the Pro model.",
+    quality: 4,
+    provider: "openrouter",
+    remoteId: "google/gemini-3.1-flash-image",
+  },
+  {
+    id: "or-gemini-2.5-flash-image",
+    name: "Nano Banana",
+    family: "gemini-image",
+    vendor: "Google",
+    origin: "US",
+    kind: "image",
+    lanes: ["repair", "explore-image"],
+    price: 0.04,
+    unit: "image",
+    strengths: "Cheap controlled edits: change one detail, keep everything else; quick concept frames.",
+    watchOuts: "Lower ceiling for hero finals.",
+    quality: 4,
+    provider: "openrouter",
+    remoteId: "google/gemini-2.5-flash-image",
+  },
+  {
+    id: "or-gemini-3.1-flash-lite-image",
+    name: "Nano Banana Lite",
+    family: "gemini-image",
+    vendor: "Google",
+    origin: "US",
+    kind: "image",
+    lanes: ["explore-image"],
+    price: 0.034,
+    unit: "image",
+    strengths: "The cheapest live option for exploration volume — angles, palettes, compositions.",
+    watchOuts: "Exploration only; re-render finals on a stronger model.",
+    quality: 3,
+    provider: "openrouter",
+    remoteId: "google/gemini-3.1-flash-lite-image",
+  },
+  {
+    id: "or-gpt-5-image",
+    name: "GPT-5 Image",
+    family: "gpt-image",
+    vendor: "OpenAI",
+    origin: "US",
+    kind: "image",
+    lanes: ["typography", "people"],
+    price: 0.22,
+    unit: "image",
+    strengths: "Strongest instruction-following for posters, covers and layouts with real words.",
+    watchOuts: "Slow (~1 min) and square output only; costs more than the Gemini models.",
+    quality: 5,
+    provider: "openrouter",
+    remoteId: "openai/gpt-5-image",
+  },
+  {
+    id: "or-gpt-5-image-mini",
+    name: "GPT-5 Image Mini",
+    family: "gpt-image",
+    vendor: "OpenAI",
+    origin: "US",
+    kind: "image",
+    lanes: ["typography", "explore-image"],
+    price: 0.045,
+    unit: "image",
+    strengths: "Affordable text-in-image drafts and layout exploration.",
+    watchOuts: "Slow (~45s) and square output only.",
+    quality: 4,
+    provider: "openrouter",
+    remoteId: "openai/gpt-5-image-mini",
+  },
   {
     id: "astra-writer-fast",
     name: "Astra Writer (fast)",
@@ -310,6 +408,10 @@ export const MODEL_CATALOG: ModelSpec[] = [
 
 export function getModel(id: string): ModelSpec | undefined {
   return MODEL_CATALOG.find((m) => m.id === id);
+}
+
+export function providerOf(m: Pick<ModelSpec, "provider" | "kind">): ModelProvider {
+  return m.provider ?? (m.kind === "text" ? "builtin" : "higgsfield");
 }
 
 export function stepCost(model: ModelSpec, units: number): number {

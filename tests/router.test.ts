@@ -22,9 +22,9 @@ describe("routeStep", () => {
   it("falls back to another lane when policy blocks the lane's models", () => {
     const r = routeStep(step({ kind: "video", lane: "hero-video", units: 5 }), { blockedFamilies: [], blockedOrigins: ["CN"] });
     expect(r.modelId).toBeNull();
-    const img = routeStep(step({ lane: "product" }), { blockedFamilies: ["seedream"], blockedOrigins: [] });
+    const img = routeStep(step({ lane: "product" }), { blockedFamilies: ["seedream", "gemini-image"], blockedOrigins: [] });
     expect(img.modelId).toBe("flux-kontext-pro");
-    const repair = routeStep(step({ lane: "repair", intent: "repair" }), { blockedFamilies: ["qwen"], blockedOrigins: [] });
+    const repair = routeStep(step({ lane: "repair", intent: "repair" }), { blockedFamilies: ["qwen", "gemini-image"], blockedOrigins: [] });
     expect(repair.modelId).not.toBe("qwen-image-edit");
     expect(repair.rationale).toMatch(/Fallback lane/);
   });
@@ -37,5 +37,16 @@ describe("routeStep", () => {
   it("orders finishing tools by fit, not quality", () => {
     expect(routeStep(step({ kind: "video", lane: "finishing", intent: "finish", preserve: "words" }), open).modelId).toBe("captions-export");
     expect(routeStep(step({ kind: "video", lane: "finishing", intent: "finish", preserve: "person" }), open).modelId).toBe("lipsync-studio");
+  });
+
+  it("prefers models on connected providers", () => {
+    const live = { ...open, connected: ["builtin", "openrouter"] as const };
+    const product = routeStep(step({ lane: "product" }), { ...live, connected: [...live.connected] });
+    expect(product.modelId).toBe("or-gemini-3-pro-image");
+    expect(product.options.find((o) => o.modelId === "seedream-4")?.blocked).toMatch(/Higgsfield isn't connected/);
+    const explore = routeStep(step({ lane: "explore-image", intent: "explore", units: 10 }), { ...live, connected: [...live.connected] });
+    expect(explore.modelId).toBe("or-gemini-3.1-flash-lite-image");
+    // No connected model can render video, so the Higgsfield route stays (simulated until connected).
+    expect(routeStep(step({ kind: "video", lane: "hero-video", units: 5 }), { ...live, connected: [...live.connected] }).modelId).toBe("kling-2.5-pro");
   });
 });

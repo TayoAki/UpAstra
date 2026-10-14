@@ -9,8 +9,30 @@ import { newId, now } from "./store";
 
 export const apifyConfigured = () => !!process.env.APIFY_TOKEN;
 
+/**
+ * Built-in defaults per source (tested against the live actor). Env vars
+ * APIFY_ACTOR_<SOURCE> / APIFY_INPUT_<SOURCE> (JSON) override them.
+ */
+const BUILTIN: Partial<Record<LeadSource, { actor: string; input: Record<string, unknown> }>> = {
+  // flash_mage/upwork: ~$0.003 per job, returns full job detail incl. client stats.
+  upwork: { actor: "flash_mage~upwork", input: { query: ["{{query}}"], limit: "{{maxItems}}", sort: "newest" } },
+};
+
 export function defaultActor(source: LeadSource): string {
-  return process.env[`APIFY_ACTOR_${source.toUpperCase()}`] ?? "";
+  return process.env[`APIFY_ACTOR_${source.toUpperCase()}`] ?? BUILTIN[source]?.actor ?? "";
+}
+
+export function defaultInput(source: LeadSource): Record<string, unknown> | undefined {
+  const env = process.env[`APIFY_INPUT_${source.toUpperCase()}`];
+  if (env) {
+    try {
+      return JSON.parse(env);
+    } catch {
+      console.warn(`[apify] APIFY_INPUT_${source.toUpperCase()} is not valid JSON — ignoring`);
+    }
+  }
+  // Only use the built-in input with the built-in actor.
+  return process.env[`APIFY_ACTOR_${source.toUpperCase()}`] ? undefined : BUILTIN[source]?.input;
 }
 
 /** Replace {{query}} / {{maxItems}} placeholders anywhere in the actor input. */
@@ -25,7 +47,11 @@ export function buildInput(search: SavedSearch): unknown {
         : v && typeof v === "object"
           ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fill(x)]))
           : v;
-  return fill(Object.keys(search.input).length ? search.input : { query: "{{query}}", searchQuery: "{{query}}", maxItems: "{{maxItems}}" });
+  const usesDefaultActor = !search.actorId || search.actorId === defaultActor(search.source);
+  const input = Object.keys(search.input).length
+    ? search.input
+    : ((usesDefaultActor && defaultInput(search.source)) ?? { query: "{{query}}", searchQuery: "{{query}}", maxItems: "{{maxItems}}" });
+  return fill(input);
 }
 
 export async function runActor(actorId: string, input: unknown, maxItems: number): Promise<Record<string, unknown>[]> {
@@ -54,7 +80,8 @@ const pick = (o: Record<string, unknown>, ...keys: string[]): unknown => {
     if (v !== undefined && v !== null && v !== "") return v;
   }
 };
-const str = (v: unknown) => (typeof v === "string" ? v : typeof v === "number" ? String(v) : undefined);
+// Some scrapers wrap search hits in highlight markers, e.g. "H^image^H".
+const str = (v: unknown) => (typeof v === "string" ? v.replace(/H\^(.*?)\^H/g, "$1") : typeof v === "number" ? String(v) : undefined);
 const num = (v: unknown): number | undefined => {
   if (typeof v === "number") return v;
   if (typeof v === "string") {
@@ -82,33 +109,50 @@ export function parseBudget(raw: unknown, hourlyHint?: boolean): Lead["budget"] 
 }
 
 export function normalizeItem(raw: Record<string, unknown>, source: LeadSource, searchId?: string): Lead | null {
-  const title = str(pick(raw, "title", "jobTitle", "name", "position", "gigTitle"));
-  const description = str(pick(raw, "description", "jobDescription", "descriptionText", "snippet", "body", "content", "summary", "text"));
+  const title = str(pick(raw, "title", "job_title", "jobTitle", "name", "position", "gigTitle", "data.opening.info.title"));
+  const description = str(pick(raw, "description", "job_detail", "data.opening.description", "jobDescription", "descriptionText", "snippet", "body", "content", "summary", "text"));
   if (!title && !description) return null;
   const url = str(pick(raw, "url", "link", "jobUrl", "jobLink", "href", "applyUrl"));
-  const hourly = /hour/i.test(String(pick(raw, "jobType", "type", "paymentType") ?? ""));
-  const budget = parseBudget(pick(raw, "budget", "amount", "price", "fixedPrice", "hourlyRange", "hourlyBudget", "salary", "rate"), hourly);
-  const skillsRaw = pick(raw, "skills", "tags", "categories", "skillTags");
-  const skills = Array.isArray(skillsRaw) ? skillsRaw.map((s) => (typeof s === "string" ? s : str((s as Record<string, unknown>)?.name) ?? "")).filter(Boolean) : [];
-  const verified = pick(raw, "client.paymentVerified", "clientPaymentVerified", "paymentVerified", "buyer.verified");
+  const hourly = /hour/i.test(String(pick(raw, "budget_type", "data.opening.info.type", "jobType", "paymentType") ?? ""));
+  // Upwork detail payloads: hourly ranges live in extendedBudgetInfo, fixed prices in budget.amount (0 = not given).
+  const hMin = num(pick(raw, "data.opening.extendedBudgetInfo.hourlyBudgetMin"));
+  const hMax = num(pick(raw, "data.opening.extendedBudgetInfo.hourlyBudgetMax"));
+  const fixedAmount = num(pick(raw, "data.opening.budget.amount"));
+  const budget =
+    hourly && (hMin || hMax)
+      ? { type: "hourly" as const, min: hMin ?? hMax, max: hMax ?? hMin, currency: "USD" }
+      : !hourly && fixedAmount
+        ? { type: "fixed" as const, min: fixedAmount, max: fixedAmount, currency: str(pick(raw, "data.opening.budget.currencyCode")) ?? "USD" }
+        : parseBudget(pick(raw, "budget", "amount", "price", "fixedPrice", "hourlyRange", "hourlyBudget", "salary", "rate"), hourly);
+  const skillsRaw = pick(raw, "skills", "tags", "ontologySkills", "data.opening.sandsData.ontologySkills", "categories", "skillTags");
+  const skills = Array.isArray(skillsRaw)
+    ? skillsRaw
+        .map((s) => (typeof s === "string" ? s : (str((s as Record<string, unknown>)?.prefLabel) ?? str((s as Record<string, unknown>)?.name) ?? "")))
+        .filter(Boolean)
+        .slice(0, 15)
+    : [];
+  const verified = pick(raw, "isPaymentMethodVerified", "data.buyerExtra.isPaymentMethodVerified", "client.paymentVerified", "clientPaymentVerified", "paymentVerified", "buyer.verified");
+  const charges = pick(raw, "buyer.stats.totalCharges.amount", "data.buyer.stats.totalCharges.amount", "buyer.stats.totalCharges");
+  const jobsWithHires = num(pick(raw, "buyer.stats.totalJobsWithHires"));
+  const assignments = num(pick(raw, "buyer.stats.totalAssignments"));
   return {
     id: newId("lead"),
     searchId,
     source,
-    externalId: str(pick(raw, "id", "jobId", "uid", "ciphertext", "gigId")) ?? `h${hash(`${url ?? ""}${title ?? ""}`)}`,
+    externalId: str(pick(raw, "upwork_job_id", "data.opening.info.id", "jobId", "uid", "ciphertext", "gigId")) ?? (typeof raw.id === "string" ? raw.id : undefined) ?? `h${hash(`${url ?? ""}${title ?? ""}`)}`,
     url,
     title: (title ?? description!.slice(0, 80)).trim(),
     description: (description ?? title!).trim().slice(0, 8000),
     budget,
-    postedAt: str(pick(raw, "postedAt", "publishedAt", "createdAt", "datePosted", "postedOn", "date")),
+    postedAt: str(pick(raw, "publish_time", "data.opening.postedOn", "postedAt", "publishedAt", "createdAt", "datePosted", "postedOn", "date")),
     client: {
-      country: str(pick(raw, "client.country", "clientCountry", "country", "location", "buyer.country")),
+      country: str(pick(raw, "nation", "buyer.location.country", "client.country", "clientCountry", "country", "location", "buyer.country")),
       paymentVerified: typeof verified === "boolean" ? verified : typeof verified === "string" ? /true|verified|yes/i.test(verified) : undefined,
-      totalSpent: num(pick(raw, "client.totalSpent", "clientTotalSpent", "totalSpent", "client.spent")),
-      hireRate: num(pick(raw, "client.hireRate", "clientHireRate", "hireRate")),
-      rating: num(pick(raw, "client.rating", "clientRating", "rating", "client.feedbackScore")),
+      totalSpent: num(charges) ?? num(pick(raw, "client.totalSpent", "clientTotalSpent", "totalSpent", "client.spent")),
+      hireRate: assignments && jobsWithHires !== undefined ? Math.round((jobsWithHires / Math.max(assignments, 1)) * 100) : num(pick(raw, "client.hireRate", "clientHireRate", "hireRate")),
+      rating: num(pick(raw, "buyer.stats.score", "client.rating", "clientRating", "rating", "client.feedbackScore")),
     },
-    proposalsCount: num(pick(raw, "proposals", "proposalsCount", "numberOfProposals", "applicants", "applicantsCount")),
+    proposalsCount: num(pick(raw, "client_activity.totalApplicants", "data.opening.clientActivity.totalApplicants", "proposals", "proposalsCount", "numberOfProposals", "applicants", "applicantsCount")),
     skills,
     status: "new",
     scrapedAt: now(),

@@ -45,7 +45,8 @@ import { checkProposal, convertLeadToJob, draftProposal, newSearch, runSearch, s
 import { seed } from "./seed";
 import { deleteAccount, deleteWorkspaceEverywhere } from "./accounts";
 import { claimSlug, embedScript, isPortalHost, portalRouter, removePortalUser, slugForHost } from "./portal";
-import { fileStore, keyBelongsTo } from "./files";
+import { fileStore, keyBelongsTo, verifyFileLink, viewUrl } from "./files";
+import { connectedProviders, imagesMode } from "./providers";
 import { RESERVED_SLUGS, SLUG_RE, defaultPackage, slugify } from "../shared/portal";
 import { DEFAULT_POLICY, HttpError, audit, currentActor, emptyDB, ensureTenant, findClient, findJob, getDB, newId, now, runWith, save } from "./store";
 
@@ -62,6 +63,8 @@ function providerStatus(): ProviderStatus & { ai: string; apify: "live" | "simul
   return {
     astra: { mode: astraMode(), model: astraModel() },
     higgsfield: { mode: p.mode, baseUrl: p.baseUrl },
+    images: imagesMode(),
+    connected: connectedProviders(),
     ai: llmProviderName(),
     apify: apifyConfigured() ? "live" : "simulated",
   };
@@ -69,7 +72,7 @@ function providerStatus(): ProviderStatus & { ai: string; apify: "live" | "simul
 
 function jobSummary(job: Job) {
   const gens = jobGenerations(job.id);
-  const thumb = [...gens].reverse().find((g) => g.deliverableId && g.outputUrl && g.status === "completed")?.outputUrl;
+  const thumb = viewUrl([...gens].reverse().find((g) => g.deliverableId && g.outputUrl && g.status === "completed")?.outputUrl);
   return {
     id: job.id,
     title: job.title,
@@ -92,7 +95,7 @@ function jobDetail(job: Job) {
   return {
     job,
     economics: jobEconomics(job),
-    generations: jobGenerations(job.id),
+    generations: jobGenerations(job.id).map((g) => (g.outputUrl?.startsWith("file:") ? { ...g, outputUrl: viewUrl(g.outputUrl) } : g)),
     audit: getDB().audit.filter((a) => a.jobId === job.id),
     client: findClient(job.clientId),
     template: getTemplate(job.templateId),
@@ -167,6 +170,21 @@ export function createApp(opts: { port: number }) {
     res.setHeader("Cache-Control", "public, max-age=300");
     res.send(embedScript(process.env.APP_URL ?? ""));
   });
+
+  // Generated outputs, behind short-lived signed links (an <img> can't send auth headers).
+  app.get(
+    "/f/:exp/:sig/*key",
+    wrap(async (req, res) => {
+      const raw = (req.params as unknown as { key: string | string[] }).key;
+      const key = Array.isArray(raw) ? raw.join("/") : String(raw ?? "");
+      if (key.includes("..") || !verifyFileLink(String(req.params.exp), String(req.params.sig), key)) throw new HttpError(403, "This link has expired");
+      const f = await fileStore().get(key);
+      res.setHeader("Content-Type", f.type);
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.send(f.body);
+    }),
+  );
 
   // ---- Accounts --------------------------------------------------------------
 

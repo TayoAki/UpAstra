@@ -5,7 +5,7 @@ import { clientStatus } from "../shared/portal";
 import { getTemplate } from "../shared/templates";
 import type { ClientRequestView, FileRef, Job, PortalPublic, PortalQuestion, PortalUser } from "../shared/types";
 import { hashPassword, throttle, clearThrottle, verifyPassword } from "./auth";
-import { MAX_UPLOAD_BYTES, fileStore, keyBelongsTo, saveUpload } from "./files";
+import { MAX_UPLOAD_BYTES, fileStore, keyBelongsTo, saveUpload, viewUrl } from "./files";
 import { getBackend } from "./persist";
 import { createJob, jobGenerations, receiveClientMessage } from "./pipeline";
 import { HttpError, audit, ensureTenant, findJob, getDB, newId, now, runWith, save, touch } from "./store";
@@ -150,7 +150,7 @@ export function clientView(job: Job): ClientRequestView {
           return {
             label: d.label,
             kind: d.kind,
-            items: accepted.map((g) => (g.copy ? { markdown: copyToMarkdown(job.title, d.label, d.copy, g.copy) } : { url: g.outputUrl })),
+            items: accepted.map((g) => (g.copy ? { markdown: copyToMarkdown(job.title, d.label, d.copy, g.copy) } : { url: viewUrl(g.outputUrl) })),
           };
         })
       : [],
