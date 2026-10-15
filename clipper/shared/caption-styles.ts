@@ -97,3 +97,25 @@ export function resolveCaptionStyle(brand: BrandKit | undefined, overrides: Capt
 
 /** The accent used for the call-to-action card. */
 export const accentOf = (brand: BrandKit | undefined) => (brand?.colors?.accent && HEX.test(brand.colors.accent) ? brand.colors.accent : "#E5484D");
+
+/**
+ * Group timed words into captions of up to `max` words, breaking after
+ * punctuation; `first` is each group's index into `words` (for editing).
+ */
+export function groupWords<T extends { text: string; start: number; end: number }>(words: T[], max = 3): { text: string; start: number; end: number; words: T[]; first: number }[] {
+  const out: { text: string; start: number; end: number; words: T[]; first: number }[] = [];
+  let cur: T[] = [];
+  let first = 0;
+  words.forEach((w, i) => {
+    if (!cur.length) first = i;
+    cur.push(w);
+    if (cur.length >= max || /[.!?,;:—。！？、，]$/.test(w.text)) {
+      out.push({ text: cur.map((x) => x.text).join(" "), start: cur[0].start, end: cur[cur.length - 1].end, words: cur, first });
+      cur = [];
+    }
+  });
+  if (cur.length) out.push({ text: cur.map((x) => x.text).join(" "), start: cur[0].start, end: cur[cur.length - 1].end, words: cur, first });
+  // Close tiny gaps so captions don't flicker.
+  for (let i = 0; i < out.length - 1; i++) if (out[i + 1].start - out[i].end < 0.25) out[i].end = out[i + 1].start;
+  return out;
+}

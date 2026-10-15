@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { campaignStats } from "../shared/rules";
-import type { Campaign, CampaignBrief, Clip, ClipStatus, Me, Platform, Post, PostStatus, ServiceStatus, SocialAccount, VoiceOption } from "../shared/types";
+import type { CaptionJob, Campaign, CampaignBrief, Clip, ClipStatus, Me, Platform, Post, PostStatus, ServiceStatus, SocialAccount, VoiceOption } from "../shared/types";
 import { CLIP_STATUSES, PLATFORMS, POST_STATUSES, VOICES } from "../shared/types";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { bearerAgentKey, clearSession, clearThrottle, hashAgentKey, hashPassword, humansOnly, issueSession, newAgentKey, requireWorkspace, signVideoLink, throttle, verifyPassword, verifyVideoLink } from "./auth";
@@ -13,7 +13,12 @@ import { extractBrief, normalizeBrief } from "./extract";
 import { aiLive, editorModel, forwardChat, mediaLive, modelFor } from "./llm";
 import { analyzeFootage } from "./moments";
 import { enqueueRender, renderAvailable } from "./render";
-import { saveTo, saveUpload } from "./footage-cache";
+import { saveStream, saveTo, saveUpload } from "./footage-cache";
+import { Readable } from "node:stream";
+import { applyEdits, enqueueCaptionJob } from "./caption-jobs";
+import { transcriptionAvailable } from "./transcribe";
+import { LANGUAGES } from "../shared/languages";
+import { safeFetch } from "./sources";
 import { bundledFontsDir, fontInfo } from "./fonts";
 import { accentOf, BUNDLED_FONTS, CAPTION_STYLES, resolveCaptionStyle, type BrandKit, type CaptionOverrides } from "../shared/caption-styles";
 import { probe, run } from "./media";
@@ -35,6 +40,7 @@ export function serviceStatus(): ServiceStatus {
     voice: mediaLive() ? "live" : "off",
     storage: getBackend().kind,
     editor: fs.existsSync(path.join(editorDir(), "index.html")),
+    captions: transcriptionAvailable(),
   };
 }
 
@@ -97,6 +103,7 @@ function stateFor(): unknown {
     accounts: doc.accounts,
     insights: doc.insights ?? {},
     brand: doc.brand ?? {},
+    captionJobs: (doc.captionJobs ?? []).map(({ words, ...j }) => ({ ...j, wordCount: words.length })),
     activity: doc.activity.slice(0, 100),
     status: serviceStatus(),
   };
@@ -276,6 +283,11 @@ export function createApp() {
         throw new HttpError(404, "Not found");
       });
       await runInWorkspace(ws, undefined, async () => {
+        if (clipId.startsWith("cap_")) {
+          const job = getDoc().captionJobs?.find((j) => j.id === clipId);
+          if (!job?.outputKey || !verifyVideoLink(ws, clipId, job.outputKey, e, sig)) throw new HttpError(404, "This link has expired or the video was replaced");
+          return void (await streamKey(req, res, job.outputKey, "video/mp4", job.name));
+        }
         const clip = getDoc().clips.find((c) => c.id === clipId);
         const key = clip?.render?.videoKey;
         if (!clip || !key || !verifyVideoLink(ws, clipId, key, e, sig)) throw new HttpError(404, "This link has expired or the video was replaced");
@@ -348,6 +360,136 @@ export function createApp() {
       log({ kind: "account", message: "Agent key revoked." });
       save();
       res.json(await me(req.userId!));
+    }),
+  );
+
+  // ---- Captions page: caption any video ----------------------------------
+  const findJob = (id: string) => {
+    const j = getDoc().captionJobs?.find((x) => x.id === id);
+    if (!j) throw new HttpError(404, "Caption job not found");
+    return j;
+  };
+  const newJob = (name: string, sourceKey: string, language: unknown, glossary: unknown): CaptionJob => {
+    const lang = typeof language === "string" && (language === "auto" || LANGUAGES.some(([c]) => c === language)) ? language : "auto";
+    const terms = (Array.isArray(glossary) ? glossary : typeof glossary === "string" ? glossary.split(",") : []).map((t) => String(t).trim()).filter(Boolean).slice(0, 30);
+    const at = now();
+    return { id: newId("cap"), name: name.slice(0, 120) || "Video", status: "uploaded", sourceKey, languageHint: lang, glossary: terms.length ? terms : undefined, words: [], captions: {}, createdAt: at, updatedAt: at };
+  };
+  const startJob = (req: Request, j: CaptionJob) => {
+    if (!transcriptionAvailable()) throw new HttpError(503, "Transcription isn't available on this server");
+    const doc = getDoc();
+    doc.captionJobs = [j, ...(doc.captionJobs ?? [])].slice(0, 200);
+    enqueueCaptionJob({ workspaceId: req.workspaceId!, jobId: j.id, kind: "transcribe", actor: req.actor });
+    log({ kind: "clip", message: `Captioning "${j.name}" — transcribing.` });
+    save();
+  };
+
+  api.post(
+    "/captions",
+    wrap(async (req, res) => {
+      const type = String(req.headers["content-type"] ?? "").split(";")[0];
+      if (!/^(video\/(mp4|quicktime|webm|x-matroska|x-m4v)|application\/octet-stream)$/.test(type)) throw new HttpError(415, "Upload a video file (MP4, MOV, WebM or MKV)");
+      if (!transcriptionAvailable()) throw new HttpError(503, "Transcription isn't available on this server");
+      const name = decodeURIComponent(String(req.headers["x-file-name"] ?? "video.mp4")).slice(0, 120);
+      const id = newId("src");
+      const key = `${req.workspaceId}/captions/${id}/source${path.extname(name).toLowerCase().replace(/[^.\w]/g, "") || ".mp4"}`;
+      try {
+        await saveStream(key, req, type);
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+      const j = newJob(name.replace(/\.\w{2,4}$/, ""), key, req.query.language, req.query.glossary);
+      startJob(req, j);
+      res.status(201).json({ job: j, state: stateFor() });
+    }),
+  );
+
+  api.post(
+    "/captions/from-url",
+    wrap(async (req, res) => {
+      const url = String(req.body?.url ?? "").trim();
+      if (!/^https?:\/\//.test(url)) throw new HttpError(400, "Give a public http(s) link to a video file");
+      if (!transcriptionAvailable()) throw new HttpError(503, "Transcription isn't available on this server");
+      const r = await safeFetch(url, { signal: AbortSignal.timeout(30 * 60_000) });
+      if (!r.ok || !r.body) throw new HttpError(422, `That link returned ${r.status}`);
+      if (/text\/html/.test(r.headers.get("content-type") ?? "")) throw new HttpError(422, "That link is a web page, not a video file");
+      const key = `${req.workspaceId}/captions/${newId("src")}/source.mp4`;
+      try {
+        await saveStream(key, Readable.fromWeb(r.body as never), "video/mp4");
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+      const j = newJob(String(req.body?.name ?? decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "Video")).replace(/\.\w{2,4}$/, ""), key, req.body?.language, req.body?.glossary);
+      startJob(req, j);
+      res.status(201).json({ job: j, state: stateFor() });
+    }),
+  );
+
+  api.get("/captions/:id", (req, res) => res.json(findJob(String(req.params.id))));
+
+  api.put("/captions/:id", (req, res) => {
+    const j = findJob(String(req.params.id));
+    const b = req.body ?? {};
+    if (j.status === "transcribing" || j.status === "rendering") throw new HttpError(409, "Wait for the current step to finish");
+    if (typeof b.name === "string" && b.name.trim()) j.name = b.name.trim().slice(0, 120);
+    if (b.captions && typeof b.captions === "object") j.captions = captionOverrides(b.captions);
+    if (Array.isArray(b.edits)) {
+      const edits = b.edits
+        .map((e: Record<string, unknown>) => ({ index: Number(e.index), count: Number(e.count), text: String(e.text ?? "").slice(0, 500) }))
+        .filter((e: { index: number; count: number }) => Number.isInteger(e.index) && Number.isInteger(e.count) && e.index >= 0 && e.count > 0 && e.index + e.count <= j.words.length);
+      j.words = applyEdits(j.words, edits);
+    }
+    j.updatedAt = now();
+    save();
+    res.json(j);
+  });
+
+  api.post("/captions/:id/transcribe", (req, res) => {
+    const j = findJob(String(req.params.id));
+    if (j.status === "transcribing" || j.status === "rendering") throw new HttpError(409, "Already working on it");
+    if (typeof req.body?.language === "string" && (req.body.language === "auto" || LANGUAGES.some(([c]) => c === req.body.language))) j.languageHint = req.body.language;
+    Object.assign(j, { status: "transcribing", step: "Queued", error: undefined });
+    enqueueCaptionJob({ workspaceId: req.workspaceId!, jobId: j.id, kind: "transcribe", actor: req.actor });
+    save();
+    res.status(202).json(stateFor());
+  });
+
+  api.post("/captions/:id/render", (req, res) => {
+    const j = findJob(String(req.params.id));
+    if (!j.words.length) throw new HttpError(409, "Transcribe the video first");
+    if (j.status === "transcribing" || j.status === "rendering") throw new HttpError(409, "Already working on it");
+    if (req.body?.captions && typeof req.body.captions === "object") j.captions = captionOverrides(req.body.captions);
+    Object.assign(j, { status: "rendering", step: "Queued", error: undefined });
+    enqueueCaptionJob({ workspaceId: req.workspaceId!, jobId: j.id, kind: "render", actor: req.actor });
+    save();
+    res.status(202).json(stateFor());
+  });
+
+  api.get(
+    "/captions/:id/video",
+    wrap(async (req, res) => {
+      const j = findJob(String(req.params.id));
+      const key = req.query.which === "source" ? j.sourceKey : j.outputKey;
+      if (!key || !key.startsWith(`${req.workspaceId}/`)) throw new HttpError(404, "No video yet");
+      await streamKey(req, res, key, "video/mp4", j.name);
+    }),
+  );
+
+  api.get("/captions/:id/link", (req, res) => {
+    const j = findJob(String(req.params.id));
+    if (!j.outputKey || j.status !== "done") throw new HttpError(404, "Render the captions first");
+    res.json({ url: `${publicBase(req)}${signVideoLink(req.workspaceId!, j.id, j.outputKey)}`, expiresInDays: 7 });
+  });
+
+  api.delete(
+    "/captions/:id",
+    wrap(async (req, res) => {
+      const doc = getDoc();
+      const j = findJob(String(req.params.id));
+      doc.captionJobs = (doc.captionJobs ?? []).filter((x) => x.id !== j.id);
+      for (const k of [j.sourceKey, j.outputKey]) if (k?.startsWith(`${req.workspaceId}/captions/`)) await videoStore().deletePrefix(k.slice(0, k.lastIndexOf("/") + 1)).catch(() => undefined);
+      save();
+      res.json(stateFor());
     }),
   );
 

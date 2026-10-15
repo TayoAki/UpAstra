@@ -1052,3 +1052,55 @@ pre.snippet {
   background: linear-gradient(160deg, #2b6b2f 0%, #1d4f8f 55%, #3a1d5c 100%);
   overflow: hidden;
 }
+
+/* Captions page */
+.drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 26px 16px;
+  border: 2px dashed var(--line);
+  border-radius: var(--radius);
+  text-align: center;
+}
+.drop.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.cap-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 340px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.cap-video {
+  width: 100%;
+  max-height: 70vh;
+  border-radius: var(--radius);
+  background: #000;
+}
+.transcript {
+  display: grid;
+  gap: 6px;
+  max-height: 460px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.tline {
+  display: grid;
+  grid-template-columns: 58px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+tr.clickable {
+  cursor: pointer;
+}
+tr.clickable:hover td {
+  background: var(--sunk);
+}
+@media (max-width: 760px) {
+  .cap-layout {
+    grid-template-columns: 1fr;
+  }
+}

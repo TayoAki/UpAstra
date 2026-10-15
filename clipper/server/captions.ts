@@ -1,4 +1,4 @@
-import { resolveCaptionStyle, type CaptionStyle } from "../shared/caption-styles";
+import { groupWords, resolveCaptionStyle, type CaptionStyle } from "../shared/caption-styles";
 import { H, VIDEO_TOP, W } from "./media";
 
 // Captions as an ASS subtitle file burned in by ffmpeg: the hook across the
@@ -69,23 +69,7 @@ export function timeWords(script: string, total: number, spans?: { start: number
 }
 
 /** Group words into short caption punches (break after punctuation), keeping each group's words. */
-export function groups(words: Timed[], max = 3): (Timed & { words: Timed[] })[] {
-  const out: (Timed & { words: Timed[] })[] = [];
-  let cur: Timed[] = [];
-  const flush = () => {
-    if (!cur.length) return;
-    out.push({ text: cur.map((w) => w.text).join(" "), start: cur[0].start, end: cur[cur.length - 1].end, words: cur });
-    cur = [];
-  };
-  for (const w of words) {
-    cur.push(w);
-    if (cur.length >= max || /[.!?,;:—]$/.test(w.text)) flush();
-  }
-  flush();
-  // Close tiny gaps so captions don't flicker.
-  for (let i = 0; i < out.length - 1; i++) if (out[i + 1].start - out[i].end < 0.25) out[i].end = out[i + 1].start;
-  return out;
-}
+export const groups = (words: Timed[], max = 3): (Timed & { words: Timed[] })[] => groupWords(words, max);
 
 /** Caption punches as plain timed text. */
 export const chunk = (words: Timed[], max = 3): Timed[] => groups(words, max).map(({ text, start, end }) => ({ text, start, end }));
@@ -115,7 +99,13 @@ export function buildAss(o: {
   accent?: string;
   joiner?: string;
   language?: string;
+  /** Frame size; defaults to Clip Operator's 1080×1920. Style sizes scale with the short side. */
+  frame?: { width: number; height: number };
 }): string {
+  const FW = o.frame?.width ?? W;
+  const FH = o.frame?.height ?? H;
+  const k = Math.min(FW, FH) / 1080;
+  const px = (n: number) => Math.max(1, Math.round(n * k));
   const st = o.style ?? resolveCaptionStyle(undefined);
   const joiner = o.joiner ?? " ";
   const font = st.font;
@@ -129,23 +119,23 @@ export function buildAss(o: {
   const lines = [
     "[Script Info]",
     "ScriptType: v4.00+",
-    `PlayResX: ${W}`,
-    `PlayResY: ${H}`,
+    `PlayResX: ${FW}`,
+    `PlayResY: ${FH}`,
     "WrapStyle: 0",
     "ScaledBorderAndShadow: yes",
     "",
     "[V4+ Styles]",
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-    `Style: Hook,${font},76,${white},${white},&H00000000,&H64000000,${bold},0,0,0,100,100,0,0,1,7,2,8,70,70,${VIDEO_TOP - 330},1`,
-    `Style: Cap,${font},${st.size},${white},${white},${boxed ? back : assColor(st.outline)},${back},${bold},0,0,0,100,100,0,0,${boxed ? 3 : 1},${st.outlineWidth},${st.shadow},5,70,70,0,1`,
-    `Style: Cta,${font},72,&H00FFFFFF,&H00FFFFFF,${accent},${accent},${bold},0,0,0,100,100,0,0,3,26,0,5,90,90,0,1`,
+    `Style: Hook,${font},${px(76)},${white},${white},&H00000000,&H64000000,${bold},0,0,0,100,100,0,0,1,${px(7)},${px(2)},8,${px(70)},${px(70)},${Math.round(((VIDEO_TOP - 330) / H) * FH)},1`,
+    `Style: Cap,${font},${px(st.size)},${white},${white},${boxed ? back : assColor(st.outline)},${back},${bold},0,0,0,100,100,0,0,${boxed ? 3 : 1},${px(st.outlineWidth)},${px(st.shadow)},5,${px(70)},${px(70)},0,1`,
+    `Style: Cta,${font},${px(72)},&H00FFFFFF,&H00FFFFFF,${accent},${accent},${bold},0,0,0,100,100,0,0,3,${px(26)},0,5,${px(90)},${px(90)},0,1`,
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
-    `Dialogue: 1,${ts(0)},${ts(hookEnd)},Hook,,0,0,0,,{\\fad(120,200)}${esc(o.hook)}`,
   ];
-  const y = Math.round(st.position * H);
-  const place = `\\an5\\pos(${W / 2},${y})${st.glow ? "\\blur4" : ""}`;
+  if (o.hook) lines.push(`Dialogue: 1,${ts(0)},${ts(hookEnd)},Hook,,0,0,0,,{\\fad(120,200)}${esc(o.hook)}`);
+  const y = Math.round(st.position * FH);
+  const place = `\\an5\\pos(${Math.round(FW / 2)},${y})${st.glow ? "\\blur4" : ""}`;
   const pop = "\\fscx86\\fscy86\\t(0,90,\\fscx100\\fscy100)";
   const cased = (t: string) => (st.uppercase ? t.toLocaleUpperCase(o.language || undefined) : t);
   for (const g of o.captions) {

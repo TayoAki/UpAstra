@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { Campaign, CampaignStats, Clip, Insights, LearningReport, Post } from "../shared/types";
+import { CAPTION_STYLES } from "../shared/caption-styles";
+import type { Campaign, CampaignStats, CaptionJob, Clip, Insights, LearningReport, Post } from "../shared/types";
 import { HOOK_STYLES, PLATFORMS, VOICES } from "../shared/types";
 
 // MCP server for Clip Operator: run the whole thing headless from Claude
@@ -96,6 +97,20 @@ function campaignSummary(c: CampaignWithStats, s: State) {
     posts: s.posts.filter((p) => p.campaignId === c.id).map(postLine),
   };
 }
+
+const captionJobOut = (j: CaptionJob, videoUrl?: string, full = false) => ({
+  id: j.id,
+  name: j.name,
+  status: j.status,
+  step: j.step,
+  error: j.error,
+  language: j.language,
+  durationSec: j.durationSec,
+  words: j.words.length,
+  transcript: full ? j.words.map((w) => w.text).join(j.joiner ?? " ") : undefined,
+  style: j.captions.style,
+  videoUrl,
+});
 
 const postLine = (p: Post) => ({ id: p.id, clipId: p.clipId, platform: p.platform, account: p.account, url: p.url, postedAt: p.postedAt, status: p.status, metrics: p.metrics, metricsUpdatedAt: p.metricsUpdatedAt });
 
@@ -314,6 +329,48 @@ export function createMcpServer(api: ApiCall): McpServer {
       );
       return { clips: out, stillRendering: pending() };
     },
+  );
+
+  tool(
+    "caption_video",
+    `Caption any video with speech: word-perfect captions in about 99 languages (detected automatically), burned in with a caption style and the workspace's brand fonts and colours. Give a public link to a video file. Waits up to waitSec for transcription and rendering, then returns a share link; call get_caption_job to check on it later. Styles: ${CAPTION_STYLES.map((x) => x.id).join(", ")}.`,
+    {
+      url: z.string().url().describe("Public link to a video file (MP4, MOV, WebM)"),
+      language: z.string().default("auto").describe('"auto" or an ISO 639-1 code like "es"'),
+      style: z.enum(CAPTION_STYLES.map((x) => x.id) as [string, ...string[]]).optional(),
+      wordsPerCaption: z.number().int().min(1).max(12).optional(),
+      glossary: z.array(z.string()).optional().describe("Names to spell right, e.g. product names"),
+      waitSec: z.number().int().min(0).max(240).default(180),
+    },
+    async ({ url, language, style, wordsPerCaption, glossary, waitSec }) => {
+      const { job } = await api<{ job: { id: string } }>("POST", "/captions/from-url", { url, language, glossary });
+      const until = Date.now() + waitSec * 1000;
+      const get = () => api<CaptionJob>("GET", `/captions/${job.id}`);
+      let j = await get();
+      while (["uploaded", "transcribing"].includes(j.status) && Date.now() < until) {
+        await sleep(3000);
+        j = await get();
+      }
+      if (j.status !== "ready") return captionJobOut(j);
+      await api("POST", `/captions/${job.id}/render`, { captions: { style, wordsPerCaption } });
+      j = await get();
+      while (j.status === "rendering" && Date.now() < until) {
+        await sleep(3000);
+        j = await get();
+      }
+      return captionJobOut(j, j.status === "done" ? (await api<{ url: string }>("GET", `/captions/${job.id}/link`)).url : undefined);
+    },
+  );
+
+  tool(
+    "get_caption_job",
+    "A captioning job: status, detected language, the transcript, and a share link once rendered.",
+    { jobId: z.string() },
+    async ({ jobId }) => {
+      const j = await api<CaptionJob>("GET", `/captions/${jobId}`);
+      return captionJobOut(j, j.status === "done" ? (await api<{ url: string }>("GET", `/captions/${jobId}/link`)).url : undefined, true);
+    },
+    true,
   );
 
   tool(

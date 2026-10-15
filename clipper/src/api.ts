@@ -1,4 +1,5 @@
 import type { BrandKit, CaptionOverrides } from "../shared/caption-styles";
+import type { CaptionJob } from "../shared/types";
 import type { Activity, Campaign, CampaignBrief, CampaignStats, Clip, Insights, LearningReport, Me, Post, ServiceStatus, SocialAccount } from "../shared/types";
 
 export type CampaignWithStats = Campaign & { stats: CampaignStats };
@@ -9,6 +10,7 @@ export interface State {
   accounts: SocialAccount[];
   insights: Record<string, Insights>;
   brand: BrandKit;
+  captionJobs: (Omit<CaptionJob, "words"> & { wordCount: number })[];
   activity: Activity[];
   status: ServiceStatus;
 }
@@ -44,6 +46,13 @@ export const api = {
   updateBrand: (b: Partial<Record<keyof BrandKit, unknown>>) => req<State>("/brand", "PUT", b),
   deleteBrandFont: (id: string) => req<State>(`/brand/fonts/${id}`, "DELETE"),
   setCampaignCaptions: (id: string, captions: CaptionOverrides | null) => req<State>(`/campaigns/${id}`, "PUT", { captions }),
+  captionJob: (id: string) => req<CaptionJob>(`/captions/${id}`),
+  captionFromUrl: (b: { url: string; language?: string; glossary?: string }) => req<{ job: CaptionJob; state: State }>("/captions/from-url", "POST", b),
+  updateCaptionJob: (id: string, b: { name?: string; captions?: CaptionOverrides; edits?: { index: number; count: number; text: string }[] }) => req<CaptionJob>(`/captions/${id}`, "PUT", b),
+  retranscribe: (id: string, language: string) => req<State>(`/captions/${id}/transcribe`, "POST", { language }),
+  renderCaptions: (id: string, captions?: CaptionOverrides) => req<State>(`/captions/${id}/render`, "POST", { captions }),
+  deleteCaptionJob: (id: string) => req<State>(`/captions/${id}`, "DELETE"),
+  captionVideoUrl: (id: string, which: "source" | "output", v?: string, download = false) => `/api/captions/${id}/video?which=${which}${v ? `&v=${encodeURIComponent(v.slice(-20))}` : ""}${download ? "&download=1" : ""}`,
   createAgentKey: () => req<{ key: string; me: Me }>("/workspace/agent-key", "POST", {}),
   revokeAgentKey: () => req<Me>("/workspace/agent-key", "DELETE"),
 

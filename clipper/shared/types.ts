@@ -281,6 +281,8 @@ export interface WorkspaceDoc {
   activity: Activity[];
   /** Written findings from the learning system, keyed by scope ("all" or a campaign id). */
   insights?: Record<string, Insights>;
+  /** Videos captioned on the Captions page. */
+  captionJobs?: CaptionJob[];
   /** Fonts, colours and default caption style for everything this workspace renders. */
   brand?: BrandKit;
 }
@@ -349,6 +351,8 @@ export interface ServiceStatus {
   storage: "postgres" | "file";
   /** The OpenReel editor is installed at /editor/. */
   editor?: boolean;
+  /** Speech-to-text for captions is installed. */
+  captions?: boolean;
 }
 
 export interface CampaignStats {
@@ -361,4 +365,35 @@ export interface CampaignStats {
   paid: number;
   /** Earnings capped by what the whole campaign budget could pay. */
   budgetShare?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Captions page: caption any video with speech
+
+export type CaptionJobStatus = "uploaded" | "transcribing" | "ready" | "rendering" | "done" | "failed";
+
+export interface CaptionJob {
+  id: string;
+  name: string;
+  status: CaptionJobStatus;
+  step?: string;
+  error?: string;
+  sourceKey: string;
+  width?: number;
+  height?: number;
+  durationSec?: number;
+  /** "auto" or an ISO 639-1 code chosen by the user. */
+  languageHint: string;
+  /** Names and terms to spell right (passed to the recognizer as a hint). */
+  glossary?: string[];
+  /** Detected (or chosen) spoken language. */
+  language?: string;
+  joiner?: "" | " ";
+  /** Every spoken word with its time. Editing a word keeps its timing. */
+  words: { text: string; start: number; end: number }[];
+  captions: import("./caption-styles").CaptionOverrides;
+  outputKey?: string;
+  renderedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
