@@ -1104,3 +1104,20 @@ tr.clickable:hover td {
     grid-template-columns: 1fr;
   }
 }
+
+.avatar-sm {
+  display: inline-block;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--sunk);
+  object-fit: cover;
+  vertical-align: middle;
+}
+
+.clickable-text {
+  cursor: pointer;
+}
+.clickable-text:hover {
+  text-decoration: underline;
+}

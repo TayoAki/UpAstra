@@ -5,6 +5,7 @@ import { api } from "../api";
 import { Tabs } from "../App";
 import { AgentAccess } from "./AgentAccess";
 import { BrandCaptions } from "./BrandCaptions";
+import { ConnectAccounts } from "../components/ConnectAccounts";
 import { Empty, Panel } from "../components/ui";
 import { go, useApp } from "../store";
 
@@ -42,7 +43,8 @@ export function SettingsView({ tab }: { tab: string }) {
                 </p>
               </div>
             </div>
-            <Panel title="Add an account">
+            <ConnectAccounts />
+            <Panel title="Add an account by hand">
               <div className="form-grid">
                 <label className="field">
                   Platform
@@ -75,11 +77,11 @@ export function SettingsView({ tab }: { tab: string }) {
                 Add account
               </button>
             </Panel>
-            <Panel title="Your accounts">
-              {state?.accounts.length ? (
+            <Panel title="Accounts added by hand">
+              {state?.accounts.some((a) => !a.outstandId) ? (
                 <table className="table">
                   <tbody>
-                    {state.accounts.map((a) => (
+                    {state.accounts.filter((a) => !a.outstandId).map((a) => (
                       <tr key={a.id}>
                         <td>{PLATFORM_LABEL[a.platform]}</td>
                         <td>

@@ -3,6 +3,9 @@ import type { CampaignBrief, CampaignStats, Clip, ClipStatus, Post, QACheck } fr
 // Plain-code rules shared by the server and the dashboard: what a post earns,
 // how engaged it is, and whether a clip plan follows the brief.
 
+/** Posts that are (or were) actually live: not rejected, not still scheduled, not failed to publish. */
+export const countsAsPost = (p: { status: string }) => p.status !== "rejected" && p.status !== "scheduled" && p.status !== "failed";
+
 export const round2 = (n: number) => Math.round(n * 100) / 100;
 export const fmtUSD = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: n < 100 && n % 1 ? 2 : 0, maximumFractionDigits: 2 })}`;
 export const fmtNum = (n: number) => (n >= 1e6 ? `${round2(n / 1e6)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}K` : n.toLocaleString("en-US"));
@@ -12,7 +15,7 @@ export const engagementRate = (m: Post["metrics"]) => (m.views > 0 ? (m.likes + 
 
 /** What a post should earn under the brief's payout terms (or what it was actually paid). */
 export function postEarnings(post: Post, payout: CampaignBrief["payout"]): number {
-  if (post.status === "rejected") return 0;
+  if (!countsAsPost(post)) return 0;
   if (typeof post.paidAmount === "number") return post.paidAmount;
   if (!payout.cpm) return 0;
   if (payout.minViews && post.metrics.views < payout.minViews) return 0;
@@ -23,14 +26,15 @@ export function postEarnings(post: Post, payout: CampaignBrief["payout"]): numbe
 export function campaignStats(brief: CampaignBrief, clips: Clip[], posts: Post[]): CampaignStats {
   const clipsByStatus = { draft: 0, approved: 0, rendering: 0, ready: 0, posted: 0, rejected: 0 } as Record<ClipStatus, number>;
   for (const c of clips) clipsByStatus[c.status]++;
-  const live = posts.filter((p) => p.status !== "rejected");
+  const live = posts.filter(countsAsPost);
   const views = live.reduce((s, p) => s + p.metrics.views, 0);
   const interactions = live.reduce((s, p) => s + p.metrics.likes + p.metrics.comments + p.metrics.shares, 0);
   const estimatedEarnings = round2(posts.reduce((s, p) => s + postEarnings(p, brief.payout), 0));
   return {
     clips: clips.length,
     clipsByStatus,
-    posts: posts.length,
+    posts: posts.filter((p) => p.status !== "scheduled" && p.status !== "failed").length,
+    scheduled: posts.filter((p) => p.status === "scheduled").length,
     views,
     engagementRate: views ? interactions / views : 0,
     estimatedEarnings,

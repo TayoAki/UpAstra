@@ -79,7 +79,7 @@ export function AppProvider({ me, setMe, children }: { me: Me; setMe: (m: Me | n
 
 /** Hash routes: #/, #/new, #/c/:id/:tab, #/review, #/posts, #/settings */
 export function useRoute(): [string[], (to: string) => void] {
-  const parse = () => window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  const parse = () => window.location.hash.replace(/^#\/?/, "").split("?")[0].split("/").filter(Boolean);
   const [parts, setParts] = useState(parse);
   useEffect(() => {
     const on = () => setParts(parse());
@@ -89,3 +89,5 @@ export function useRoute(): [string[], (to: string) => void] {
   return [parts, (to: string) => (window.location.hash = to)];
 }
 export const go = (to: string) => (window.location.hash = to);
+/** Query parameters after the hash route, e.g. #/settings/accounts?connected=1 */
+export const hashQuery = () => new URLSearchParams(window.location.hash.split("?")[1] ?? "");

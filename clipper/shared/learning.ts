@@ -1,5 +1,6 @@
 import type { Clip, ClipFormat, ClipTraits, Confidence, HookStyle, LearningReport, Platform, Playbook, Post, TraitStat, WorkspaceDoc } from "./types";
 import { HOOK_STYLES, PLATFORM_LABEL, VOICES } from "./types";
+import { countsAsPost } from "./rules";
 
 // The learning system's math. Pure functions over the workspace document, so
 // the dashboard, the planner and the tests all see the same numbers.
@@ -105,7 +106,7 @@ const DIMENSIONS: { id: string; label: string; name: (v: string) => string }[] =
 const confidenceOf = (n: number): Confidence => (n < 3 ? "too-early" : n < 8 ? "early-signal" : "solid");
 
 export function analyze(doc: Pick<WorkspaceDoc, "posts" | "clips">, scope = "all", nowMs = Date.now()): LearningReport {
-  const posts = doc.posts.filter((p) => p.status !== "rejected" && (scope === "all" || p.campaignId === scope));
+  const posts = doc.posts.filter((p) => countsAsPost(p) && (scope === "all" || p.campaignId === scope));
   const clipById = new Map(doc.clips.map((c) => [c.id, c]));
 
   const mature = posts.map((post) => ({ post, views: comparableViews(post, nowMs) })).filter((x): x is { post: Post; views: number } => x.views !== undefined);

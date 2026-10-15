@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { AlertTriangle, Clapperboard, Download, Loader2, RotateCcw, Scissors } from "lucide-react";
+import { AlertTriangle, CalendarClock, Clapperboard, Download, Loader2, RotateCcw, Scissors } from "lucide-react";
+import { ScheduleModal } from "./ScheduleModal";
 import type { Clip, VoiceOption } from "../../shared/types";
 import { VOICES } from "../../shared/types";
 import { api } from "../api";
@@ -11,6 +12,7 @@ const STEPS = ["queued", "analyzing", "voicing", "rendering", "done"] as const;
 export function RenderPanel({ clip }: { clip: Clip }) {
   const { run, busy, state } = useApp();
   const [voice, setVoice] = useState<VoiceOption>(clip.render?.voice ?? "ash");
+  const [scheduling, setScheduling] = useState(false);
   const r = clip.render;
   const live = r && !["done", "failed"].includes(r.status);
   const canRender = state?.status.render === "connected";
@@ -85,6 +87,9 @@ export function RenderPanel({ clip }: { clip: Clip }) {
             <a className="btn sm primary" href={api.videoUrl(clip.id, r.videoKey, true)}>
               <Download size={14} /> Download MP4
             </a>
+            <button className="btn sm" onClick={() => setScheduling(true)}>
+              <CalendarClock size={14} /> Post / schedule
+            </button>
             {state?.status.editor && r.parts && (
               <a className="btn sm" href={api.editorUrl(clip.id)} target="_blank" rel="noopener" title="Open the shots, voice, captions and text on a timeline (OpenReel)">
                 <Scissors size={14} /> Edit in editor
@@ -92,6 +97,7 @@ export function RenderPanel({ clip }: { clip: Clip }) {
             )}
           </div>
           {r.editedAt && <p className="small muted" style={{ margin: 0 }}>Edited in the editor. Rendering again replaces the edit.</p>}
+          {scheduling && <ScheduleModal clip={clip} onClose={() => setScheduling(false)} />}
           {controls("Render again")}
         </div>
       </div>

@@ -53,6 +53,16 @@ export const api = {
   renderCaptions: (id: string, captions?: CaptionOverrides) => req<State>(`/captions/${id}/render`, "POST", { captions }),
   deleteCaptionJob: (id: string) => req<State>(`/captions/${id}`, "DELETE"),
   captionVideoUrl: (id: string, which: "source" | "output", v?: string, download = false) => `/api/captions/${id}/video?which=${which}${v ? `&v=${encodeURIComponent(v.slice(-20))}` : ""}${download ? "&download=1" : ""}`,
+  connectSocial: (network: string) => req<{ url: string }>("/social/connect", "POST", { network }),
+  syncSocial: () => req<State>("/social/sync", "POST", {}),
+  pendingPages: (session: string) => req<{ pages: { id: string; name: string; network?: string; picture?: string }[] }>(`/social/pending/${encodeURIComponent(session)}`),
+  finalizePages: (session: string, pageIds: string[]) => req<State>(`/social/pending/${encodeURIComponent(session)}`, "POST", { pageIds }),
+  disconnectSocial: (id: string) => req<State>(`/social/accounts/${id}`, "DELETE"),
+  tiktokPrivacy: (accountId: string) => req<{ options: string[] }>(`/social/accounts/${accountId}/tiktok-privacy`),
+  scheduleClip: (id: string, b: { accountIds: string[]; at?: string; caption: string; tiktok?: { mode: "inbox" | "direct"; privacy?: string }; youtube?: { title?: string; privacy?: string } }) =>
+    req<{ posts: string[]; state: State }>(`/clips/${id}/schedule`, "POST", b),
+  cancelPost: (id: string) => req<State>(`/posts/${id}/cancel`, "POST", {}),
+  syncMetrics: () => req<{ updated: number; state: State }>("/social/sync-metrics", "POST", {}),
   createAgentKey: () => req<{ key: string; me: Me }>("/workspace/agent-key", "POST", {}),
   revokeAgentKey: () => req<Me>("/workspace/agent-key", "DELETE"),
 

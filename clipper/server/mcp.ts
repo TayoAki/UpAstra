@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CAPTION_STYLES } from "../shared/caption-styles";
-import type { Campaign, CampaignStats, CaptionJob, Clip, Insights, LearningReport, Post } from "../shared/types";
+import type { Campaign, CampaignStats, CaptionJob, Clip, Insights, LearningReport, Post, ServiceStatus, SocialAccount } from "../shared/types";
 import { HOOK_STYLES, PLATFORMS, VOICES } from "../shared/types";
 
 // MCP server for Clip Operator: run the whole thing headless from Claude
@@ -33,7 +33,8 @@ interface State {
   clips: Clip[];
   posts: Post[];
   insights: Record<string, Insights>;
-  status: Record<string, string>;
+  accounts: SocialAccount[];
+  status: ServiceStatus;
 }
 
 const text = (value: unknown) => ({ content: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }] });
@@ -374,6 +375,69 @@ export function createMcpServer(api: ApiCall): McpServer {
   );
 
   tool(
+    "list_social_accounts",
+    "Social accounts connected for posting and scheduling (through Outstand), with the id to use in schedule_clip. Accounts marked needsReconnect can't be posted to until the user reconnects them in Settings.",
+    {},
+    async () => {
+      const s = await state();
+      return {
+        publishingEnabled: !!s.status.publishing,
+        accounts: s.accounts.filter((a) => a.outstandId).map((a) => ({ id: a.id, platform: a.platform, handle: a.handle, needsReconnect: !!a.needsReconnect })),
+      };
+    },
+    true,
+  );
+
+  tool(
+    "schedule_clip",
+    "Post a rendered clip now, or schedule it (up to 30 days ahead), to one or more connected accounts. This publishes publicly on the user's accounts: only do it when the user asked for it, and confirm accounts and time with them. TikTok goes to the creator's inbox as a draft unless tiktokDirect is set with a privacy level.",
+    {
+      clipId: z.string(),
+      accountIds: z.array(z.string()).min(1).describe("ids from list_social_accounts"),
+      at: z.string().optional().describe("ISO 8601 time with timezone; omit to post now"),
+      caption: z.string().optional().describe("Defaults to the clip's caption and hashtags"),
+      tiktokDirect: z.boolean().default(false),
+      tiktokPrivacy: z.enum(["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY"]).optional(),
+      youtubeTitle: z.string().max(100).optional(),
+    },
+    async ({ clipId, accountIds, at, caption, tiktokDirect, tiktokPrivacy, youtubeTitle }) => {
+      const r = await api<{ posts: string[]; state: State }>("POST", `/clips/${clipId}/schedule`, {
+        accountIds,
+        at,
+        caption,
+        tiktok: tiktokDirect ? { mode: "direct", privacy: tiktokPrivacy } : { mode: "inbox" },
+        youtube: youtubeTitle ? { title: youtubeTitle } : undefined,
+      });
+      return r.state.posts.filter((p) => r.posts.includes(p.id)).map(postLine);
+    },
+  );
+
+  tool(
+    "list_schedule",
+    "Posts going out through connected accounts: scheduled (upcoming), published (with links and views), and failed (with the reason).",
+    {},
+    async () => {
+      const posts = (await state()).posts.filter((p) => p.outstand);
+      return {
+        scheduled: posts.filter((p) => p.status === "scheduled").map(postLine),
+        failed: posts.filter((p) => p.status === "failed").map((p) => ({ ...postLine(p), error: p.outstand?.error })),
+        published: posts.filter((p) => p.status !== "scheduled" && p.status !== "failed").slice(0, 30).map(postLine),
+      };
+    },
+    true,
+  );
+
+  tool(
+    "cancel_scheduled_post",
+    "Cancel a scheduled post before it goes out (on every account it was going to).",
+    { postId: z.string() },
+    async ({ postId }) => {
+      await api("POST", `/posts/${postId}/cancel`, {});
+      return "Cancelled.";
+    },
+  );
+
+  tool(
     "log_post",
     "Record that the user posted a clip (link, platform, account). Views can be added now or later with update_post_metrics; earnings are computed from the campaign's CPM and cap.",
     {
@@ -403,7 +467,7 @@ export function createMcpServer(api: ApiCall): McpServer {
       likes: z.number().int().nonnegative().optional(),
       comments: z.number().int().nonnegative().optional(),
       shares: z.number().int().nonnegative().optional(),
-      status: z.enum(["live", "submitted", "approved", "rejected", "paid"]).optional(),
+      status: z.enum(["live", "submitted", "approved", "rejected", "paid", "failed"]).optional(),
     },
     async ({ postId, status, ...metrics }) => {
       const m = Object.fromEntries(Object.entries(metrics).filter(([, v]) => v !== undefined));

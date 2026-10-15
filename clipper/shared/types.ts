@@ -2,14 +2,17 @@ import type { BrandKit, CaptionOverrides } from "./caption-styles";
 // Clip Operator data model. One document per workspace holds its campaigns,
 // footage, clip plans, posts and activity.
 
-export type Platform = "tiktok" | "instagram" | "youtube" | "x" | "facebook" | "snapchat" | "other";
-export const PLATFORMS: Platform[] = ["tiktok", "instagram", "youtube", "x", "facebook", "snapchat", "other"];
+export type Platform = "tiktok" | "instagram" | "youtube" | "x" | "facebook" | "threads" | "linkedin" | "bluesky" | "snapchat" | "other";
+export const PLATFORMS: Platform[] = ["tiktok", "instagram", "youtube", "x", "facebook", "threads", "linkedin", "bluesky", "snapchat", "other"];
 export const PLATFORM_LABEL: Record<Platform, string> = {
   tiktok: "TikTok",
   instagram: "Instagram",
   youtube: "YouTube Shorts",
   x: "X",
   facebook: "Facebook",
+  threads: "Threads",
+  linkedin: "LinkedIn",
+  bluesky: "Bluesky",
   snapchat: "Snapchat",
   other: "Other",
 };
@@ -224,8 +227,8 @@ export interface EditParts {
   duration: number;
 }
 
-export type PostStatus = "live" | "submitted" | "approved" | "rejected" | "paid";
-export const POST_STATUSES: PostStatus[] = ["live", "submitted", "approved", "rejected", "paid"];
+export type PostStatus = "scheduled" | "live" | "submitted" | "approved" | "rejected" | "paid" | "failed";
+export const POST_STATUSES: PostStatus[] = ["scheduled", "live", "submitted", "approved", "rejected", "paid", "failed"];
 
 export interface PostMetrics {
   views: number;
@@ -251,6 +254,8 @@ export interface Post {
   notes: string;
   /** Every metrics update, so posts can be compared at the same age. */
   history?: (PostMetrics & { at: string })[];
+  /** Published through Outstand: its post id, the connected account, and how it went. */
+  outstand?: { postId: string; accountId: string; scheduledAt?: string; error?: string; metricsSyncedAt?: string };
 }
 
 export interface SocialAccount {
@@ -259,6 +264,11 @@ export interface SocialAccount {
   handle: string;
   niche: string;
   followers?: number;
+  /** Connected through Outstand (can be posted to and scheduled). */
+  outstandId?: string;
+  avatarUrl?: string;
+  /** The platform asked for the account to be reconnected. */
+  needsReconnect?: boolean;
 }
 
 export interface Activity {
@@ -353,12 +363,16 @@ export interface ServiceStatus {
   editor?: boolean;
   /** Speech-to-text for captions is installed. */
   captions?: boolean;
+  /** Scheduling and publishing through Outstand is set up. */
+  publishing?: boolean;
 }
 
 export interface CampaignStats {
   clips: number;
   clipsByStatus: Record<ClipStatus, number>;
   posts: number;
+  /** Waiting to go out (Outstand). */
+  scheduled: number;
   views: number;
   engagementRate: number;
   estimatedEarnings: number;

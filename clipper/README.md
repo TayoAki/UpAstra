@@ -46,6 +46,59 @@ Every rendered clip can be opened on a timeline with **Edit in editor**: the [Op
 - **Browser:** the editor needs Chrome or Edge (WebCodecs with H.264).
 - **Build:** `editor/build.sh` builds OpenReel from the pinned commit in `editor/OPENREEL_COMMIT` with the patches in `editor/` (see `editor/NOTICE.md`). The Dockerfile runs it. Locally, run `bash editor/build.sh` to put it in `editor-dist/`.
 
+## Captions
+
+**Word-perfect captions**
+- **Voiced renders:** each caption word comes from the script; its timing comes from the voiceover. [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (MIT) transcribes the voice, and the script is aligned to that transcript.
+  - If the voice model adds words before or after the script, they're cut.
+  - If a take strays inside the script, it's recorded again once.
+- **Languages:** about 99 spoken languages, detected automatically. Languages written without spaces (Chinese, Japanese, Thai) are segmented properly.
+
+**Styles and brand kit**
+- **Eight styles:** bold pop, karaoke, Hormozi, one word, boxed, neon, minimal and subtitle, rendered with libass.
+- **Brand kit (Settings → Brand & captions):**
+  - default style, colours and casing;
+  - uploaded TTF/OTF fonts, checked with `fc-scan`.
+- **Per campaign:** a campaign can pick its own style on its Brief tab.
+- **Bundled fonts:** Poppins, Anton, Bebas Neue and Archivo Black. They're under the SIL OFL; the license files are in `fonts/`. Noto fonts cover other scripts.
+
+**Captions page:** captions any uploaded video with speech.
+- Fix words line by line; each line keeps its timing.
+- Pick a style and render. The output keeps the video's own shape.
+- Download or share it.
+- MCP tools: `caption_video` and `get_caption_job`.
+
+**Setup:** the Docker image builds `whisper-cli` and includes the multilingual base model. Locally, set `WHISPER_BIN` and `WHISPER_MODEL`, or put the model at `models/ggml-base.bin`.
+
+## Scheduling & publishing (Outstand)
+
+With an [Outstand](https://www.outstand.so/) API key, users connect their own TikTok, Instagram, YouTube, Facebook, X, Threads, LinkedIn and Bluesky accounts, then post or schedule rendered clips.
+
+**How it works**
+- **Accounts are tagged per workspace** (Outstand's `tenant_id`). Each workspace only ever sees its own accounts.
+- **Videos are copied to Outstand's media storage**, which keeps them 60 days, so scheduled posts outlive our 7-day links.
+- **Webhooks** mark posts live (with their public URL) or failed. They're verified against the raw body with HMAC-SHA256.
+- **Views sync back** from Outstand's analytics every 30 minutes. They feed earnings and What's working with no manual entry.
+
+**Platform limits through Outstand's shared apps**
+- **TikTok:** posts go to the creator's inbox as a draft unless "Post directly" is chosen. Direct posting is capped across all Outstand customers. Reliable direct posting at scale needs your own audited TikTok app, connected to Outstand as BYOK.
+- **YouTube:** the shared app's daily upload pool is small, so use BYOK for volume.
+- **X:** needs BYOK.
+
+**Setup**
+
+| Variable | |
+| --- | --- |
+| `OUTSTAND_API_KEY` | Organization API key (`sk_live_…`); the organization needs an active plan |
+| `OUTSTAND_WEBHOOK_SECRET` | The signing secret you set on the webhook in Outstand |
+| `OUTSTAND_SYNC_MINUTES` | View sync interval (default 30) |
+
+1. In the Outstand dashboard, add a webhook pointing to `https://<your-app>/api/outstand/webhook`.
+2. Subscribe it to `post.published`, `post.error` and `account.token_expired`.
+3. Give it the same signing secret as `OUTSTAND_WEBHOOK_SECRET`.
+
+**MCP tools:** `list_social_accounts`, `schedule_clip`, `list_schedule` and `cancel_scheduled_post`.
+
 ## Headless: MCP and API
 
 Everything in the dashboard can be run by an AI agent or a script. Create a key in **Settings → Agent access** (shown once, stored hashed, one per workspace). It works for every workspace action except account and key management. Agent actions are marked "agent" in Activity.

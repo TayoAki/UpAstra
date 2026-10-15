@@ -37,6 +37,10 @@ interface Backend {
   workspaceForOwner(userId: string): Promise<WorkspaceRow | undefined>;
   /** Agent (API / MCP) key: only its SHA-256 is stored. */
   setAgentKey(id: string, hash: string | null): Promise<void>;
+  /** Global lookup for ids from outside services (e.g. an Outstand post id → its workspace). */
+  linkExternal(kind: string, externalId: string, workspaceId: string): Promise<void>;
+  workspaceForExternal(kind: string, externalId: string): Promise<string | undefined>;
+  listExternal(kind: string, since: string): Promise<{ externalId: string; workspaceId: string }[]>;
   workspaceByAgentKey(hash: string): Promise<WorkspaceRow | undefined>;
   renameWorkspace(id: string, name: string): Promise<void>;
   deleteWorkspace(id: string): Promise<void>;
@@ -61,7 +65,11 @@ class PgBackend implements Backend {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
       CREATE INDEX IF NOT EXISTS co_workspaces_owner ON co_workspaces(owner_id);
       ALTER TABLE co_workspaces ADD COLUMN IF NOT EXISTS agent_key_hash TEXT;
-      CREATE UNIQUE INDEX IF NOT EXISTS co_workspaces_agent_key ON co_workspaces(agent_key_hash);`);
+      CREATE UNIQUE INDEX IF NOT EXISTS co_workspaces_agent_key ON co_workspaces(agent_key_hash);
+      CREATE TABLE IF NOT EXISTS co_external (
+        kind TEXT NOT NULL, external_id TEXT NOT NULL, workspace_id TEXT NOT NULL REFERENCES co_workspaces(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (kind, external_id));
+      CREATE INDEX IF NOT EXISTS co_external_recent ON co_external(kind, created_at);`);
   }
   private user = (r: Record<string, unknown> | undefined): UserRow | undefined =>
     r && { id: r.id as string, email: r.email as string, name: r.name as string, passwordHash: r.password_hash as string, createdAt: new Date(r.created_at as string).toISOString() };
@@ -88,6 +96,16 @@ class PgBackend implements Backend {
   async setAgentKey(id: string, hash: string | null) {
     await this.pool.query("UPDATE co_workspaces SET agent_key_hash=$2 WHERE id=$1", [id, hash]);
   }
+  async linkExternal(kind: string, externalId: string, workspaceId: string) {
+    await this.pool.query("INSERT INTO co_external (kind, external_id, workspace_id) VALUES ($1,$2,$3) ON CONFLICT (kind, external_id) DO UPDATE SET workspace_id=EXCLUDED.workspace_id", [kind, externalId, workspaceId]);
+  }
+  async workspaceForExternal(kind: string, externalId: string) {
+    return (await this.pool.query("SELECT workspace_id FROM co_external WHERE kind=$1 AND external_id=$2", [kind, externalId])).rows[0]?.workspace_id as string | undefined;
+  }
+  async listExternal(kind: string, since: string) {
+    const rows = (await this.pool.query("SELECT external_id, workspace_id FROM co_external WHERE kind=$1 AND created_at >= $2 ORDER BY created_at DESC LIMIT 5000", [kind, since])).rows;
+    return rows.map((r) => ({ externalId: r.external_id as string, workspaceId: r.workspace_id as string }));
+  }
   async workspaceByAgentKey(hash: string) {
     return this.ws((await this.pool.query("SELECT id, owner_id, name, created_at, agent_key_hash FROM co_workspaces WHERE agent_key_hash=$1", [hash])).rows[0]);
   }
@@ -110,6 +128,7 @@ class FileBackend implements Backend {
   kind = "file" as const;
   private users: UserRow[] = [];
   private workspaces: (WorkspaceRow & { agentKeyHash?: string })[] = [];
+  private external: { kind: string; externalId: string; workspaceId: string; createdAt: string }[] = [];
   private docs = new Map<string, WorkspaceDoc>();
   constructor(private dir: string | null) {}
   private get platformFile() {
@@ -118,7 +137,7 @@ class FileBackend implements Backend {
   private persist() {
     if (!this.dir) return;
     fs.mkdirSync(this.dir, { recursive: true });
-    fs.writeFileSync(this.platformFile!, JSON.stringify({ users: this.users, workspaces: this.workspaces }, null, 1));
+    fs.writeFileSync(this.platformFile!, JSON.stringify({ users: this.users, workspaces: this.workspaces, external: this.external }, null, 1));
   }
   async init() {
     if (this.dir && fs.existsSync(this.platformFile!)) Object.assign(this, JSON.parse(fs.readFileSync(this.platformFile!, "utf8")));
@@ -159,6 +178,16 @@ class FileBackend implements Backend {
   async workspaceByAgentKey(hash: string) {
     return this.row(this.workspaces.find((w) => w.agentKeyHash === hash));
   }
+  async linkExternal(kind: string, externalId: string, workspaceId: string) {
+    this.external = [...this.external.filter((e) => !(e.kind === kind && e.externalId === externalId)), { kind, externalId, workspaceId, createdAt: new Date().toISOString() }];
+    this.persist();
+  }
+  async workspaceForExternal(kind: string, externalId: string) {
+    return this.external.find((e) => e.kind === kind && e.externalId === externalId)?.workspaceId;
+  }
+  async listExternal(kind: string, since: string) {
+    return this.external.filter((e) => e.kind === kind && e.createdAt >= since).map(({ externalId, workspaceId }) => ({ externalId, workspaceId }));
+  }
   async renameWorkspace(id: string, name: string) {
     const w = this.workspaces.find((x) => x.id === id);
     if (w) w.name = name;
@@ -166,6 +195,7 @@ class FileBackend implements Backend {
   }
   async deleteWorkspace(id: string) {
     this.workspaces = this.workspaces.filter((w) => w.id !== id);
+    this.external = this.external.filter((e) => e.workspaceId !== id);
     this.docs.delete(id);
     if (this.dir) fs.rmSync(path.join(this.dir, "workspaces", `${id}.json`), { force: true });
     this.persist();

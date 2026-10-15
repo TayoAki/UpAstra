@@ -28,7 +28,7 @@ export const Empty = ({ children }: { children: ReactNode }) => <div className="
 
 const CLIP_TONE: Record<ClipStatus, string> = { draft: "", approved: "info", rendering: "warn", ready: "ok", posted: "accent", rejected: "bad" };
 export const ClipBadge = ({ status }: { status: ClipStatus }) => <span className={`badge ${CLIP_TONE[status]}`}>{status}</span>;
-const POST_TONE: Record<PostStatus, string> = { live: "info", submitted: "warn", approved: "ok", rejected: "bad", paid: "accent" };
+const POST_TONE: Record<PostStatus, string> = { scheduled: "", live: "info", submitted: "warn", approved: "ok", rejected: "bad", paid: "accent", failed: "bad" };
 export const PostBadge = ({ status }: { status: PostStatus }) => <span className={`badge ${POST_TONE[status]}`}>{status}</span>;
 
 export function Checks({ checks }: { checks: QACheck[] }) {

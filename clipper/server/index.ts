@@ -1,10 +1,12 @@
 import { createApp, serviceStatus } from "./app";
 import { initAuth } from "./auth";
 import { flushAll, getBackend } from "./db";
+import { startMetricsPoller } from "./publishing";
 
 initAuth();
 await getBackend().init();
 const port = Number(process.env.PORT ?? 8788);
+startMetricsPoller();
 const server = createApp().listen(port, () => {
   const s = serviceStatus();
   console.log(`Clip Operator on http://localhost:${port}  (storage: ${s.storage}, AI: ${s.ai}${s.ai === "live" ? ` · ${s.aiModel}` : ""})`);

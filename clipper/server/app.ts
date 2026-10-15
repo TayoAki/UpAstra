@@ -19,6 +19,8 @@ import { applyEdits, enqueueCaptionJob } from "./caption-jobs";
 import { transcriptionAvailable } from "./transcribe";
 import { LANGUAGES } from "../shared/languages";
 import { safeFetch } from "./sources";
+import { authUrl, disconnectAccount, finalizePending, NETWORKS, outstandConfigured, pendingPages, tiktokPrivacyOptions, verifyWebhook } from "./outstand";
+import { cancelScheduled, handleWebhook, scheduleClip, syncAccounts, syncMetrics, type WebhookEvent } from "./publishing";
 import { bundledFontsDir, fontInfo } from "./fonts";
 import { accentOf, BUNDLED_FONTS, CAPTION_STYLES, resolveCaptionStyle, type BrandKit, type CaptionOverrides } from "../shared/caption-styles";
 import { probe, run } from "./media";
@@ -41,6 +43,7 @@ export function serviceStatus(): ServiceStatus {
     storage: getBackend().kind,
     editor: fs.existsSync(path.join(editorDir(), "index.html")),
     captions: transcriptionAvailable(),
+    publishing: outstandConfigured(),
   };
 }
 
@@ -190,6 +193,25 @@ export function createApp() {
     res.setHeader("X-Frame-Options", "DENY");
     next();
   });
+  // Outstand webhooks: verified against the raw body, so mounted before the JSON parser.
+  app.post(
+    "/api/outstand/webhook",
+    express.raw({ type: "*/*", limit: "1mb" }),
+    wrap(async (req, res) => {
+      if (!process.env.OUTSTAND_WEBHOOK_SECRET) throw new HttpError(503, "Webhook signing secret isn't configured");
+      const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+      if (!verifyWebhook(raw, req.get("x-outstand-signature"))) throw new HttpError(401, "Bad signature");
+      let event: WebhookEvent;
+      try {
+        event = JSON.parse(raw.toString("utf8"));
+      } catch {
+        throw new HttpError(400, "Not JSON");
+      }
+      const handled = await handleWebhook(event);
+      res.json({ ok: true, handled });
+    }),
+  );
+
   // The editor's AI chat sends large requests (tool schemas, timeline state).
   app.use("/api/ai/v1", express.json({ limit: "8mb" }));
   app.use("/api", express.json({ limit: "1mb" }));
@@ -360,6 +382,110 @@ export function createApp() {
       log({ kind: "account", message: "Agent key revoked." });
       save();
       res.json(await me(req.userId!));
+    }),
+  );
+
+  // ---- Publishing (Outstand) ---------------------------------------------
+  api.post(
+    "/social/connect",
+    wrap(async (req, res) => {
+      const network = String(req.body?.network ?? "");
+      if (!NETWORKS.some((n) => n.id === network)) throw new HttpError(400, "Pick a network to connect");
+      res.json({ url: await authUrl(network, req.workspaceId!, `${publicBase(req)}/api/social/callback`) });
+    }),
+  );
+
+  // Where Outstand sends the browser after the network's sign-in.
+  api.get(
+    "/social/callback",
+    wrap(async (req, res) => {
+      const q = req.query as Record<string, string | undefined>;
+      if (q.error || q.success === "false") return void res.redirect(`/#/settings/accounts?connect_error=${encodeURIComponent(String(q.error ?? q.message ?? "The connection was cancelled"))}`);
+      if (q.session) return void res.redirect(`/#/settings/accounts?pending=${encodeURIComponent(String(q.session))}`);
+      await syncAccounts(req.workspaceId!);
+      log({ kind: "account", message: `Connected ${q.username ? `@${q.username}` : "a social account"}.` });
+      save();
+      res.redirect("/#/settings/accounts?connected=1");
+    }),
+  );
+
+  // Facebook / LinkedIn: pick which pages to connect.
+  api.get(
+    "/social/pending/:session",
+    wrap(async (req, res) => res.json({ pages: await pendingPages(String(req.params.session)) })),
+  );
+  api.post(
+    "/social/pending/:session",
+    wrap(async (req, res) => {
+      const ids = Array.isArray(req.body?.pageIds) ? req.body.pageIds.map(String).slice(0, 50) : [];
+      if (!ids.length) throw new HttpError(400, "Pick at least one page");
+      await finalizePending(String(req.params.session), ids);
+      await syncAccounts(req.workspaceId!);
+      res.json(stateFor());
+    }),
+  );
+
+  api.post(
+    "/social/sync",
+    wrap(async (req, res) => {
+      await syncAccounts(req.workspaceId!);
+      res.json(stateFor());
+    }),
+  );
+
+  api.delete(
+    "/social/accounts/:id",
+    humansOnly,
+    wrap(async (req, res) => {
+      const doc = getDoc();
+      const a = doc.accounts.find((x) => x.id === req.params.id);
+      if (!a) throw new HttpError(404, "Account not found");
+      if (a.outstandId) await disconnectAccount(a.outstandId).catch((e) => console.error("[outstand] disconnect:", (e as Error).message));
+      doc.accounts = doc.accounts.filter((x) => x.id !== a.id);
+      log({ kind: "account", message: `Disconnected ${a.platform} @${a.handle}.` });
+      save();
+      res.json(stateFor());
+    }),
+  );
+
+  api.get(
+    "/social/accounts/:id/tiktok-privacy",
+    wrap(async (req, res) => {
+      const a = getDoc().accounts.find((x) => x.id === req.params.id && x.outstandId && x.platform === "tiktok");
+      if (!a) throw new HttpError(404, "Not a connected TikTok account");
+      res.json({ options: await tiktokPrivacyOptions(a.outstandId!) });
+    }),
+  );
+
+  api.post(
+    "/clips/:id/schedule",
+    wrap(async (req, res) => {
+      const clip = findClip(String(req.params.id));
+      const b = req.body ?? {};
+      const posts = await scheduleClip(req.workspaceId!, clip, {
+        accountIds: Array.isArray(b.accountIds) ? b.accountIds.map(String) : [],
+        at: typeof b.at === "string" && b.at ? b.at : undefined,
+        caption: String(b.caption ?? `${clip.caption}\n\n${clip.hashtags.join(" ")}`),
+        tiktok: b.tiktok?.mode === "direct" ? { mode: "direct", privacy: String(b.tiktok.privacy ?? "") } : { mode: "inbox" },
+        youtube: b.youtube ? { title: typeof b.youtube.title === "string" ? b.youtube.title : undefined, privacy: ["public", "unlisted", "private"].includes(b.youtube.privacy) ? b.youtube.privacy : undefined } : undefined,
+      });
+      res.status(201).json({ posts: posts.map((p) => p.id), state: stateFor() });
+    }),
+  );
+
+  api.post(
+    "/posts/:id/cancel",
+    wrap(async (req, res) => {
+      await cancelScheduled(findPost(String(req.params.id)));
+      res.json(stateFor());
+    }),
+  );
+
+  api.post(
+    "/social/sync-metrics",
+    wrap(async (_req, res) => {
+      const updated = await syncMetrics();
+      res.json({ updated, state: stateFor() });
     }),
   );
 
