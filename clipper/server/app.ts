@@ -3,14 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { campaignStats } from "../shared/rules";
-import type { CaptionJob, Campaign, CampaignBrief, Clip, ClipStatus, Me, Platform, Post, PostStatus, ServiceStatus, SocialAccount, VoiceOption } from "../shared/types";
+import type { AgentRun, CaptionJob, Campaign, CampaignBrief, Clip, ClipStatus, Me, Platform, Post, PostStatus, ServiceStatus, SocialAccount, VoiceOption } from "../shared/types";
 import { CLIP_STATUSES, PLATFORMS, POST_STATUSES, VOICES } from "../shared/types";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { bearerAgentKey, clearSession, clearThrottle, hashAgentKey, hashPassword, humansOnly, issueSession, newAgentKey, requireWorkspace, signVideoLink, throttle, verifyPassword, verifyVideoLink } from "./auth";
 import { HttpError, emptyDoc, forgetTenant, getBackend, getDoc, loadTenant, log, newId, now, runInWorkspace, save, type UserRow } from "./db";
 import { createMcpServer, httpApi } from "./mcp";
 import { extractBrief, normalizeBrief } from "./extract";
-import { aiLive, editorModel, forwardChat, mediaLive, modelFor } from "./llm";
+import { aiLive, editorModel, forwardChat, mediaLive, modelFor, spendAI } from "./llm";
 import { analyzeFootage } from "./moments";
 import { enqueueRender, renderAvailable } from "./render";
 import { saveStream, saveTo, saveUpload } from "./footage-cache";
@@ -20,6 +20,7 @@ import { transcriptionAvailable } from "./transcribe";
 import { LANGUAGES } from "../shared/languages";
 import { safeFetch } from "./sources";
 import { authUrl, disconnectAccount, finalizePending, NETWORKS, outstandConfigured, pendingPages, tiktokPrivacyOptions, verifyWebhook } from "./outstand";
+import { isRunning, resolvePending, sendToAgent, stopAgent } from "./agent";
 import { cancelScheduled, handleWebhook, scheduleClip, syncAccounts, syncMetrics, type WebhookEvent } from "./publishing";
 import { bundledFontsDir, fontInfo } from "./fonts";
 import { accentOf, BUNDLED_FONTS, CAPTION_STYLES, resolveCaptionStyle, type BrandKit, type CaptionOverrides } from "../shared/caption-styles";
@@ -47,17 +48,6 @@ export function serviceStatus(): ServiceStatus {
   };
 }
 
-// AI calls cost money; cap them per workspace per day.
-const aiCalls = new Map<string, { day: string; n: number }>();
-function spendAI(workspaceId: string, n = 1) {
-  if (!aiLive()) return;
-  const day = new Date().toISOString().slice(0, 10);
-  const c = aiCalls.get(workspaceId);
-  const used = c?.day === day ? c.n : 0;
-  const limit = Number(process.env.AI_DAILY_LIMIT ?? 150);
-  if (used + n > limit) throw new HttpError(429, `Daily AI limit reached (${limit}). It resets at midnight UTC.`);
-  aiCalls.set(workspaceId, { day, n: used + n });
-}
 
 const findCampaign = (id: string) => {
   const c = getDoc().campaigns.find((x) => x.id === id);
@@ -107,6 +97,7 @@ function stateFor(): unknown {
     insights: doc.insights ?? {},
     brand: doc.brand ?? {},
     captionJobs: (doc.captionJobs ?? []).map(({ words, ...j }) => ({ ...j, wordCount: words.length })),
+    agentRuns: (doc.agentRuns ?? []).map((r) => ({ id: r.id, title: r.title, status: r.status, updatedAt: r.updatedAt, pending: !!r.pending })),
     activity: doc.activity.slice(0, 100),
     status: serviceStatus(),
   };
@@ -384,6 +375,35 @@ export function createApp() {
       res.json(await me(req.userId!));
     }),
   );
+
+  // ---- Clipping Agent (in-app chat) --------------------------------------
+  const agentCtx = (req: Request) => ({
+    workspaceId: req.workspaceId!,
+    baseUrl: `http://127.0.0.1:${req.socket.localPort}`,
+    cookie: String(req.headers.cookie ?? ""),
+    timezone: typeof req.body?.timezone === "string" && /^[\w/+-]{1,64}$/.test(req.body.timezone) ? req.body.timezone : "UTC",
+  });
+  const runOut = (r: AgentRun) => ({ ...r, working: isRunning(r.id) });
+  api.get("/agent/runs/:id", (req, res) => {
+    const r = getDoc().agentRuns?.find((x) => x.id === req.params.id);
+    if (!r) throw new HttpError(404, "Run not found");
+    res.json(runOut(r));
+  });
+  api.post("/agent/runs", humansOnly, (req, res) => {
+    const message = String(req.body?.message ?? "").trim();
+    if (!message) throw new HttpError(400, "Say what you'd like the agent to do");
+    const run = sendToAgent(agentCtx(req), message, typeof req.body?.runId === "string" ? req.body.runId : undefined);
+    res.status(202).json(runOut(run));
+  });
+  api.post("/agent/runs/:id/approve", humansOnly, (req, res) => res.json(runOut(resolvePending(agentCtx(req), String(req.params.id), req.body?.approve === true))));
+  api.post("/agent/runs/:id/stop", humansOnly, (req, res) => res.json(runOut(stopAgent(String(req.params.id)))));
+  api.delete("/agent/runs/:id", humansOnly, (req, res) => {
+    const doc = getDoc();
+    stopAgent(String(req.params.id));
+    doc.agentRuns = (doc.agentRuns ?? []).filter((r) => r.id !== req.params.id);
+    save();
+    res.json(stateFor());
+  });
 
   // ---- Publishing (Outstand) ---------------------------------------------
   api.post(

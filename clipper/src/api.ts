@@ -11,6 +11,7 @@ export interface State {
   insights: Record<string, Insights>;
   brand: BrandKit;
   captionJobs: (Omit<CaptionJob, "words"> & { wordCount: number })[];
+  agentRuns: { id: string; title: string; status: string; updatedAt: string; pending: boolean }[];
   activity: Activity[];
   status: ServiceStatus;
 }
@@ -63,6 +64,7 @@ export const api = {
     req<{ posts: string[]; state: State }>(`/clips/${id}/schedule`, "POST", b),
   cancelPost: (id: string) => req<State>(`/posts/${id}/cancel`, "POST", {}),
   syncMetrics: () => req<{ updated: number; state: State }>("/social/sync-metrics", "POST", {}),
+  deleteAgentRun: (id: string) => req<State>(`/agent/runs/${id}`, "DELETE"),
   createAgentKey: () => req<{ key: string; me: Me }>("/workspace/agent-key", "POST", {}),
   revokeAgentKey: () => req<Me>("/workspace/agent-key", "DELETE"),
 

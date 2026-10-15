@@ -1,3 +1,4 @@
+import { HttpError } from "./db";
 // The one place the app talks to a language model (OpenRouter, or any
 // OpenAI-compatible endpoint). Without a key, callers fall back to rules.
 
@@ -31,6 +32,44 @@ function provider() {
 }
 
 export const aiLive = () => provider() !== null;
+
+// AI calls cost money; cap them per workspace per day.
+const aiCalls = new Map<string, { day: string; n: number }>();
+export function spendAI(workspaceId: string, n = 1) {
+  if (!aiLive()) return;
+  const day = new Date().toISOString().slice(0, 10);
+  const c = aiCalls.get(workspaceId);
+  const used = c?.day === day ? c.n : 0;
+  const limit = Number(process.env.AI_DAILY_LIMIT ?? 150);
+  if (used + n > limit) throw new HttpError(429, `Daily AI limit reached (${limit}). It resets at midnight UTC.`);
+  aiCalls.set(workspaceId, { day, n: used + n });
+}
+
+/** The model behind the Clipping Agent. */
+export const agentModel = () => process.env.AGENT_MODEL || DEFAULTS.script.model;
+
+/**
+ * One non-streaming chat turn with tools for the Clipping Agent: returns the
+ * assistant message (text and tool calls) and what it cost.
+ */
+export async function forwardChatAs(
+  _who: "agent",
+  body: { messages: unknown[]; tools?: unknown[]; tool_choice?: string; max_tokens?: number },
+  signal?: AbortSignal,
+): Promise<{ message: { content?: string | null; tool_calls?: { id: string; type: "function"; function: { name: string; arguments: string } }[] }; cost: number; model: string }> {
+  const p = provider();
+  if (!p) throw new Error("No AI provider configured");
+  const res = await fetch(p.url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${p.key}`, "Content-Type": "application/json", ...p.headers },
+    body: JSON.stringify({ ...body, model: agentModel(), ...(p.openrouter ? { usage: { include: true } } : {}) }),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(180_000)]) : AbortSignal.timeout(180_000),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`AI ${res.status}: ${text.slice(0, 300)}`);
+  const data = JSON.parse(text);
+  return { message: data.choices?.[0]?.message ?? {}, cost: typeof data.usage?.cost === "number" ? data.usage.cost : 0, model: data.model ?? agentModel() };
+}
 
 /** The model behind the editor's AI chat. */
 export const editorModel = () => process.env.EDITOR_MODEL || DEFAULTS.script.model;

@@ -117,7 +117,10 @@ export async function requireWorkspace(req: Request, _res: Response, next: NextF
       if (!userId) throw new HttpError(401, "Sign in required");
       ws = await getBackend().workspaceForOwner(userId);
       if (!ws) throw new HttpError(401, "Sign in required");
-      req.actor = "human";
+      // The in-app Clipping Agent calls the API over loopback with the user's
+      // session; its actions are the agent's (and agent limits apply).
+      const loopback = /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(req.socket.remoteAddress ?? "");
+      req.actor = loopback && req.get("x-clip-agent") === "in-app" ? "agent" : "human";
     }
     req.userId = userId;
     req.workspaceId = ws.id;

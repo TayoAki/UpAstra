@@ -291,6 +291,8 @@ export interface WorkspaceDoc {
   activity: Activity[];
   /** Written findings from the learning system, keyed by scope ("all" or a campaign id). */
   insights?: Record<string, Insights>;
+  /** Conversations with the in-app Clipping Agent. */
+  agentRuns?: AgentRun[];
   /** Videos captioned on the Captions page. */
   captionJobs?: CaptionJob[];
   /** Fonts, colours and default caption style for everything this workspace renders. */
@@ -408,6 +410,38 @@ export interface CaptionJob {
   captions: import("./caption-styles").CaptionOverrides;
   outputKey?: string;
   renderedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Clipping Agent (in-app chat)
+
+export type AgentRunStatus = "running" | "waiting" | "done" | "failed" | "stopped";
+
+/** One step the agent took, for display. */
+export interface AgentStep {
+  id: string;
+  kind: "user" | "assistant" | "tool";
+  text?: string;
+  tool?: string;
+  args?: Record<string, unknown>;
+  /** Short result shown under the step. */
+  result?: string;
+  error?: boolean;
+  at: string;
+}
+
+export interface AgentRun {
+  id: string;
+  title: string;
+  status: AgentRunStatus;
+  steps: AgentStep[];
+  /** A tool call waiting for the user's OK (publishing). */
+  pending?: { stepId: string; tool: string; args: Record<string, unknown>; callId: string };
+  error?: string;
+  cost: number;
+  model?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -99,6 +99,14 @@ With an [Outstand](https://www.outstand.so/) API key, users connect their own Ti
 
 **MCP tools:** `list_social_accounts`, `schedule_clip`, `list_schedule` and `cancel_scheduled_post`.
 
+## Clipping Agent
+
+The **Agent** page is a chat that runs the whole loop for you: give it a brief and it can add the campaign, find moments, plan, check and render clips, caption videos and schedule posts. It uses the same MCP tools that outside agents get, connected in memory and acting as the signed-in user, so the same brief rules, limits and Activity log apply.
+
+- Anything that publishes (`schedule_clip`, `cancel_scheduled_post`) pauses until you approve or decline it.
+- Each model call counts against the daily AI allowance (`AI_DAILY_LIMIT`). Set the model with `AGENT_MODEL`; it defaults to the main AI model.
+- A run stops after 30 steps. A run cut off by a server restart is marked stopped; send a message to continue it.
+
 ## Headless: MCP and API
 
 Everything in the dashboard can be run by an AI agent or a script. Create a key in **Settings → Agent access** (shown once, stored hashed, one per workspace). It works for every workspace action except account and key management. Agent actions are marked "agent" in Activity.
