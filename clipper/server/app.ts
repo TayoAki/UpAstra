@@ -14,6 +14,8 @@ import { aiLive, editorModel, forwardChat, mediaLive, modelFor } from "./llm";
 import { analyzeFootage } from "./moments";
 import { enqueueRender, renderAvailable } from "./render";
 import { saveTo, saveUpload } from "./footage-cache";
+import { bundledFontsDir, fontInfo } from "./fonts";
+import { accentOf, BUNDLED_FONTS, CAPTION_STYLES, resolveCaptionStyle, type BrandKit, type CaptionOverrides } from "../shared/caption-styles";
 import { probe, run } from "./media";
 import { storageKind, videoStore } from "./storage";
 import { checkClip } from "../shared/rules";
@@ -94,6 +96,7 @@ function stateFor(): unknown {
     posts: doc.posts,
     accounts: doc.accounts,
     insights: doc.insights ?? {},
+    brand: doc.brand ?? {},
     activity: doc.activity.slice(0, 100),
     status: serviceStatus(),
   };
@@ -123,6 +126,16 @@ const scopeOf = (v: unknown) => {
   if (s !== "all") findCampaign(s);
   return s;
 };
+
+function captionOverrides(v: Record<string, unknown>): CaptionOverrides {
+  const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : undefined);
+  return {
+    style: typeof v.style === "string" && CAPTION_STYLES.some((s) => s.id === v.style) ? v.style : undefined,
+    wordsPerCaption: num(v.wordsPerCaption),
+    position: num(v.position),
+    size: num(v.size),
+  };
+}
 
 const platformOf = (v: unknown): Platform => ((PLATFORMS as string[]).includes(String(v)) ? (v as Platform) : "other");
 
@@ -248,6 +261,9 @@ export function createApp() {
     }),
   );
 
+  // ---- Bundled caption fonts (SIL Open Font License) ---------------------
+  app.use("/fonts", (_req, res, next) => (res.setHeader("Cross-Origin-Resource-Policy", "same-origin"), next()), express.static(bundledFontsDir(), { maxAge: "30d", index: false }));
+
   // ---- Signed video links (no session) -------------------------------------
   app.get(
     "/v/:ws/:clip.mp4",
@@ -335,6 +351,88 @@ export function createApp() {
     }),
   );
 
+  // ---- Brand kit: caption style, fonts, colours --------------------------
+  api.get("/brand", (_req, res) => res.json(getDoc().brand ?? {}));
+  api.put("/brand", (req, res) => {
+    const doc = getDoc();
+    const b = req.body ?? {};
+    const brand: BrandKit = { ...(doc.brand ?? {}) };
+    if (b.captionStyle === null || CAPTION_STYLES.some((x) => x.id === b.captionStyle)) brand.captionStyle = b.captionStyle ?? undefined;
+    if (b.font === null || b.font === "") brand.font = undefined;
+    else if (typeof b.font === "string") {
+      const known = [...BUNDLED_FONTS.map((f) => f.family), ...(brand.fonts ?? []).map((f) => f.family)];
+      if (!known.includes(b.font)) throw new HttpError(400, "Upload that font first, or pick a bundled one");
+      brand.font = b.font;
+    }
+    if (b.colors === null) brand.colors = undefined;
+    else if (b.colors && typeof b.colors === "object") {
+      const hex = (v: unknown) => (typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v) ? v.toUpperCase() : undefined);
+      brand.colors = { text: hex(b.colors.text), highlight: hex(b.colors.highlight), outline: hex(b.colors.outline), accent: hex(b.colors.accent) };
+    }
+    if (b.uppercase === null) brand.uppercase = undefined;
+    else if (typeof b.uppercase === "boolean") brand.uppercase = b.uppercase;
+    doc.brand = brand;
+    save();
+    res.json(stateFor());
+  });
+
+  api.post(
+    "/brand/fonts",
+    wrap(async (req, res) => {
+      const doc = getDoc();
+      const name = decodeURIComponent(String(req.headers["x-file-name"] ?? "font.ttf")).slice(0, 120);
+      const ext = (name.match(/\.(ttf|otf)$/i)?.[1] ?? "").toLowerCase();
+      if (!ext) throw new HttpError(415, "Upload a .ttf or .otf font file");
+      if ((doc.brand?.fonts ?? []).length >= 10) throw new HttpError(400, "Up to 10 brand fonts — remove one first");
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "font-"));
+      try {
+        const file = path.join(dir, `font.${ext}`);
+        try {
+          await saveTo(file, req);
+        } catch (err) {
+          throw new HttpError(400, (err as Error).message);
+        }
+        if (fs.statSync(file).size > 15e6) throw new HttpError(400, "Fonts must be under 15 MB");
+        const info = await fontInfo(file);
+        if (!info) throw new HttpError(422, "That file isn't a font we can read");
+        const id = newId("font");
+        const key = `${req.workspaceId}/fonts/${id}.${ext}`;
+        await videoStore().put(key, file, ext === "otf" ? "font/otf" : "font/ttf");
+        // "Bebas Neue Regular" → "Bebas Neue"; heavier faces keep their full name ("Poppins Black").
+        const family = /\sregular$/i.test(info.fullName) || info.fullName === info.family ? info.family : info.fullName;
+        doc.brand = { ...(doc.brand ?? {}), fonts: [...(doc.brand?.fonts ?? []).filter((f) => f.family !== family), { id, family, key, file: `${id}.${ext}` }] };
+        log({ kind: "account", message: `Brand font "${family}" uploaded.` });
+        save();
+        res.status(201).json(stateFor());
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }),
+  );
+
+  api.delete(
+    "/brand/fonts/:id",
+    wrap(async (req, res) => {
+      const doc = getDoc();
+      const f = doc.brand?.fonts?.find((x) => x.id === req.params.id);
+      if (!f) throw new HttpError(404, "Font not found");
+      await videoStore().deletePrefix(f.key).catch(() => undefined);
+      doc.brand = { ...doc.brand, fonts: doc.brand!.fonts!.filter((x) => x.id !== f.id), font: doc.brand?.font === f.family ? undefined : doc.brand?.font };
+      save();
+      res.json(stateFor());
+    }),
+  );
+
+  // Brand font files for previews and the editor (the workspace's own only).
+  api.get(
+    "/brand/fonts/:id/file",
+    wrap(async (req, res) => {
+      const f = getDoc().brand?.fonts?.find((x) => x.id === req.params.id);
+      if (!f || !f.key.startsWith(`${req.workspaceId}/`)) throw new HttpError(404, "Font not found");
+      await streamKey(req, res, f.key, f.file.endsWith(".otf") ? "font/otf" : "font/ttf", f.family);
+    }),
+  );
+
   // Campaigns: paste a brief (text or link) → extracted rules + footage.
   api.post(
     "/campaigns",
@@ -379,6 +477,8 @@ export function createApp() {
     if (typeof b.name === "string" && b.name.trim()) c.name = b.name.trim().slice(0, 120);
     if (["active", "paused", "ended"].includes(b.status)) c.status = b.status;
     if (typeof b.notes === "string") c.notes = b.notes.slice(0, 5000);
+    if (b.captions === null) c.captions = undefined;
+    else if (b.captions && typeof b.captions === "object") c.captions = captionOverrides(b.captions);
     if (b.brief && typeof b.brief === "object") {
       c.brief = normalizeBrief(b.brief as Partial<Record<keyof CampaignBrief, unknown>>, c.brief);
       // The rules changed: re-check every plan that hasn't been posted.
@@ -507,6 +607,12 @@ export function createApp() {
       shots: p.shots.map((s, i) => ({ url: part(s.key), name: `shot${i + 1}.mp4`, seconds: s.seconds })),
       voice: p.voiceKey ? { url: part(p.voiceKey), name: "voice.wav" } : undefined,
       captions: p.captions,
+      captionStyle: resolveCaptionStyle(getDoc().brand, findCampaign(clip.campaignId).captions),
+      accent: accentOf(getDoc().brand),
+      fonts: [
+        ...BUNDLED_FONTS.map((f) => ({ family: f.family, url: `/fonts/${f.file}` })),
+        ...(getDoc().brand?.fonts ?? []).map((f) => ({ family: f.family, url: `/api/brand/fonts/${f.id}/file` })),
+      ],
       hook: p.hook,
       cta: p.cta,
       saveUrl: `/api/clips/${clip.id}/edited`,

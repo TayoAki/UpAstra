@@ -4,6 +4,7 @@ import { PLATFORM_LABEL, PLATFORMS, type Platform } from "../../shared/types";
 import { api } from "../api";
 import { Tabs } from "../App";
 import { AgentAccess } from "./AgentAccess";
+import { BrandCaptions } from "./BrandCaptions";
 import { Empty, Panel } from "../components/ui";
 import { go, useApp } from "../store";
 
@@ -18,6 +19,7 @@ export function SettingsView({ tab }: { tab: string }) {
       <Tabs
         tabs={[
           { id: "workspace", label: "Workspace" },
+          { id: "brand", label: "Brand & captions" },
           { id: "accounts", label: "Posting accounts", n: state?.accounts.length },
           { id: "agent", label: "Agent access" },
           { id: "account", label: "Your account" },
@@ -26,7 +28,9 @@ export function SettingsView({ tab }: { tab: string }) {
         onPick={(t) => go(`/settings/${t}`)}
       />
       <div className="content">
-        {tab === "agent" ? (
+        {tab === "brand" ? (
+          <BrandCaptions />
+        ) : tab === "agent" ? (
           <AgentAccess />
         ) : tab === "accounts" ? (
           <>

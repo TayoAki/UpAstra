@@ -1,4 +1,5 @@
-import { H, VIDEO_H, VIDEO_TOP, W } from "./media";
+import { resolveCaptionStyle, type CaptionStyle } from "../shared/caption-styles";
+import { H, VIDEO_TOP, W } from "./media";
 
 // Captions as an ASS subtitle file burned in by ffmpeg: the hook across the
 // top, the voiceover in 2–3 word punches under the footage, and a call to
@@ -89,12 +90,42 @@ export function groups(words: Timed[], max = 3): (Timed & { words: Timed[] })[] 
 /** Caption punches as plain timed text. */
 export const chunk = (words: Timed[], max = 3): Timed[] => groups(words, max).map(({ text, start, end }) => ({ text, start, end }));
 
-export function buildAss(o: { hook: string; captions: Timed[]; cta: string; ctaFrom: number; duration: number; accent?: string; font?: string }): string {
-  const font = o.font ?? "DejaVu Sans";
-  // ASS colours are &HAABBGGRR.
-  const hex = (o.accent ?? "#E5484D").replace("#", "");
-  const accent = `&H00${hex.slice(4, 6)}${hex.slice(2, 4)}${hex.slice(0, 2)}`;
+/** #RRGGBB or #RRGGBBAA → ASS &HAABBGGRR (ASS alpha is inverted: 00 is opaque). */
+export function assColor(hex: string): string {
+  const h = hex.replace("#", "");
+  const a = h.length === 8 ? 255 - parseInt(h.slice(6, 8), 16) : 0;
+  const pad = (n: number) => n.toString(16).padStart(2, "0").toUpperCase();
+  return `&H${pad(a)}${h.slice(4, 6)}${h.slice(2, 4)}${h.slice(0, 2)}`.toUpperCase();
+}
+
+export type CaptionGroup = Timed & { words?: Timed[] };
+
+/**
+ * The full caption track: hook across the top, captions in the chosen style,
+ * and the call-to-action card at the end. `joiner` is "" for languages written
+ * without spaces.
+ */
+export function buildAss(o: {
+  hook: string;
+  captions: CaptionGroup[];
+  cta: string;
+  ctaFrom: number;
+  duration: number;
+  style?: CaptionStyle;
+  accent?: string;
+  joiner?: string;
+  language?: string;
+}): string {
+  const st = o.style ?? resolveCaptionStyle(undefined);
+  const joiner = o.joiner ?? " ";
+  const font = st.font;
+  const bold = /^DejaVu/i.test(font) ? -1 : 0;
+  const accent = assColor(o.accent ?? "#E5484D");
+  const white = assColor(st.color);
+  const hl = assColor(st.highlight);
   const hookEnd = Math.min(HOOK_SECONDS, o.duration);
+  const boxed = !!st.box;
+  const back = st.box ? assColor(st.box) : "&H64000000";
   const lines = [
     "[Script Info]",
     "ScriptType: v4.00+",
@@ -105,18 +136,36 @@ export function buildAss(o: { hook: string; captions: Timed[]; cta: string; ctaF
     "",
     "[V4+ Styles]",
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-    `Style: Hook,${font},76,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,7,2,8,70,70,${VIDEO_TOP - 330},1`,
-    `Style: Cap,${font},92,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,8,3,8,60,60,${VIDEO_TOP + VIDEO_H + 70},1`,
-    `Style: Cta,${font},72,&H00FFFFFF,&H00FFFFFF,${accent},${accent},-1,0,0,0,100,100,0,0,3,26,0,5,90,90,0,1`,
+    `Style: Hook,${font},76,${white},${white},&H00000000,&H64000000,${bold},0,0,0,100,100,0,0,1,7,2,8,70,70,${VIDEO_TOP - 330},1`,
+    `Style: Cap,${font},${st.size},${white},${white},${boxed ? back : assColor(st.outline)},${back},${bold},0,0,0,100,100,0,0,${boxed ? 3 : 1},${st.outlineWidth},${st.shadow},5,70,70,0,1`,
+    `Style: Cta,${font},72,&H00FFFFFF,&H00FFFFFF,${accent},${accent},${bold},0,0,0,100,100,0,0,3,26,0,5,90,90,0,1`,
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     `Dialogue: 1,${ts(0)},${ts(hookEnd)},Hook,,0,0,0,,{\\fad(120,200)}${esc(o.hook)}`,
   ];
-  for (const c of o.captions) {
-    if (c.start >= o.duration) break;
-    // A quick pop-in on every punch.
-    lines.push(`Dialogue: 0,${ts(c.start)},${ts(Math.min(c.end, o.duration))},Cap,,0,0,0,,{\\fscx86\\fscy86\\t(0,90,\\fscx100\\fscy100)}${esc(c.text.toUpperCase())}`);
+  const y = Math.round(st.position * H);
+  const place = `\\an5\\pos(${W / 2},${y})${st.glow ? "\\blur4" : ""}`;
+  const pop = "\\fscx86\\fscy86\\t(0,90,\\fscx100\\fscy100)";
+  const cased = (t: string) => (st.uppercase ? t.toLocaleUpperCase(o.language || undefined) : t);
+  for (const g of o.captions) {
+    if (g.start >= o.duration) break;
+    const end = Math.min(g.end, o.duration);
+    const words = g.words?.length ? g.words : [g];
+    if (st.animation === "karaoke" && words.length > 1) {
+      // One event per word: the whole line, with the spoken word in the highlight colour.
+      words.forEach((w, k) => {
+        const from = k === 0 ? g.start : w.start;
+        const to = k < words.length - 1 ? words[k + 1].start : end;
+        if (to <= from || from >= o.duration) return;
+        const text = words.map((x, q) => (q === k ? `{\\c${hl}}${esc(cased(x.text))}{\\c${white}}` : esc(cased(x.text)))).join(joiner);
+        lines.push(`Dialogue: 0,${ts(from)},${ts(Math.min(to, o.duration))},Cap,,0,0,0,,{${place}${k === 0 ? pop : ""}}${text}`);
+      });
+      continue;
+    }
+    const anim = st.animation === "pop" || st.animation === "karaoke" ? pop : st.animation === "fade" ? "\\fad(70,70)" : "";
+    const text = words.map((x) => esc(cased(x.text))).join(joiner);
+    lines.push(`Dialogue: 0,${ts(g.start)},${ts(end)},Cap,,0,0,0,,{${place}${anim}}${text}`);
   }
   if (o.cta) lines.push(`Dialogue: 2,${ts(o.ctaFrom)},${ts(o.duration)},Cta,,0,0,0,,{\\fad(150,0)}${esc(o.cta)}`);
   return lines.join("\n") + "\n";

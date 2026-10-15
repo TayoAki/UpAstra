@@ -30,6 +30,10 @@ interface EditPack {
   voice?: { url: string; name: string };
   captions: { text: string; start: number; end: number; words: Word[] }[];
   hook?: { text: string; end: number };
+  /** Clip Operator's resolved caption style (brand kit + campaign), as used in its renders. */
+  captionStyle?: { font: string; size: number; color: string; highlight: string; outline: string; outlineWidth: number; uppercase: boolean; position: number; animation: string; box?: string };
+  accent?: string;
+  fonts?: { family: string; url: string }[];
   cta?: { text: string; from: number };
   saveUrl: string;
   backUrl: string;
@@ -114,34 +118,48 @@ async function buildTimeline(pack: EditPack, progress: (s: string) => void) {
   }
 
   progress("Adding text and captions…");
+  // The brand's fonts, so text renders (and exports) as it does in Clip Operator.
+  await Promise.all(
+    (pack.fonts ?? []).map(async (f) => {
+      try {
+        if ([...document.fonts].some((x) => x.family === f.family)) return;
+        document.fonts.add(await new FontFace(f.family, `url(${f.url})`).load());
+      } catch {
+        /* the font just falls back */
+      }
+    }),
+  );
+  const cs = pack.captionStyle;
+  const font = cs?.font ?? "Inter";
+  const cased = (t: string) => (cs?.uppercase === false ? t : t.toUpperCase());
   await until(() => useEngineStore.getState().titleEngine, "the title engine");
   // Text sits on a visual row above the shots (OpenReel draws higher rows on top).
   const textTrack = await newTrack("video", "Hook & CTA", undefined, 0);
-  const bold = { fontFamily: "Inter", fontWeight: 800 as const, fontStyle: "normal" as const, textAlign: "center" as const, verticalAlign: "middle" as const, lineHeight: 1.15, letterSpacing: 0 };
+  const bold = { fontFamily: font, fontWeight: 800 as const, fontStyle: "normal" as const, textAlign: "center" as const, verticalAlign: "middle" as const, lineHeight: 1.15, letterSpacing: 0 };
   if (pack.hook?.text) {
     const c = store().createTextClip(textTrack, 0, wrap(pack.hook.text, 22), pack.hook.end, { ...bold, fontSize: 68, color: "#ffffff", strokeColor: "#000000", strokeWidth: 6 });
     if (c) store().updateTextTransform(c.id, { position: { x: 0.5, y: 0.15 } });
   }
   if (pack.cta?.text) {
-    const c = store().createTextClip(textTrack, pack.cta.from, wrap(pack.cta.text, 20), Math.max(0.5, pack.duration - pack.cta.from), { ...bold, fontSize: 64, color: "#ffffff", backgroundColor: ACCENT });
+    const c = store().createTextClip(textTrack, pack.cta.from, wrap(pack.cta.text, 20), Math.max(0.5, pack.duration - pack.cta.from), { ...bold, fontSize: 64, color: "#ffffff", backgroundColor: pack.accent ?? ACCENT });
     if (c) store().updateTextTransform(c.id, { position: { x: 0.5, y: 0.5 } });
   }
   for (const [i, cap] of pack.captions.entries()) {
     await store().addSubtitle({
       id: `co-cap-${i}`,
-      text: cap.text.toUpperCase(),
+      text: cased(cap.text),
       startTime: cap.start,
       endTime: cap.end,
-      words: cap.words.map((w) => ({ text: w.text.toUpperCase(), startTime: w.start, endTime: w.end })),
-      animationStyle: "word-highlight",
-      style: { fontFamily: "Inter", fontSize: 74, color: "#ffffff", backgroundColor: "transparent", position: "bottom", highlightColor: "#ffd60a" },
+      words: cap.words.map((w) => ({ text: cased(w.text), startTime: w.start, endTime: w.end })),
+      animationStyle: cs?.animation === "karaoke" ? "word-highlight" : "none",
+      style: { fontFamily: font, fontSize: Math.round((cs?.size ?? 92) * 0.8), color: cs?.color ?? "#ffffff", backgroundColor: cs?.box ? cs.box.slice(0, 7) : "transparent", position: "bottom", highlightColor: cs?.highlight ?? "#ffd60a" },
     });
   }
   // Captions go just under the footage band, as in Clip Operator's renders.
   const capTrack = store().project.timeline.tracks.find((t) => t.role === "captions");
   for (const c of store().getAllTextClips().filter((x) => x.trackId === capTrack?.id)) {
-    store().updateTextTransform(c.id, { position: { x: 0.5, y: 0.78 } });
-    store().updateTextStyle(c.id, { fontWeight: 800, strokeColor: "#000000", strokeWidth: 8 });
+    store().updateTextTransform(c.id, { position: { x: 0.5, y: cs?.position ?? 0.78 } });
+    store().updateTextStyle(c.id, cs?.box ? { fontFamily: font } : { fontFamily: font, strokeColor: cs?.outline ?? "#000000", strokeWidth: cs?.outlineWidth ?? 8 });
   }
 
   // The full-frame shots go underneath everything else.

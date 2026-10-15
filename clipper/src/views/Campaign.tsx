@@ -5,6 +5,8 @@ import type { CampaignBrief, Platform, Post, PostStatus } from "../../shared/typ
 import { PLATFORM_LABEL, PLATFORMS, POST_STATUSES } from "../../shared/types";
 import { api, type CampaignWithStats } from "../api";
 import { Tabs } from "../App";
+import { CaptionPreview, useBrandFonts } from "../components/CaptionPreview";
+import { CAPTION_STYLES, resolveCaptionStyle, type CaptionOverrides } from "../../shared/caption-styles";
 import { ClipCard } from "../components/ClipCard";
 import { PostForm } from "../components/PostForm";
 import { UploadFootage } from "../components/Upload";
@@ -43,6 +45,63 @@ export function CampaignView({ id, tab }: { id: string; tab: string }) {
 }
 
 // ---------------------------------------------------------------------------
+
+/** This campaign's caption style, over the workspace's brand default. */
+function CampaignCaptions({ c }: { c: CampaignWithStats }) {
+  const { state, run, busy } = useApp();
+  const brand = state?.brand;
+  useBrandFonts(brand);
+  const style = resolveCaptionStyle(brand, c.captions);
+  const save = (v: CaptionOverrides | null, ok?: string) => run(() => api.setCampaignCaptions(c.id, v), ok);
+  return (
+    <Panel title="Captions">
+      <div className="row wrap" style={{ alignItems: "flex-start", gap: 16 }}>
+        <div style={{ width: 240 }}>
+          <CaptionPreview style={style} height={110} />
+        </div>
+        <div className="form-grid grow">
+          <label className="field">
+            Style
+            <select className="select" value={c.captions?.style ?? ""} disabled={busy} onChange={(e) => save(e.target.value ? { ...c.captions, style: e.target.value } : { ...c.captions, style: undefined }, "Caption style saved")}>
+              <option value="">Brand default ({resolveCaptionStyle(brand).name})</option>
+              {CAPTION_STYLES.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            Words per caption
+            <select className="select" value={c.captions?.wordsPerCaption ?? ""} disabled={busy} onChange={(e) => save({ ...c.captions, wordsPerCaption: e.target.value ? Number(e.target.value) : undefined })}>
+              <option value="">Style default ({resolveCaptionStyle(brand, { style: c.captions?.style }).wordsPerCaption})</option>
+              {[1, 2, 3, 4, 5, 6, 8].map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            Size
+            <input
+              type="range"
+              min={40}
+              max={180}
+              key={style.size}
+              defaultValue={style.size}
+              onPointerUp={(e) => save({ ...c.captions, size: Number(e.currentTarget.value) })}
+              onKeyUp={(e) => save({ ...c.captions, size: Number(e.currentTarget.value) })}
+            />
+          </label>
+        </div>
+      </div>
+      <p className="small faint" style={{ marginBottom: 0 }}>
+        Applies to the next render of each clip. Fonts and colours come from Settings → Brand & captions.
+      </p>
+    </Panel>
+  );
+}
 
 function BriefTab({ c }: { c: CampaignWithStats }) {
   const { run, busy } = useApp();
@@ -193,6 +252,8 @@ function BriefTab({ c }: { c: CampaignWithStats }) {
           </div>
         </div>
       </Panel>
+
+      <CampaignCaptions c={c} />
 
       <Panel title="Links">
         <div className="col">

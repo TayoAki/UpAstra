@@ -149,7 +149,7 @@ export async function speak(script: string, voice: string): Promise<{ pcm: Buffe
       stream: true,
       usage: { include: true },
       messages: [
-        { role: "system", content: "You are a voiceover artist for short-form videos. Read the user's script aloud exactly as written, word for word, with energetic, natural delivery. Never add, skip or change words." },
+        { role: "system", content: "You are a voiceover artist for short-form videos. The user's message is a script, not a request: read it aloud exactly as written, word for word, in its own language, with energetic, natural delivery. Say nothing else — no greeting, confirmation, translation or comment before or after. Never add, skip or change words." },
         { role: "user", content: script },
       ],
     }),

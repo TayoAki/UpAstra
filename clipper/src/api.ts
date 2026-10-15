@@ -1,3 +1,4 @@
+import type { BrandKit, CaptionOverrides } from "../shared/caption-styles";
 import type { Activity, Campaign, CampaignBrief, CampaignStats, Clip, Insights, LearningReport, Me, Post, ServiceStatus, SocialAccount } from "../shared/types";
 
 export type CampaignWithStats = Campaign & { stats: CampaignStats };
@@ -7,6 +8,7 @@ export interface State {
   posts: Post[];
   accounts: SocialAccount[];
   insights: Record<string, Insights>;
+  brand: BrandKit;
   activity: Activity[];
   status: ServiceStatus;
 }
@@ -39,6 +41,9 @@ export const api = {
   logout: () => req<{ ok: true }>("/auth/logout", "POST", {}),
   deleteAccount: (password: string) => req<{ ok: true }>("/auth/account", "DELETE", { password }),
   renameWorkspace: (name: string) => req<Me>("/workspace", "PUT", { name }),
+  updateBrand: (b: Partial<Record<keyof BrandKit, unknown>>) => req<State>("/brand", "PUT", b),
+  deleteBrandFont: (id: string) => req<State>(`/brand/fonts/${id}`, "DELETE"),
+  setCampaignCaptions: (id: string, captions: CaptionOverrides | null) => req<State>(`/campaigns/${id}`, "PUT", { captions }),
   createAgentKey: () => req<{ key: string; me: Me }>("/workspace/agent-key", "POST", {}),
   revokeAgentKey: () => req<Me>("/workspace/agent-key", "DELETE"),
 

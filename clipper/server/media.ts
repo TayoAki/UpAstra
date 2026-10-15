@@ -20,7 +20,7 @@ export function netArgs(url: string): string[] {
   return out;
 }
 
-export function run(cmd: "ffmpeg" | "ffprobe", args: string[], timeoutMs = 20 * 60_000): Promise<{ stdout: string; stderr: string }> {
+export function run(cmd: string, args: string[], timeoutMs = 20 * 60_000): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";

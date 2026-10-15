@@ -9,6 +9,10 @@ import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, tenantLo
 import { mediaLive, speak } from "./llm";
 import { blackSpans, concat, compose, cutSegment, ffmpegAvailable, run, speechSpans } from "./media";
 import { footageSource, isCached } from "./footage-cache";
+import { alignScript, type Alignment } from "./align";
+import { NO_SPACES, transcribe, transcriptionAvailable, type Word } from "./transcribe";
+import { accentOf, resolveCaptionStyle } from "../shared/caption-styles";
+import { prepareFonts } from "./fonts";
 import { analyzeFootage, pickMoment } from "./moments";
 import { videoStore } from "./storage";
 
@@ -166,20 +170,63 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     // 2. Voiceover.
     let voicePath: string | undefined;
     let spans: { start: number; end: number }[] | undefined;
+    // Word-perfect timing: the script's words, timed from the voiceover itself.
+    let timed: Word[] | undefined;
     let duration = clip.lengthSec;
     if (r.voice !== "none") {
       if (!mediaLive()) throw new Error("AI voice needs OPENROUTER_API_KEY — render with “No voice” instead");
-      step(r, "voicing", `Recording the voiceover (${r.voice})`);
-      const v = await speak(clip.narration, r.voice);
-      r.cost = round2((r.cost + v.cost) * 1000) / 1000;
-      const pcm = path.join(tmp, "vo.pcm");
-      voicePath = path.join(tmp, "vo.wav");
-      fs.writeFileSync(pcm, v.pcm);
-      await run("ffmpeg", ["-v", "error", "-y", "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", pcm, voicePath]);
-      const spoken = v.pcm.length / 48000;
-      spans = await speechSpans(voicePath, spoken);
+      const glossary = [c.brief.product, c.brief.brand, ...c.brief.requiredPhrases].filter(Boolean);
+      // Voice models sometimes talk around the script ("Sure, here it is…").
+      // Each take is transcribed and checked against the script; a take that
+      // strays inside the script is recorded once more.
+      let best: { wav: string; seconds: number; al?: Alignment } | undefined;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        step(r, "voicing", attempt === 1 ? `Recording the voiceover (${r.voice})` : "Re-recording the voiceover (the first take went off script)");
+        const v = await speak(clip.narration, r.voice);
+        r.cost = round2((r.cost + v.cost) * 1000) / 1000;
+        const pcm = path.join(tmp, `vo${attempt}.pcm`);
+        const wav = path.join(tmp, `vo${attempt}.wav`);
+        fs.writeFileSync(pcm, v.pcm);
+        await run("ffmpeg", ["-v", "error", "-y", "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", pcm, wav]);
+        let al: Alignment | undefined;
+        if (transcriptionAvailable()) {
+          step(r, "voicing", "Timing every word of the voiceover");
+          try {
+            const tr = await transcribe(wav, { glossary });
+            al = alignScript(clip.narration, tr.words, tr.language);
+            r.language = tr.language;
+          } catch (err) {
+            console.error(`[render] transcription failed for ${clip.id}:`, (err as Error).message);
+          }
+        }
+        const take = { wav, seconds: v.pcm.length / 48000, al };
+        const score = (t: { al?: Alignment }) => (t.al ? t.al.matched - t.al.extra.inside / 20 : 0);
+        if (!best || score(take) > score(best)) best = take;
+        if (!al || (al.matched >= 0.85 && al.extra.inside <= 3)) break;
+      }
+      voicePath = best!.wav;
+      let spoken = best!.seconds;
+      const al = best!.al;
+      if (al && al.matched >= 0.6) {
+        let shift = 0;
+        if (al.extra.before || al.extra.after) {
+          // Cut the chatter around the read.
+          shift = Math.max(0, al.span.start - 0.12);
+          const to = Math.min(spoken, al.span.end + 0.3);
+          const trimmed = path.join(tmp, "vo-trimmed.wav");
+          await run("ffmpeg", ["-v", "error", "-y", "-i", voicePath, "-af", `atrim=start=${shift.toFixed(3)}:end=${to.toFixed(3)},asetpts=PTS-STARTPTS`, trimmed]);
+          voicePath = trimmed;
+          spoken = to - shift;
+          log({ campaignId: c.id, kind: "clip", message: `Cut ${al.extra.before + al.extra.after} off-script word(s) the voice model added around "${clip.title}".` });
+        }
+        timed = al.words.map((w) => ({ text: w.text, start: Math.max(0, w.start - shift), end: Math.max(0, w.end - shift) }));
+        r.captionTiming = "aligned";
+      } else {
+        spans = await speechSpans(voicePath, spoken);
+        r.captionTiming = "estimated";
+      }
       duration = Math.max(c.brief.lengthSec.min, spoken + 0.8);
-    }
+    } else r.captionTiming = "estimated";
     duration = Math.round(Math.min(Math.max(duration, 5), 180) * 100) / 100;
 
     // 3. Cut the shots, scaled to fill the clip.
@@ -235,17 +282,22 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
 
     // 4. Captions, CTA, audio mix.
     step(r, "rendering", "Adding captions and the call to action");
-    const speechEnd = spans?.length ? spans[spans.length - 1].end : duration - 3.2;
-    const words = timeWords(clip.narration, voicePath ? speechEnd : Math.max(3, duration - 3.2), voicePath ? spans : undefined);
+    const speechEnd = timed?.length ? timed[timed.length - 1].end : spans?.length ? spans[spans.length - 1].end : duration - 3.2;
+    const words = timed ?? timeWords(clip.narration, voicePath ? speechEnd : Math.max(3, duration - 3.2), voicePath ? spans : undefined);
     const sents = sentences(clip.narration);
-    const lastSentenceStart = voicePath && spans && spans.length === sents.length ? spans[spans.length - 1].start : duration - 3;
+    const lastSentenceWords = sents.length ? sents[sents.length - 1].split(" ").length : 0;
+    const lastSentenceStart = timed && lastSentenceWords && lastSentenceWords <= timed.length
+      ? timed[timed.length - lastSentenceWords].start
+      : voicePath && spans && spans.length === sents.length ? spans[spans.length - 1].start : duration - 3;
     const ctaText = c.brief.cta.text || clip.cta;
     const ctaFrom = Math.max(1, Math.min(lastSentenceStart, duration - 2.5));
-    const captionGroups = groups(words);
+    const brand = getDoc().brand;
+    const style = resolveCaptionStyle(brand, c.captions);
+    const captionGroups = groups(words, style.wordsPerCaption);
     const ass = path.join(tmp, "subs.ass");
-    fs.writeFileSync(ass, buildAss({ hook: clip.hook, captions: captionGroups, cta: ctaText, ctaFrom, duration }));
+    fs.writeFileSync(ass, buildAss({ hook: clip.hook, captions: captionGroups, cta: ctaText, ctaFrom, duration, style, accent: accentOf(brand), joiner: r.language && NO_SPACES.has(r.language) ? "" : " ", language: r.language }));
     const final = path.join(tmp, "final.mp4");
-    await compose({ video: joined, ass, voice: voicePath, duration, out: final, fontsDir: process.env.FONTS_DIR, workDir: tmp });
+    await compose({ video: joined, ass, voice: voicePath, duration, out: final, fontsDir: await prepareFonts(tmp, brand), workDir: tmp });
 
     step(r, "rendering", "Uploading the video");
     const key = `${workspaceId}/clips/${clip.id}-${Date.now()}.mp4`;

@@ -1,3 +1,4 @@
+import type { BrandKit, CaptionOverrides } from "./caption-styles";
 // Clip Operator data model. One document per workspace holds its campaigns,
 // footage, clip plans, posts and activity.
 
@@ -105,6 +106,8 @@ export interface Campaign {
   footageCheckedAt?: string;
   footageError?: string;
   notes: string;
+  /** This campaign's caption style (else the brand kit's, else the default). */
+  captions?: CaptionOverrides;
   createdAt: string;
   updatedAt: string;
 }
@@ -201,6 +204,10 @@ export interface RenderInfo {
   segments?: { footageName: string; start: number; seconds: number; moment?: string }[];
   /** The pieces of this render, kept so the editor can open it as a timeline. */
   parts?: EditParts;
+  /** "aligned": captions timed word by word from the voiceover; "estimated": spread over the speech. */
+  captionTiming?: "aligned" | "estimated";
+  /** Spoken language detected in the voiceover (ISO 639-1). */
+  language?: string;
   /** How long the voiceover actually speaks (voiced renders). */
   spokenSec?: number;
   /** Set when the current video was exported from the editor. */
@@ -274,6 +281,8 @@ export interface WorkspaceDoc {
   activity: Activity[];
   /** Written findings from the learning system, keyed by scope ("all" or a campaign id). */
   insights?: Record<string, Insights>;
+  /** Fonts, colours and default caption style for everything this workspace renders. */
+  brand?: BrandKit;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,3 +1,38 @@
+@font-face {
+  font-family: "Poppins Black";
+  src: url("/fonts/Poppins-Black.ttf") format("truetype");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Poppins ExtraBold";
+  src: url("/fonts/Poppins-ExtraBold.ttf") format("truetype");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Poppins Bold";
+  src: url("/fonts/Poppins-Bold.ttf") format("truetype");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Poppins";
+  src: url("/fonts/Poppins-Bold.ttf") format("truetype");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Anton";
+  src: url("/fonts/Anton-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Bebas Neue";
+  src: url("/fonts/BebasNeue-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Archivo Black";
+  src: url("/fonts/ArchivoBlack-Regular.ttf") format("truetype");
+  font-display: swap;
+}
 :root {
   --bg: #f6f6f4;
   --panel: #ffffff;
@@ -985,4 +1020,35 @@ pre.snippet {
   font-size: 12px;
   overflow-x: auto;
   white-space: pre;
+}
+
+/* Caption styles */
+.style-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+}
+.style-card {
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+.style-card.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.cap-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0 10px;
+  background: linear-gradient(160deg, #2b6b2f 0%, #1d4f8f 55%, #3a1d5c 100%);
+  overflow: hidden;
 }
