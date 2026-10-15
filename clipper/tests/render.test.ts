@@ -143,6 +143,31 @@ describe.skipIf(!ffmpegAvailable())("render pipeline", () => {
     expect(probe.streams[0]).toMatchObject({ width: 1080, height: 1920 });
     expect(Number(probe.format.duration)).toBeGreaterThan(9);
 
+    // The render keeps its parts, so the editor can open it as a timeline.
+    const pack = await api(`/api/clips/${clip.id}/edit-pack`);
+    expect(pack.status).toBe(200);
+    expect(pack.body).toMatchObject({ width: 1080, height: 1920, fps: 30, saveUrl: `/api/clips/${clip.id}/edited` });
+    expect(pack.body.shots.length).toBeGreaterThan(0);
+    expect(pack.body.voice).toBeUndefined(); // rendered with no voice
+    expect(pack.body.captions[0].words.length).toBeGreaterThan(0);
+    expect(pack.body.hook.text).toBe(clip.hook);
+    const shotSum = pack.body.shots.reduce((t: number, x: { seconds: number }) => t + x.seconds, 0);
+    expect(Math.abs(shotSum - pack.body.duration)).toBeLessThan(0.5);
+    const part = await fetch(base + pack.body.shots[0].url, { headers: { cookie } });
+    expect(part.status).toBe(200);
+    expect(part.headers.get("content-type")).toBe("video/mp4");
+    expect((await fetch(`${base}/api/clips/${clip.id}/parts/..%2F..%2Fetc`, { headers: { cookie } })).status).toBe(404);
+
+    // Saving an edit replaces the clip's video; a non-video is refused.
+    const notVideo = await fetch(`${base}/api/clips/${clip.id}/edited`, { method: "POST", headers: { cookie, "Content-Type": "video/mp4" }, body: Buffer.alloc(5000, 1) });
+    expect(notVideo.status).toBe(422);
+    const edited = await fetch(`${base}/api/clips/${clip.id}/edited`, { method: "POST", headers: { cookie, "Content-Type": "video/mp4" }, body: fs.readFileSync(path.join(tmp, "game.mp4")) });
+    expect(edited.status).toBe(201);
+    const afterEdit = (await api("/api/state")).body.clips.find((x: { id: string }) => x.id === clip.id).render;
+    expect(afterEdit.editedAt).toBeTruthy();
+    expect(afterEdit.durationSec).toBeGreaterThan(39);
+    expect(afterEdit.parts.shots.length).toBe(pack.body.shots.length);
+
     // Uploading your own copy adds a stored file that survives a footage refresh.
     const up = await fetch(`${base}/api/campaigns/${id}/footage/upload`, { method: "POST", headers: { cookie, "Content-Type": "video/mp4", "X-File-Name": "my%20copy.mp4" }, body: fs.readFileSync(path.join(tmp, "game.mp4")) });
     expect(up.status).toBe(201);

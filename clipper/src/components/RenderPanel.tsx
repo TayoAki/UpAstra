@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, Clapperboard, Download, Loader2, RotateCcw } from "lucide-react";
+import { AlertTriangle, Clapperboard, Download, Loader2, RotateCcw, Scissors } from "lucide-react";
 import type { Clip, VoiceOption } from "../../shared/types";
 import { VOICES } from "../../shared/types";
 import { api } from "../api";
@@ -85,7 +85,13 @@ export function RenderPanel({ clip }: { clip: Clip }) {
             <a className="btn sm primary" href={api.videoUrl(clip.id, r.videoKey, true)}>
               <Download size={14} /> Download MP4
             </a>
+            {state?.status.editor && r.parts && (
+              <a className="btn sm" href={api.editorUrl(clip.id)} target="_blank" rel="noopener" title="Open the shots, voice, captions and text on a timeline (OpenReel)">
+                <Scissors size={14} /> Edit in editor
+              </a>
+            )}
           </div>
+          {r.editedAt && <p className="small muted" style={{ margin: 0 }}>Edited in the editor. Rendering again replaces the edit.</p>}
           {controls("Render again")}
         </div>
       </div>

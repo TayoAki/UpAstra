@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { campaignStats } from "../shared/rules";
@@ -9,10 +10,11 @@ import { bearerAgentKey, clearSession, clearThrottle, hashAgentKey, hashPassword
 import { HttpError, emptyDoc, forgetTenant, getBackend, getDoc, loadTenant, log, newId, now, runInWorkspace, save, type UserRow } from "./db";
 import { createMcpServer, httpApi } from "./mcp";
 import { extractBrief, normalizeBrief } from "./extract";
-import { aiLive, mediaLive, modelFor } from "./llm";
+import { aiLive, editorModel, forwardChat, mediaLive, modelFor } from "./llm";
 import { analyzeFootage } from "./moments";
 import { enqueueRender, renderAvailable } from "./render";
-import { saveUpload } from "./footage-cache";
+import { saveTo, saveUpload } from "./footage-cache";
+import { probe, run } from "./media";
 import { storageKind, videoStore } from "./storage";
 import { checkClip } from "../shared/rules";
 import { planClips, type PlanGuide } from "./scripts";
@@ -30,6 +32,7 @@ export function serviceStatus(): ServiceStatus {
     render: renderAvailable() ? "connected" : "not-connected",
     voice: mediaLive() ? "live" : "off",
     storage: getBackend().kind,
+    editor: fs.existsSync(path.join(editorDir(), "index.html")),
   };
 }
 
@@ -123,6 +126,8 @@ const scopeOf = (v: unknown) => {
 
 const platformOf = (v: unknown): Platform => ((PLATFORMS as string[]).includes(String(v)) ? (v as Platform) : "other");
 
+const editorDir = () => process.env.EDITOR_DIR ?? path.resolve(process.cwd(), "editor-dist");
+
 /** Where people reach this server (for links handed out to agents). */
 const LOOPBACK = /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/;
 const publicBase = (req: Request) => {
@@ -136,13 +141,17 @@ const publicBase = (req: Request) => {
 async function streamVideo(req: Request, res: Response, clip: Clip, workspaceId: string) {
   const key = clip.render?.videoKey;
   if (!key || !key.startsWith(`${workspaceId}/`)) throw new HttpError(404, "No video yet");
+  await streamKey(req, res, key, "video/mp4", clip.title);
+}
+
+async function streamKey(req: Request, res: Response, key: string, type: string, title = "clip") {
   const m = String(req.headers.range ?? "").match(/^bytes=(\d*)-(\d*)$/);
   const range = m && (m[1] || m[2]) ? { start: m[1] ? Number(m[1]) : 0, end: m[2] ? Number(m[2]) : undefined } : undefined;
   const f = await videoStore().read(key, range);
-  res.setHeader("Content-Type", f.type);
+  res.setHeader("Content-Type", type);
   res.setHeader("Accept-Ranges", "bytes");
   res.setHeader("Cache-Control", "private, max-age=3600");
-  if (req.query.download) res.setHeader("Content-Disposition", `attachment; filename="${clip.title.replace(/[^\w\- ]+/g, "").slice(0, 60) || "clip"}.mp4"`);
+  if (req.query.download) res.setHeader("Content-Disposition", `attachment; filename="${title.replace(/[^\w\- ]+/g, "").slice(0, 60) || "clip"}.mp4"`);
   if (range) {
     res.status(206);
     res.setHeader("Content-Range", `bytes ${f.start}-${f.end}/${f.size}`);
@@ -161,6 +170,8 @@ export function createApp() {
     res.setHeader("X-Frame-Options", "DENY");
     next();
   });
+  // The editor's AI chat sends large requests (tool schemas, timeline state).
+  app.use("/api/ai/v1", express.json({ limit: "8mb" }));
   app.use("/api", express.json({ limit: "1mb" }));
 
   app.get("/api/health", (_req, res) => res.json({ ok: true, ...serviceStatus(), videos: storageKind() }));
@@ -480,12 +491,115 @@ export function createApp() {
     }),
   );
 
+  // ---- Editor (OpenReel at /editor/) ---------------------------------------
+  // The pieces of the latest render, for the editor to lay out as a timeline.
+  api.get("/clips/:id/edit-pack", (req, res) => {
+    const clip = findClip(String(req.params.id));
+    const p = clip.render?.status === "done" ? clip.render.parts : undefined;
+    if (!p) throw new HttpError(409, "Render this clip first — the editor opens the rendered shots, voice and captions.");
+    const part = (key: string) => `/api/clips/${clip.id}/parts/${encodeURIComponent(key.split("/").pop()!)}`;
+    res.json({
+      clip: { id: clip.id, title: clip.title },
+      width: 1080,
+      height: 1920,
+      fps: 30,
+      duration: p.duration,
+      shots: p.shots.map((s, i) => ({ url: part(s.key), name: `shot${i + 1}.mp4`, seconds: s.seconds })),
+      voice: p.voiceKey ? { url: part(p.voiceKey), name: "voice.wav" } : undefined,
+      captions: p.captions,
+      hook: p.hook,
+      cta: p.cta,
+      saveUrl: `/api/clips/${clip.id}/edited`,
+      backUrl: `/#/c/${clip.campaignId}/clips`,
+      ai: aiLive() ? { baseUrl: "/api/ai/v1", model: editorModel() } : undefined,
+    });
+  });
+
+  api.get(
+    "/clips/:id/parts/:name",
+    wrap(async (req, res) => {
+      const clip = findClip(String(req.params.id));
+      const p = clip.render?.parts;
+      const name = String(req.params.name);
+      const key = [...(p?.shots.map((s) => s.key) ?? []), p?.voiceKey].find((k) => k && k.split("/").pop() === name);
+      if (!key || !key.startsWith(`${req.workspaceId}/`)) throw new HttpError(404, "Part not found");
+      await streamKey(req, res, key, name.endsWith(".wav") ? "audio/wav" : "video/mp4", name);
+    }),
+  );
+
+  // The editor's export replaces the clip's video (the parts stay, so it can be re-edited).
+  api.post(
+    "/clips/:id/edited",
+    wrap(async (req, res) => {
+      const clip = findClip(String(req.params.id));
+      if (!clip.render || clip.render.status !== "done") throw new HttpError(409, "Render this clip before saving an edit");
+      const type = String(req.headers["content-type"] ?? "").split(";")[0];
+      if (type !== "video/mp4") throw new HttpError(415, "Export as MP4 to save to Clip Operator");
+      const key = `${req.workspaceId}/clips/${clip.id}-edit-${Date.now()}.mp4`;
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "edit-"));
+      let size: number;
+      let meta: Awaited<ReturnType<typeof probe>> | undefined;
+      try {
+        const raw = path.join(dir, "raw.mp4");
+        try {
+          await saveTo(raw, req);
+        } catch (err) {
+          throw new HttpError(400, (err as Error).message);
+        }
+        meta = await probe(raw).catch(() => undefined);
+        if (!meta?.duration) throw new HttpError(422, "That export isn't a playable video");
+        // Browser exports carry Opus audio and put the index at the end; platforms
+        // want AAC and players want the index first. The video stream is copied as is.
+        const out = path.join(dir, "out.mp4");
+        await run("ffmpeg", ["-v", "error", "-y", "-i", raw, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out]);
+        size = fs.statSync(out).size;
+        await videoStore().put(key, out, "video/mp4");
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+      const old = clip.render.videoKey;
+      Object.assign(clip.render, { videoKey: key, sizeBytes: size, durationSec: Math.round(meta.duration * 100) / 100, editedAt: now() });
+      clip.lengthSec = Math.round(meta.duration);
+      clip.qa = checkClip(clip, findCampaign(clip.campaignId).brief);
+      clip.updatedAt = now();
+      if (old && old !== key && old.startsWith(`${req.workspaceId}/clips/`)) await videoStore().deletePrefix(old).catch(() => undefined);
+      log({ campaignId: clip.campaignId, kind: "clip", message: `Saved an edit of "${clip.title}" from the editor (${clip.lengthSec}s).` });
+      save();
+      res.status(201).json({ ok: true, durationSec: clip.render.durationSec });
+    }),
+  );
+
+  // The editor's AI chat (OpenAI-compatible), on the server's key and the workspace's daily AI limit.
+  api.get("/ai/v1/models", (_req, res) => res.json({ object: "list", data: aiLive() ? [{ id: editorModel(), object: "model", owned_by: "clip-operator" }] : [] }));
+  api.post(
+    "/ai/v1/chat/completions",
+    wrap(async (req, res) => {
+      if (!aiLive()) throw new HttpError(503, "AI isn't configured on this server");
+      if (!Array.isArray(req.body?.messages)) throw new HttpError(400, "messages required");
+      spendAI(req.workspaceId!, 1);
+      const ctrl = new AbortController();
+      res.on("close", () => ctrl.abort());
+      const upstream = await forwardChat(req.body, ctrl.signal);
+      res.status(upstream.status);
+      res.setHeader("Content-Type", upstream.headers.get("content-type") ?? "application/json");
+      if (!upstream.body) return void res.end();
+      const { Readable } = await import("node:stream");
+      Readable.fromWeb(upstream.body as never).pipe(res);
+    }),
+  );
+
   // A shareable link to the finished video (expires in 7 days) — what agents hand to people and schedulers.
   api.get("/clips/:id/link", (req, res) => {
     const clip = findClip(String(req.params.id));
     const key = clip.render?.videoKey;
     if (!key || clip.render?.status !== "done") throw new HttpError(404, "No finished video yet");
-    res.json({ url: `${publicBase(req)}${signVideoLink(req.workspaceId!, clip.id, key)}`, expiresInDays: 7 });
+    const editable = !!clip.render?.parts && fs.existsSync(path.join(editorDir(), "index.html"));
+    res.json({
+      url: `${publicBase(req)}${signVideoLink(req.workspaceId!, clip.id, key)}`,
+      expiresInDays: 7,
+      // Opens the clip on a timeline in the editor (needs the dashboard login).
+      editorUrl: editable ? `${publicBase(req)}/editor/?co_clip=${encodeURIComponent(clip.id)}#/new?width=1080&height=1920&fps=30` : undefined,
+    });
   });
 
   api.post(
@@ -643,11 +757,25 @@ export function createApp() {
   app.use("/api", api);
   app.use("/api", (_req, _res, next) => next(new HttpError(404, "Not found")));
 
+  // ---- Editor: OpenReel (MIT), built by editor/build.sh ---------------------
+  if (fs.existsSync(editorDir())) {
+    const isolate = (_req: Request, res: Response, next: NextFunction) => {
+      // OpenReel's own headers: cross-origin isolation for its media workers.
+      res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+      res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+      res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+      next();
+    };
+    app.get("/editor", (req, res, next) => (req.originalUrl.split("?")[0] === "/editor" ? res.redirect(301, `/editor/${req.originalUrl.slice(7)}`) : next()));
+    app.use("/editor", isolate, express.static(editorDir(), { index: false, maxAge: "7d", setHeaders: (res, file) => file.endsWith(".html") && res.setHeader("Cache-Control", "no-cache") }));
+    app.use("/editor", isolate, (req, res, next) => (req.method === "GET" && !path.extname(req.path) ? res.setHeader("Cache-Control", "no-cache").sendFile(path.join(editorDir(), "index.html")) : next()));
+  }
+
   // ---- Web app -------------------------------------------------------------
   const dist = process.env.DIST_DIR ?? path.resolve(process.cwd(), "dist");
   if (fs.existsSync(dist)) {
     app.use(express.static(dist, { index: false, maxAge: "1h" }));
-    app.use((req, res, next) => (req.method === "GET" && !req.path.startsWith("/api") ? res.sendFile(path.join(dist, "index.html")) : next()));
+    app.use((req, res, next) => (req.method === "GET" && !req.path.startsWith("/api") && !req.path.startsWith("/editor/") ? res.sendFile(path.join(dist, "index.html")) : next()));
   }
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

@@ -70,27 +70,38 @@ export async function footageSource(f: FootageFile): Promise<string> {
 
 export const isCached = (f: FootageFile) => videoStore().exists(f.storageKey ?? cacheKey(f));
 
+/** Stream an upload to a local file, enforcing the size limit. Returns its size. */
+export async function saveTo(file: string, body: NodeJS.ReadableStream): Promise<number> {
+  let seen = 0;
+  const counter = new (await import("node:stream")).Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      seen += chunk.length;
+      cb(seen > maxBytes() ? new Error(`Files must be under ${Math.round(maxBytes() / 1e6)} MB`) : null, chunk);
+    },
+  });
+  await pipeline(body, counter, fs.createWriteStream(file));
+  if (seen < 1000) throw new Error("The upload was empty");
+  return seen;
+}
+
+/** Stream an upload into storage under `key`, enforcing the size limit. */
+export async function saveStream(key: string, body: NodeJS.ReadableStream, type = "video/mp4"): Promise<number> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "up-"));
+  const tmp = path.join(dir, "src");
+  try {
+    const seen = await saveTo(tmp, body);
+    const store = videoStore() as ReturnType<typeof videoStore> & { move?: (k: string, f: string) => Promise<void> };
+    if (store.move) await store.move(key, tmp);
+    else await store.put(key, tmp, type);
+    return seen;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 /** Stream an uploaded footage file into storage. Returns its key and size. */
 export async function saveUpload(workspaceId: string, name: string, body: NodeJS.ReadableStream): Promise<{ key: string; size: number }> {
   const safe = name.replace(/[^\w.\- ]+/g, "_").replace(/\s+/g, "_").slice(-80) || "footage.mp4";
   const key = `${workspaceId}/footage/${Date.now().toString(36)}-${safe}`;
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "up-"));
-  const tmp = path.join(dir, "src");
-  try {
-    let seen = 0;
-    const counter = new (await import("node:stream")).Transform({
-      transform(chunk: Buffer, _enc, cb) {
-        seen += chunk.length;
-        cb(seen > maxBytes() ? new Error(`Files must be under ${Math.round(maxBytes() / 1e6)} MB`) : null, chunk);
-      },
-    });
-    await pipeline(body, counter, fs.createWriteStream(tmp));
-    if (seen < 1000) throw new Error("The upload was empty");
-    const store = videoStore() as ReturnType<typeof videoStore> & { move?: (k: string, f: string) => Promise<void> };
-    if (store.move) await store.move(key, tmp);
-    else await store.put(key, tmp, "video/mp4");
-    return { key, size: seen };
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  return { key, size: await saveStream(key, body) };
 }

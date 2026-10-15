@@ -31,6 +31,57 @@ function provider() {
 }
 
 export const aiLive = () => provider() !== null;
+
+/** The model behind the editor's AI chat. */
+export const editorModel = () => process.env.EDITOR_MODEL || DEFAULTS.script.model;
+
+/**
+ * Forward an OpenAI-style chat request from the editor to the provider with the
+ * server's key. The model is pinned (the editor can't pick an expensive one),
+ * output is capped, and the response (streamed or not) is passed through as is.
+ */
+type Schema = Record<string, unknown> & { properties?: Record<string, unknown>; required?: string[] };
+
+/**
+ * Some providers (Anthropic among them) reject tool parameter schemas with a
+ * top-level oneOf/anyOf/allOf. Flatten those into one object: every
+ * alternative's fields, required only where all alternatives require them.
+ */
+export function flattenToolSchema(schema: unknown): unknown {
+  const s = schema as Schema | undefined;
+  if (!s || typeof s !== "object") return schema;
+  const all = (s.allOf as Schema[] | undefined) ?? [];
+  const alts = [...((s.oneOf as Schema[] | undefined) ?? []), ...((s.anyOf as Schema[] | undefined) ?? [])];
+  if (!all.length && !alts.length) return schema;
+  const { oneOf: _o, anyOf: _a, allOf: _l, ...base } = s;
+  const properties: Record<string, unknown> = { ...(s.properties ?? {}) };
+  for (const v of [...all, ...alts]) Object.assign(properties, v.properties ?? {});
+  const required = new Set([...(s.required ?? []), ...all.flatMap((v) => v.required ?? [])]);
+  if (alts.length) {
+    const shared = alts.map((v) => new Set(v.required ?? [])).reduce((x, y) => new Set([...x].filter((k) => y.has(k))));
+    for (const k of shared) required.add(k);
+  }
+  return { ...base, type: "object", properties, ...(required.size ? { required: [...required] } : {}) };
+}
+
+const flattenTools = (tools: unknown) =>
+  Array.isArray(tools)
+    ? tools.map((t) => (t?.function?.parameters ? { ...t, function: { ...t.function, parameters: flattenToolSchema(t.function.parameters) } } : t))
+    : tools;
+
+export async function forwardChat(body: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
+  const p = provider();
+  if (!p) throw new Error("No AI provider configured");
+  const maxTokens = Math.min(Number(body.max_tokens ?? body.max_completion_tokens) || 4096, 8192);
+  const { max_completion_tokens: _drop, ...raw } = body;
+  const rest = { ...raw, ...(raw.tools ? { tools: flattenTools(raw.tools) } : {}) };
+  return fetch(p.url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${p.key}`, "Content-Type": "application/json", ...p.headers },
+    body: JSON.stringify({ ...rest, model: editorModel(), max_tokens: maxTokens }),
+    signal,
+  });
+}
 export const modelFor = (role: AIRole) => process.env[DEFAULTS[role].env] || DEFAULTS[role].model;
 
 export function parseJSON<T>(content: string): T {

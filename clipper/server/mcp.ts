@@ -136,7 +136,9 @@ export function createMcpServer(api: ApiCall): McpServer {
     if (!c) throw new Error(`Clip ${id} not found`);
     return c;
   };
-  const linkFor = (c: Clip) => (c.render?.status === "done" ? api<{ url: string }>("GET", `/clips/${c.id}/link`).then((r) => r.url).catch(() => undefined) : Promise.resolve(undefined));
+  const linksFor = (c: Clip) =>
+    c.render?.status === "done" ? api<{ url: string; editorUrl?: string }>("GET", `/clips/${c.id}/link`).catch(() => undefined) : Promise.resolve(undefined);
+  const linkFor = (c: Clip) => linksFor(c).then((l) => l?.url);
 
   /** Write plans, approve the ones that follow the brief, queue renders. */
   async function planAndRender(campaignId: string, count: number, voice: string, render: boolean) {
@@ -239,11 +241,12 @@ export function createMcpServer(api: ApiCall): McpServer {
 
   tool(
     "get_clip",
-    "A clip plan in full (script, shots, caption, QA) with its render status and, when rendered, a shareable video link (valid 7 days).",
+    "A clip plan in full (script, shots, caption, QA) with its render status and, when rendered, a shareable video link (valid 7 days) and an editorUrl that opens it on a timeline in the browser editor (for the user; needs their login).",
     { clipId: z.string() },
     async ({ clipId }) => {
       const c = clipIn(await state(), clipId);
-      return clipFull(c, await linkFor(c));
+      const links = await linksFor(c);
+      return { ...clipFull(c, links?.url), editorUrl: links?.editorUrl, editedInEditor: c.render?.editedAt };
     },
     true,
   );

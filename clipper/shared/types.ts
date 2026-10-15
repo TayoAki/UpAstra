@@ -199,6 +199,22 @@ export interface RenderInfo {
   sizeBytes?: number;
   /** Where each shot was cut from. */
   segments?: { footageName: string; start: number; seconds: number; moment?: string }[];
+  /** The pieces of this render, kept so the editor can open it as a timeline. */
+  parts?: EditParts;
+  /** How long the voiceover actually speaks (voiced renders). */
+  spokenSec?: number;
+  /** Set when the current video was exported from the editor. */
+  editedAt?: string;
+}
+
+export interface EditParts {
+  /** 9:16 shots in order (already framed, with game audio). */
+  shots: { key: string; seconds: number }[];
+  voiceKey?: string;
+  captions: { text: string; start: number; end: number; words: { text: string; start: number; end: number }[] }[];
+  hook: { text: string; end: number };
+  cta: { text: string; from: number };
+  duration: number;
 }
 
 export type PostStatus = "live" | "submitted" | "approved" | "rejected" | "paid";
@@ -322,6 +338,8 @@ export interface ServiceStatus {
   render: "not-connected" | "connected";
   voice: "live" | "off";
   storage: "postgres" | "file";
+  /** The OpenReel editor is installed at /editor/. */
+  editor?: boolean;
 }
 
 export interface CampaignStats {

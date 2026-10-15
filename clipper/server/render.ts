@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { traitsOf } from "../shared/learning";
 import { checkClip, round2 } from "../shared/rules";
-import type { Campaign, Clip, FootageFile, RenderInfo, VoiceOption } from "../shared/types";
-import { buildAss, chunk, sentences, timeWords } from "./captions";
+import type { Campaign, Clip, EditParts, FootageFile, RenderInfo, VoiceOption } from "../shared/types";
+import { buildAss, groups, HOOK_SECONDS, sentences, timeWords } from "./captions";
 import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, tenantLoadHooks } from "./db";
 import { mediaLive, speak } from "./llm";
 import { blackSpans, concat, compose, cutSegment, ffmpegAvailable, run, speechSpans } from "./media";
@@ -188,6 +188,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     const used = new Set<string>();
     let opening: string | undefined;
     const segments: NonNullable<RenderInfo["segments"]> = [];
+    const shotLens: number[] = [];
     const parts: string[] = [];
     let left = duration;
     for (let i = 0; i < shots.length; i++) {
@@ -223,6 +224,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
         }
       }
       parts.push(out);
+      shotLens.push(len);
       const swapped = substitutes.find((x) => x.endsWith(`→ ${f.name}`) && x.startsWith(s.footageName ?? "\u0000"));
       segments.push({ footageName: f.name, start: Math.round(start * 10) / 10, seconds: Math.round(len * 10) / 10, moment: [swapped ? `(instead of ${s.footageName})` : "", m?.description ?? ""].filter(Boolean).join(" ") || undefined });
     }
@@ -238,14 +240,34 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     const sents = sentences(clip.narration);
     const lastSentenceStart = voicePath && spans && spans.length === sents.length ? spans[spans.length - 1].start : duration - 3;
     const ctaText = c.brief.cta.text || clip.cta;
+    const ctaFrom = Math.max(1, Math.min(lastSentenceStart, duration - 2.5));
+    const captionGroups = groups(words);
     const ass = path.join(tmp, "subs.ass");
-    fs.writeFileSync(ass, buildAss({ hook: clip.hook, captions: chunk(words), cta: ctaText, ctaFrom: Math.max(1, Math.min(lastSentenceStart, duration - 2.5)), duration }));
+    fs.writeFileSync(ass, buildAss({ hook: clip.hook, captions: captionGroups, cta: ctaText, ctaFrom, duration }));
     const final = path.join(tmp, "final.mp4");
     await compose({ video: joined, ass, voice: voicePath, duration, out: final, fontsDir: process.env.FONTS_DIR, workDir: tmp });
 
     step(r, "rendering", "Uploading the video");
     const key = `${workspaceId}/clips/${clip.id}-${Date.now()}.mp4`;
     await videoStore().put(key, final, "video/mp4");
+
+    // Keep the pieces so the editor can open this render as a timeline.
+    step(r, "rendering", "Saving the editable parts");
+    const partsPrefix = `${workspaceId}/clips/${clip.id}/parts/`;
+    await videoStore().deletePrefix(partsPrefix).catch(() => undefined);
+    const stamp = `${partsPrefix}${Date.now()}`;
+    const round = (n: number) => Math.round(n * 1000) / 1000;
+    const editParts: EditParts = { shots: [], captions: [], hook: { text: clip.hook, end: Math.min(HOOK_SECONDS, duration) }, cta: { text: ctaText, from: round(ctaFrom) }, duration };
+    for (const [i, file] of parts.entries()) {
+      const k = `${stamp}/shot${i + 1}.mp4`;
+      await videoStore().put(k, file, "video/mp4");
+      editParts.shots.push({ key: k, seconds: round(shotLens[i]) });
+    }
+    if (voicePath) {
+      editParts.voiceKey = `${stamp}/voice.wav`;
+      await videoStore().put(editParts.voiceKey, voicePath, "audio/wav");
+    }
+    editParts.captions = captionGroups.map((g) => ({ text: g.text, start: round(g.start), end: round(g.end), words: g.words.map((w) => ({ text: w.text, start: round(w.start), end: round(w.end) })) }));
 
     const fresh = getDoc().clips.find((x) => x.id === clip.id);
     if (!fresh?.render) return; // deleted mid-render
@@ -256,6 +278,9 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
       durationSec: duration,
       sizeBytes: fs.statSync(final).size,
       segments,
+      parts: editParts,
+      spokenSec: voicePath ? Math.round(speechEnd * 10) / 10 : undefined,
+      editedAt: undefined,
       finishedAt: now(),
       error: undefined,
     } satisfies Partial<RenderInfo>);

@@ -49,3 +49,16 @@ describe("clip rule check", () => {
     expect(r.checks.find((c) => c.rule === "Voiceover fits the clip")?.pass).toBe(false);
   });
 });
+
+describe("voiceover length after a render", () => {
+  it("uses the measured spoken length once a voiced render exists", async () => {
+    const { checkClip } = await import("../shared/rules");
+    const brief = { requiredPhrases: [], cta: { text: "", placement: "end" }, lengthSec: { min: 15, max: 60 }, bannedClaims: [] } as never;
+    const narration = Array.from({ length: 65 }, () => "word").join(" "); // ~25s estimated
+    const base = { hook: "x", narration, cta: "", lengthSec: 21, onScreenText: [], shots: [] };
+    const fit = (c: object) => checkClip(c as never, brief).checks.find((x) => x.rule === "Voiceover fits the clip")!;
+    expect(fit(base).pass).toBe(false);
+    const rendered = { ...base, render: { status: "done", voice: "ash", spokenSec: 20.2 } };
+    expect(fit(rendered)).toMatchObject({ pass: true, note: "20s spoken" });
+  });
+});

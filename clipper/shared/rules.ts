@@ -62,7 +62,7 @@ function bannedTriggers(claims: string[]): { word: RegExp; claim: string }[] {
   return out;
 }
 
-export function checkClip(clip: Pick<Clip, "hook" | "narration" | "cta" | "lengthSec" | "onScreenText" | "shots">, brief: CampaignBrief): { pass: boolean; checks: QACheck[] } {
+export function checkClip(clip: Pick<Clip, "hook" | "narration" | "cta" | "lengthSec" | "onScreenText" | "shots"> & Partial<Pick<Clip, "render">>, brief: CampaignBrief): { pass: boolean; checks: QACheck[] } {
   const checks: QACheck[] = [];
   const spoken = norm(clip.narration);
   const all = norm([clip.narration, ...clip.onScreenText].join(" "));
@@ -93,8 +93,10 @@ export function checkClip(clip: Pick<Clip, "hook" | "narration" | "cta" | "lengt
   // 4. Length fits the brief and the voiceover fits the length.
   const { min, max } = brief.lengthSec;
   checks.push({ rule: `Length ${min}–${max}s`, pass: clip.lengthSec >= min && clip.lengthSec <= max, note: `${clip.lengthSec}s planned` });
-  const talk = Math.round(words(clip.narration) / WORDS_PER_SECOND);
-  checks.push({ rule: "Voiceover fits the clip", pass: talk <= clip.lengthSec + 2, note: `~${talk}s of narration` });
+  // After a voiced render the real spoken length is known; before, estimate it from the word count.
+  const measured = clip.render?.status === "done" && clip.render.voice !== "none" ? clip.render.spokenSec : undefined;
+  const talk = Math.round(measured ?? words(clip.narration) / WORDS_PER_SECOND);
+  checks.push({ rule: "Voiceover fits the clip", pass: talk <= clip.lengthSec + 2, note: measured !== undefined ? `${talk}s spoken` : `~${talk}s of narration` });
 
   // 5. No banned claims.
   const hits = bannedTriggers(brief.bannedClaims).filter((t) => t.word.test(all));

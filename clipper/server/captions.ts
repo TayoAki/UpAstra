@@ -4,6 +4,9 @@ import { H, VIDEO_H, VIDEO_TOP, W } from "./media";
 // top, the voiceover in 2–3 word punches under the footage, and a call to
 // action card at the end.
 
+/** How long the hook stays on screen. */
+export const HOOK_SECONDS = 3.2;
+
 export interface Timed {
   text: string;
   start: number;
@@ -64,13 +67,13 @@ export function timeWords(script: string, total: number, spans?: { start: number
   return out;
 }
 
-/** Group words into short caption punches (break after punctuation). */
-export function chunk(words: Timed[], max = 3): Timed[] {
-  const out: Timed[] = [];
+/** Group words into short caption punches (break after punctuation), keeping each group's words. */
+export function groups(words: Timed[], max = 3): (Timed & { words: Timed[] })[] {
+  const out: (Timed & { words: Timed[] })[] = [];
   let cur: Timed[] = [];
   const flush = () => {
     if (!cur.length) return;
-    out.push({ text: cur.map((w) => w.text).join(" "), start: cur[0].start, end: cur[cur.length - 1].end });
+    out.push({ text: cur.map((w) => w.text).join(" "), start: cur[0].start, end: cur[cur.length - 1].end, words: cur });
     cur = [];
   };
   for (const w of words) {
@@ -83,12 +86,15 @@ export function chunk(words: Timed[], max = 3): Timed[] {
   return out;
 }
 
+/** Caption punches as plain timed text. */
+export const chunk = (words: Timed[], max = 3): Timed[] => groups(words, max).map(({ text, start, end }) => ({ text, start, end }));
+
 export function buildAss(o: { hook: string; captions: Timed[]; cta: string; ctaFrom: number; duration: number; accent?: string; font?: string }): string {
   const font = o.font ?? "DejaVu Sans";
   // ASS colours are &HAABBGGRR.
   const hex = (o.accent ?? "#E5484D").replace("#", "");
   const accent = `&H00${hex.slice(4, 6)}${hex.slice(2, 4)}${hex.slice(0, 2)}`;
-  const hookEnd = Math.min(3.2, o.duration);
+  const hookEnd = Math.min(HOOK_SECONDS, o.duration);
   const lines = [
     "[Script Info]",
     "ScriptType: v4.00+",
