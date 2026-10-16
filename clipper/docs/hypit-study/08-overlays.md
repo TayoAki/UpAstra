@@ -586,6 +586,15 @@ About **90% of the visual vocabulary** in this batch is reproducible in our ASS 
 
 The remaining 10% is gradients, CSS filters over groups and video cards. It needs either pre-rendered PNGs or a browser renderer. None of it is essential for clipper formats.
 
+**Checker's challenge to the 90% figure.** The figure holds for the *vector-and-text* vocabulary. It overstates what this batch's components need, for five reasons:
+1. **These components are image-first.** A TierBoard item *requires* an icon (`packages/ranking/src/types.ts:222`). The emoji strip is PNG-only. A depth-stack is media cards. Stickers carry avatars. Each of these needs a per-item raster through the ffmpeg route, and for arbitrary ranked items ("Taco Bell", "Remini") we have no source of icons at all. The hard problem is getting the assets, not drawing them. The 90% figure doesn't count it.
+2. **z-order between ASS and images can't be interleaved in one pass.** Every `overlay` image sits above *all* of the `ass=` output (`clipper/server/media.ts:155-164`). Hypit's board 20 → stage 25 → item 30, and a comment card (z 62) above a board with icons, can't be reproduced unless the ASS track is split and `ass → overlay → ass` passes are chained. Each extra pass is another libass render over the full frame.
+3. **Group opacity and fades are approximate, not exact** (see the corrected fade row). Neither are eased exits, because `\move` is linear and a line takes only one.
+4. **Pixel values don't port 1:1.** libass `\fs` is the cell height (winAscent+winDescent), not the CSS em. For Poppins that is about 0.57 em per `\fs` unit, so hypit's `42 px` body is roughly `\fs74` in our styles. All hypit sizes must be converted per font. That's measurable, but the "exact" rows assume it has been done.
+5. **Animated image transforms are untested** on our ffmpeg build (as already marked).
+
+A fairer statement: about 90% of the shape, text and motion vocabulary is reproducible. By component, about **two-thirds** is reproducible without extra passes, image sourcing or per-font size calibration: comment cards, text tier boards, column and podium in text form, and SFX. Icon tiers, the emoji strip and depth-stack need the image path and its z-order limits. *(added in check; the two-thirds figure is the checker's judgement, not a measurement)*
+
 ---
 
 ## Ideas worth taking (ranked)

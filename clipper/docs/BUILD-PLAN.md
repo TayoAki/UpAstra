@@ -69,10 +69,17 @@ Hypit paths below are relative to the hypit repo (`packages/...`, `skills/hypit/
 ## M1: Resumable, step-cached renders
 
 ### B1.1 Step receipts
+- **Why (batch 02 check):**
+  - every resume re-records the voiceover: a fresh temp dir per render (`server/render.ts:135`) and `speak()` always runs (`:203`);
+  - a resumed format breakdown re-pays for vision (`server/formats.ts:151`);
+  - resumes skip `checkAIBudget` entirely (it is reached only via `spendAI` at enqueue, `server/llm.ts:48`);
+  - the boot scan doesn't resume formats (`server/db.ts:147-155`).
 - **Change:** a `render_steps` record per render: `{renderId, step, key, status: started|done|failed, outputKey, costUsd, at}`. Write `started` before every paid or expensive step (TTS, vision, transcription, cut, compose) and `done` with the output key after it.
 - **Tests first:**
   - kill a render after TTS. On resume, the TTS mock is called 0 more times and the render completes.
-  - an unknown outcome (a `started` with no `done` on a paid step) is surfaced as "needs attention", never silently repeated.
+  - an unknown outcome (a `started` with no `done` on a paid step) is surfaced as "needs attention", never silently repeated;
+  - a resume runs `checkAIBudget` before any paid step;
+  - the boot scan also resumes format breakdowns.
 - **Parity:** at-most-once receipts in `packages/runtime-local/.../worker.ts:85-117` and `executor.ts:388-407` (study 02 #2). **Beats:** hypit fails in-flight jobs on restart (`supervisor.ts:103-106`); we resume from the last `done`.
 - **Avoid:** whole-build failure on one step.
 
@@ -91,13 +98,15 @@ Hypit paths below are relative to the hypit repo (`packages/...`, `skills/hypit/
   - with capacity 2, a weight-2 render blocks two caption jobs;
   - two workspaces alternate;
   - an enqueue wakes the controller with no polling delay.
-- **Parity:** `packages/runtime/src/capacity.ts:1-51`, `scheduler.ts:176-196` (study 02 #1, #4).
+- **Parity:** `packages/runtime/src/capacity.ts:1-51` (study 02 #1). **Beats:** the check found hypit's runtime-local admits builds oldest-first (`sqlite-state.ts:615-618`). Its round-robin cursor (`scheduler.ts:176-196`) works only inside one build. Ours is round-robin across tenants, which is a SaaS need.
 - **Avoid:** 25 ms busy polling, and the O(n) reservation scan.
 
 ### B1.4 Cancel and log
 - **Change:** `POST /api/clips/:id/render/cancel`, with a durable stop where the first cause wins, and a per-render execution log (`step`, `ms`, the stderr tail) stored with the output. Add a "Retry upload only" path for the "result attention" state.
 - **Tests first:**
   - cancel mid-cut kills ffmpeg and leaves the clip `cancelled`;
+  - deleting a clip, caption job or format stops its running job (today it doesn't, batch 02 check);
+  - a 429 or 5xx from OpenRouter retries with `Retry-After` and backoff (today only the 400 fallback exists, `server/llm.ts:197-201`);
   - the log endpoint returns the steps in order, with `omitted` counts.
 - **Parity:** `sqlite-state.ts:783-801`, `packages/runtime-local/src/log.ts:14-47`, `result-writer.ts:174-194` (study 02 #5, #6).
 
