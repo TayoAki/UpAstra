@@ -132,22 +132,21 @@ const flattenTools = (tools: unknown) =>
     ? tools.map((t) => (t?.function?.parameters ? { ...t, function: { ...t.function, parameters: flattenToolSchema(t.function.parameters) } } : t))
     : tools;
 
+/** The only request fields the editor may set; everything else (model, routing, plugins, n) is ours. */
+const EDITOR_FIELDS = ["messages", "tools", "tool_choice", "stream", "temperature", "top_p", "stop", "response_format", "parallel_tool_calls"] as const;
+
 export async function forwardChat(body: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
   const p = provider();
   if (!p) throw new Error("No AI provider configured");
   const maxTokens = Math.min(Number(body.max_tokens ?? body.max_completion_tokens) || 4096, 8192);
-  const { max_completion_tokens: _drop, ...raw } = body;
-  const rest = { ...raw, ...(raw.tools ? { tools: flattenTools(raw.tools) } : {}) };
+  const picked: Record<string, unknown> = {};
+  for (const k of EDITOR_FIELDS) if (body[k] !== undefined) picked[k] = body[k];
+  if (picked.tools) picked.tools = flattenTools(picked.tools);
+  if (Array.isArray(picked.messages)) picked.messages = withCacheBreakpoints(editorModel(), picked.messages);
   return fetch(p.url, {
     method: "POST",
     headers: { Authorization: `Bearer ${p.key}`, "Content-Type": "application/json", ...p.headers },
-    body: JSON.stringify({
-      ...rest,
-      ...(Array.isArray(raw.messages) ? { messages: withCacheBreakpoints(editorModel(), raw.messages) } : {}),
-      model: editorModel(),
-      max_tokens: maxTokens,
-      ...(p.openrouter ? { usage: { include: true } } : {}),
-    }),
+    body: JSON.stringify({ ...picked, model: editorModel(), max_tokens: maxTokens, n: 1, ...(p.openrouter ? { usage: { include: true } } : {}) }),
     signal,
   });
 }

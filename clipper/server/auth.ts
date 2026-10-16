@@ -2,6 +2,8 @@ import { createHash, createHmac, randomBytes, scrypt as scryptCb, timingSafeEqua
 import { promisify } from "node:util";
 import type { NextFunction, Request, Response } from "express";
 import { HttpError, getBackend, loadTenant, runInWorkspace } from "./db";
+import { emailConfigured } from "./email";
+import { setUnverified } from "./usage";
 
 // Email + password accounts with a signed HttpOnly session cookie. Each user
 // owns one workspace; every API call runs inside it. Agents (MCP clients,
@@ -36,7 +38,8 @@ export async function verifyPassword(pw: string, stored: string): Promise<boolea
 const sign = (payload: string) => createHmac("sha256", secret).update(payload).digest("base64url");
 
 export function issueSession(res: Response, userId: string) {
-  const payload = Buffer.from(JSON.stringify({ u: userId, e: Date.now() + SESSION_DAYS * 864e5 })).toString("base64url");
+  const at = Date.now();
+  const payload = Buffer.from(JSON.stringify({ u: userId, i: at, e: at + SESSION_DAYS * 864e5 })).toString("base64url");
   res.cookie(COOKIE, `${payload}.${sign(payload)}`, {
     httpOnly: true,
     sameSite: "lax",
@@ -48,7 +51,8 @@ export function issueSession(res: Response, userId: string) {
 
 export const clearSession = (res: Response) => res.clearCookie(COOKIE, { path: "/" });
 
-export function sessionUserId(req: Request): string | undefined {
+/** The signed-in user and when the session was issued (older cookies lack `i`: derive it from the expiry). */
+export function readSession(req: Request): { userId: string; issuedAt: number } | undefined {
   const raw = (req.headers.cookie ?? "").split(";").map((p) => p.trim()).find((p) => p.startsWith(`${COOKIE}=`));
   if (!raw) return;
   const [payload, sig] = decodeURIComponent(raw.slice(COOKIE.length + 1)).split(".");
@@ -56,8 +60,32 @@ export function sessionUserId(req: Request): string | undefined {
   const expected = sign(payload);
   if (expected.length !== sig.length || !timingSafeEqual(Buffer.from(expected), Buffer.from(sig))) return;
   try {
-    const { u, e } = JSON.parse(Buffer.from(payload, "base64url").toString());
-    return typeof u === "string" && e > Date.now() ? u : undefined;
+    const { u, i, e } = JSON.parse(Buffer.from(payload, "base64url").toString());
+    if (typeof u !== "string" || !(e > Date.now())) return;
+    return { userId: u, issuedAt: typeof i === "number" ? i : e - SESSION_DAYS * 864e5 };
+  } catch {
+    return;
+  }
+}
+
+// ---- Email tokens ------------------------------------------------------------
+// Signed and expiring, so nothing is stored: a reset link also carries a
+// fingerprint of the password it replaces, which makes it single-use.
+export const passwordFingerprint = (hash: string) => createHash("sha256").update(hash).digest("base64url").slice(0, 16);
+
+export function signToken(purpose: "reset" | "verify", data: Record<string, string>, ttlSec: number) {
+  const payload = Buffer.from(JSON.stringify({ p: purpose, ...data, e: Date.now() + ttlSec * 1000 })).toString("base64url");
+  return `${payload}.${sign(`token.${payload}`)}`;
+}
+
+export function readToken(purpose: "reset" | "verify", token: string): Record<string, string> | undefined {
+  const [payload, sig] = String(token).split(".");
+  if (!payload || !sig) return;
+  const expected = sign(`token.${payload}`);
+  if (expected.length !== sig.length || !timingSafeEqual(Buffer.from(expected), Buffer.from(sig))) return;
+  try {
+    const d = JSON.parse(Buffer.from(payload, "base64url").toString());
+    return d.p === purpose && d.e > Date.now() ? d : undefined;
   } catch {
     return;
   }
@@ -85,11 +113,22 @@ export function verifyVideoLink(workspaceId: string, clipId: string, videoKey: s
 }
 
 const attempts = new Map<string, { n: number; until: number }>();
-export function throttle(key: string) {
+/** At most `max` attempts per key per 15 minutes. */
+export function throttle(key: string, max = 10) {
   const t = Date.now();
+  if (attempts.size > 20_000) for (const [k, v] of attempts) if (v.until <= t) attempts.delete(k);
   const a = attempts.get(key);
-  if (a && a.until > t && a.n >= 10) throw new HttpError(429, "Too many attempts. Try again in a few minutes.");
+  if (a && a.until > t && a.n >= max) throw new HttpError(429, "Too many attempts. Try again in a few minutes.");
   attempts.set(key, a && a.until > t ? { n: a.n + 1, until: a.until } : { n: 1, until: t + 15 * 60_000 });
+}
+
+/** A client's address for rate limits: IPv6 grouped by /64 (one home or server usually has a whole /64). */
+export function clientKey(ip: string | undefined): string {
+  const a = (ip ?? "").replace(/^::ffff:/, "");
+  if (!a.includes(":")) return a;
+  const [head] = a.split("::");
+  const groups = head.split(":").filter(Boolean);
+  return `${groups.slice(0, 4).join(":")}::/64`;
 }
 export const clearThrottle = (key: string) => attempts.delete(key);
 
@@ -113,8 +152,12 @@ export async function requireWorkspace(req: Request, _res: Response, next: NextF
       userId = ws.ownerId;
       req.actor = "agent";
     } else {
-      userId = sessionUserId(req);
-      if (!userId) throw new HttpError(401, "Sign in required");
+      const session = readSession(req);
+      if (!session) throw new HttpError(401, "Sign in required");
+      userId = session.userId;
+      // A password reset or change signs out every session issued before it.
+      const user = await getBackend().getUser(userId);
+      if (!user || (user.sessionsValidAfter && session.issuedAt < Date.parse(user.sessionsValidAfter))) throw new HttpError(401, "Sign in required");
       ws = await getBackend().workspaceForOwner(userId);
       if (!ws) throw new HttpError(401, "Sign in required");
       // The in-app Clipping Agent calls the API over loopback with the user's
@@ -125,6 +168,11 @@ export async function requireWorkspace(req: Request, _res: Response, next: NextF
     req.userId = userId;
     req.workspaceId = ws.id;
     await loadTenant(ws.id);
+    // Accounts that haven't confirmed their email get a smaller AI budget (when email can be sent).
+    if (emailConfigured()) {
+      const owner = await getBackend().getUser(ws.ownerId);
+      setUnverified(ws.id, !owner?.emailVerifiedAt);
+    }
     runInWorkspace(ws.id, userId, next, req.actor);
   } catch (err) {
     next(err);

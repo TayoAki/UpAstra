@@ -194,6 +194,8 @@ export type RenderStatus = "queued" | "analyzing" | "voicing" | "rendering" | "d
 /** One render of a clip plan into a finished 9:16 video. */
 export interface RenderInfo {
   status: RenderStatus;
+  /** Times this render was restarted after a server restart cut it off. */
+  resumes?: number;
   step: string;
   voice: VoiceOption;
   requestedAt: string;
@@ -297,6 +299,8 @@ export interface WorkspaceDoc {
   captionJobs?: CaptionJob[];
   /** Fonts, colours and default caption style for everything this workspace renders. */
   brand?: BrandKit;
+  /** Outstand page-picking sessions this workspace started (Facebook/LinkedIn), valid for an hour. */
+  pendingSocial?: { session: string; at: string }[];
   /** What this workspace has used: AI spend, renders, captions, posts. */
   usage?: WorkspaceUsage;
 }
@@ -396,7 +400,7 @@ export interface PublicUser {
 }
 
 export interface Me {
-  user: PublicUser & { admin?: boolean };
+  user: PublicUser & { admin?: boolean; emailVerified?: boolean };
   workspace: { id: string; name: string; hasAgentKey?: boolean };
 }
 
@@ -435,6 +439,8 @@ export type CaptionJobStatus = "uploaded" | "transcribing" | "ready" | "renderin
 
 export interface CaptionJob {
   id: string;
+  /** Times this job was restarted after a server restart cut it off. */
+  resumes?: number;
   name: string;
   status: CaptionJobStatus;
   step?: string;

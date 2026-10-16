@@ -16,6 +16,7 @@ import { prepareFonts } from "./fonts";
 import { analyzeFootage, pickMoment } from "./moments";
 import { videoStore } from "./storage";
 import { recordUsage } from "./usage";
+import { alert, isUserError } from "./alerts";
 
 // The render queue: approved clip plans → finished 9:16 MP4s.
 //   1. find moments in each footage file the plan uses (cached)
@@ -38,18 +39,32 @@ const concurrency = () => Math.max(1, Number(process.env.RENDER_CONCURRENCY ?? 1
 
 export const renderAvailable = () => ffmpegAvailable();
 
-// A render that was in flight when the server restarted can't resume.
-tenantLoadHooks.push((_ws, doc) => {
-  for (const c of doc.clips)
-    if (c.render && !["done", "failed"].includes(c.render.status) && !active.has(c.id)) {
-      c.render = { ...c.render, status: "failed", step: "Interrupted by a restart", error: "Interrupted by a server restart — render it again." };
+// A render cut off by a restart (deploys included) starts again from the
+// beginning, at most twice, so a render that crashes the server can't loop.
+export const MAX_RESUMES = 2;
+tenantLoadHooks.push((ws, doc) => {
+  for (const c of doc.clips) {
+    const r = c.render;
+    if (!r || ["done", "failed"].includes(r.status) || active.has(c.id) || queue.some((j) => j.clipId === c.id)) continue;
+    if (!ffmpegAvailable() || (r.resumes ?? 0) >= MAX_RESUMES) {
+      c.render = { ...r, status: "failed", step: "Interrupted by a restart", error: "Interrupted by a server restart — render it again." };
       if (c.status === "rendering") c.status = "approved";
+      continue;
     }
+    c.render = { ...r, status: "queued", step: "Resuming after a server restart", resumes: (r.resumes ?? 0) + 1 };
+    c.status = "rendering";
+    queue.push({ workspaceId: ws, clipId: c.id });
+  }
+  // Runs once the workspace has finished loading.
+  setImmediate(pump);
 });
 
 export function enqueueRender(workspaceId: string, clip: Clip, voice: VoiceOption, actor?: "human" | "agent") {
   if (!ffmpegAvailable()) throw new HttpError(503, "Rendering isn't available on this server (ffmpeg missing)");
   if (active.has(clip.id) || queue.some((j) => j.clipId === clip.id)) throw new HttpError(409, "This clip is already rendering");
+  // One workspace can't fill the shared queue.
+  const max = Number(process.env.MAX_QUEUED_RENDERS ?? 20);
+  if (queue.filter((j) => j.workspaceId === workspaceId).length >= max) throw new HttpError(429, `You already have ${max} clips waiting to render. Try again when some finish.`);
   clip.render = { status: "queued", step: "Waiting in the render queue", voice, requestedAt: now(), cost: 0 };
   clip.status = "rendering";
   queue.push({ workspaceId, clipId: clip.id, actor });
@@ -84,6 +99,7 @@ async function process_(job: Job) {
     } catch (err) {
       const msg = (err as Error).message;
       console.error(`[render] ${clip.id} failed:`, msg);
+      if (!isUserError(msg)) alert("render failed", msg.slice(0, 300), `workspace ${job.workspaceId} · clip ${clip.id}`);
       const c = getDoc().clips.find((x) => x.id === job.clipId);
       if (c?.render) {
         c.render.status = "failed";

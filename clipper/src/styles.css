@@ -1266,3 +1266,49 @@ tr.clickable:hover td {
 .auth-pitch .brand-word {
   color: #fff;
 }
+
+/* Notices pinned above the status bar */
+.flash {
+  position: fixed;
+  bottom: 42px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 10px 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+}
+@media (max-width: 640px) {
+  .flash {
+    flex-wrap: wrap;
+  }
+}
+
+/* Terms and privacy */
+.legal {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+  line-height: 1.6;
+}
+.legal h1 {
+  margin-top: 16px;
+}
+.legal h2 {
+  font-size: 17px;
+  margin-top: 28px;
+}
+.legal .draft {
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 13px;
+}

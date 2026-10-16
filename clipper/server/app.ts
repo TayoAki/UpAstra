@@ -6,7 +6,8 @@ import { campaignStats } from "../shared/rules";
 import type { AdminUsage, AgentRun, CaptionJob, Campaign, CampaignBrief, Clip, ClipStatus, Me, Platform, Post, PostStatus, ServiceStatus, SocialAccount, VoiceOption } from "../shared/types";
 import { CLIP_STATUSES, PLATFORMS, POST_STATUSES, VOICES } from "../shared/types";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { bearerAgentKey, clearSession, clearThrottle, hashAgentKey, hashPassword, humansOnly, issueSession, newAgentKey, requireWorkspace, signVideoLink, throttle, verifyPassword, verifyVideoLink } from "./auth";
+import { bearerAgentKey, clearSession, clientKey, clearThrottle, hashAgentKey, hashPassword, humansOnly, issueSession, newAgentKey, passwordFingerprint, readToken, requireWorkspace, signToken, signVideoLink, throttle, verifyPassword, verifyVideoLink } from "./auth";
+import { buttonEmail, sendEmail } from "./email";
 import { HttpError, emptyDoc, forgetTenant, getBackend, getDoc, loadedDoc, loadTenant, log, newId, now, runInWorkspace, save, type UserRow } from "./db";
 import { createMcpServer, httpApi } from "./mcp";
 import { extractBrief, normalizeBrief } from "./extract";
@@ -32,6 +33,7 @@ import { planClips, type PlanGuide } from "./scripts";
 import { analyze, testShare } from "../shared/learning";
 import { writeInsights } from "./insights";
 import { driveThumb, readBriefUrl, resolveFootage } from "./sources";
+import { alert } from "./alerts";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const wrap = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => fn(req, res).catch(next);
@@ -179,10 +181,18 @@ export function createApp() {
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
-  app.use((_req, res, next) => {
+  app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     res.setHeader("X-Frame-Options", "DENY");
+    if (process.env.NODE_ENV === "production") res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    // The app's own pages load only from this origin (videos and avatars may come
+    // from storage and social CDNs). The third-party editor at /editor sets its own needs.
+    if (!req.path.startsWith("/editor"))
+      res.setHeader(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+      );
     next();
   });
   // Outstand webhooks: verified against the raw body, so mounted before the JSON parser.
@@ -205,18 +215,33 @@ export function createApp() {
   );
 
   // The editor's AI chat sends large requests (tool schemas, timeline state).
-  app.use("/api/ai/v1", express.json({ limit: "8mb" }));
+  app.use("/api/ai/v1", express.json({ limit: "2mb" }));
   app.use("/api", express.json({ limit: "1mb" }));
 
-  app.get("/api/health", (_req, res) => res.json({ ok: true, ...serviceStatus(), videos: storageKind() }));
+  app.get(
+    "/api/health",
+    wrap(async (_req, res) => {
+      const db = await getBackend()
+        .ping()
+        .then(() => true)
+        .catch(() => false);
+      if (!db) alert("database", "The database isn't answering health checks");
+      res.status(db ? 200 : 503).json({ ok: db, db, ...serviceStatus(), videos: storageKind() });
+    }),
+  );
 
   // ---- Accounts --------------------------------------------------------------
   const me = async (userId: string): Promise<Me> => {
     const b = getBackend();
     const user = (await b.getUser(userId))!;
     const ws = (await b.workspaceForOwner(userId))!;
-    return { user: { id: user.id, email: user.email, name: user.name, ...(isAdmin(user.email) ? { admin: true } : {}) }, workspace: { id: ws.id, name: ws.name, hasAgentKey: !!ws.hasAgentKey } };
+    return { user: { id: user.id, email: user.email, name: user.name, emailVerified: !!user.emailVerifiedAt, ...(isAdmin(user.email) ? { admin: true } : {}) }, workspace: { id: ws.id, name: ws.name, hasAgentKey: !!ws.hasAgentKey } };
   };
+
+  // Shown on the public Terms and Privacy pages.
+  app.get("/api/public-config", (_req, res) =>
+    res.json({ company: process.env.LEGAL_NAME || "UGCMediaClips", contact: process.env.CONTACT_EMAIL || undefined, effective: process.env.LEGAL_EFFECTIVE || "October 16, 2026" }),
+  );
 
   app.post(
     "/api/auth/signup",
@@ -227,13 +252,14 @@ export function createApp() {
       const name = String(req.body?.name ?? "").trim().slice(0, 80) || email.split("@")[0];
       if (!EMAIL.test(email)) throw new HttpError(400, "Enter a valid email");
       if (password.length < 8) throw new HttpError(400, "Password must be at least 8 characters");
-      throttle(`signup:${req.ip}`);
+      throttle(`signup:${clientKey(req.ip)}`);
       const b = getBackend();
       if (await b.findUserByEmail(email)) throw new HttpError(409, "An account with that email already exists");
       const user: UserRow = { id: newId("usr"), email, name, passwordHash: await hashPassword(password), createdAt: now() };
       await b.createUser(user);
       await b.createWorkspace({ id: newId("ws"), ownerId: user.id, name: String(req.body?.workspaceName ?? "").trim().slice(0, 80) || `${name}'s clips`, createdAt: now() }, emptyDoc());
       issueSession(res, user.id);
+      await sendVerification(req, user).catch((e) => console.error("[email] verification failed:", (e as Error).message));
       res.status(201).json(await me(user.id));
     }),
   );
@@ -242,13 +268,139 @@ export function createApp() {
     "/api/auth/login",
     wrap(async (req, res) => {
       const email = String(req.body?.email ?? "").trim().toLowerCase();
-      const key = `login:${req.ip}:${email}`;
+      const key = `login:${clientKey(req.ip)}:${email}`;
       throttle(key);
+      // However many addresses they come from, an account gets a limited number of guesses.
+      throttle(`login-account:${email}`, 30);
       const user = await getBackend().findUserByEmail(email);
       if (!user || !(await verifyPassword(String(req.body?.password ?? ""), user.passwordHash))) throw new HttpError(401, "Wrong email or password");
       clearThrottle(key);
+      clearThrottle(`login-account:${email}`);
       issueSession(res, user.id);
       res.json(await me(user.id));
+    }),
+  );
+
+  // ---- Email: confirm address, reset or change password ----------------------
+  // Links are built from APP_URL (never the request's Host header, which a
+  // caller controls) so an emailed link can't be pointed at another site.
+  const linkBase = (req: Request) => (process.env.APP_URL || process.env.PUBLIC_URL || (process.env.NODE_ENV === "production" ? "" : publicBase(req))).replace(/\/$/, "");
+  const sendVerification = async (req: Request, user: UserRow) => {
+    const base = linkBase(req);
+    if (!base) return console.warn("[email] APP_URL is not set; can't build links");
+    const token = signToken("verify", { u: user.id, m: user.email }, 7 * 86400);
+    await sendEmail(
+      buttonEmail({
+        to: user.email,
+        subject: "Confirm your email for UGCMediaClips",
+        intro: `Hi ${user.name}, confirm this is your email so you can recover your account if you ever lose your password.`,
+        button: "Confirm email",
+        url: `${base}/#/verify?token=${encodeURIComponent(token)}`,
+        outro: "The link works for 7 days. If you didn't create an account, ignore this email.",
+      }),
+    );
+  };
+
+  app.post(
+    "/api/auth/forgot",
+    wrap(async (req, res) => {
+      const email = String(req.body?.email ?? "").trim().toLowerCase();
+      if (!EMAIL.test(email)) throw new HttpError(400, "Enter a valid email");
+      throttle(`forgot:${clientKey(req.ip)}`);
+      throttle(`forgot:${email}`);
+      const user = await getBackend().findUserByEmail(email);
+      const base = linkBase(req);
+      // Same answer whether or not the account exists, so this can't be used to find accounts.
+      if (user && base) {
+        const token = signToken("reset", { u: user.id, f: passwordFingerprint(user.passwordHash) }, 3600);
+        await sendEmail(
+          buttonEmail({
+            to: user.email,
+            subject: "Reset your UGCMediaClips password",
+            intro: "Someone (hopefully you) asked to reset the password for this account.",
+            button: "Choose a new password",
+            url: `${base}/#/reset?token=${encodeURIComponent(token)}`,
+            outro: "The link works once, for 1 hour. If you didn't ask for this, ignore this email; your password stays the same.",
+          }),
+        ).catch((e) => console.error("[email] reset failed:", (e as Error).message));
+      }
+      res.json({ ok: true });
+    }),
+  );
+
+  app.post(
+    "/api/auth/reset",
+    wrap(async (req, res) => {
+      throttle(`reset:${clientKey(req.ip)}`);
+      const t = readToken("reset", String(req.body?.token ?? ""));
+      const password = String(req.body?.password ?? "");
+      if (password.length < 8) throw new HttpError(400, "Password must be at least 8 characters");
+      const b = getBackend();
+      const user = t && (await b.getUser(t.u));
+      if (!user || passwordFingerprint(user.passwordHash) !== t.f) throw new HttpError(400, "This reset link has expired or was already used. Ask for a new one.");
+      const at = new Date().toISOString();
+      // Following the link proves the inbox, so it also confirms the email.
+      await b.updateUser(user.id, { passwordHash: await hashPassword(password), sessionsValidAfter: at, emailVerifiedAt: user.emailVerifiedAt ?? now() });
+      clearThrottle(`login:${clientKey(req.ip)}:${user.email}`);
+      clearThrottle(`login-account:${user.email}`);
+      issueSession(res, user.id);
+      res.json(await me(user.id));
+    }),
+  );
+
+  app.post(
+    "/api/auth/verify",
+    wrap(async (req, res) => {
+      throttle(`verify:${clientKey(req.ip)}`);
+      const t = readToken("verify", String(req.body?.token ?? ""));
+      const b = getBackend();
+      const user = t && (await b.getUser(t.u));
+      if (!user || user.email !== t.m) throw new HttpError(400, "This confirmation link has expired. Sign in and send a new one.");
+      if (!user.emailVerifiedAt) await b.updateUser(user.id, { emailVerifiedAt: now() });
+      res.json({ ok: true, email: user.email });
+    }),
+  );
+
+  app.post(
+    "/api/auth/resend-verification",
+    requireWorkspace,
+    humansOnly,
+    wrap(async (req, res) => {
+      throttle(`resend:${req.userId}`);
+      const user = (await getBackend().getUser(req.userId!))!;
+      if (!user.emailVerifiedAt) await sendVerification(req, user);
+      res.json({ ok: true });
+    }),
+  );
+
+  app.post(
+    "/api/auth/password",
+    requireWorkspace,
+    humansOnly,
+    wrap(async (req, res) => {
+      const b = getBackend();
+      const user = (await b.getUser(req.userId!))!;
+      throttle(`password:${user.id}`);
+      if (!(await verifyPassword(String(req.body?.current ?? ""), user.passwordHash))) throw new HttpError(401, "Your current password is wrong");
+      const next = String(req.body?.password ?? "");
+      if (next.length < 8) throw new HttpError(400, "Password must be at least 8 characters");
+      await b.updateUser(user.id, { passwordHash: await hashPassword(next), sessionsValidAfter: new Date().toISOString() });
+      clearThrottle(`password:${user.id}`);
+      // Signs out every other device; this one gets a fresh session.
+      issueSession(res, user.id);
+      res.json(await me(user.id));
+    }),
+  );
+
+  // Ends every session for this account (all devices), including this one.
+  app.post(
+    "/api/auth/logout-everywhere",
+    requireWorkspace,
+    humansOnly,
+    wrap(async (req, res) => {
+      await getBackend().updateUser(req.userId!, { sessionsValidAfter: new Date().toISOString() });
+      clearSession(res);
+      res.json({ ok: true });
     }),
   );
 
@@ -444,7 +596,13 @@ export function createApp() {
     wrap(async (req, res) => {
       const q = req.query as Record<string, string | undefined>;
       if (q.error || q.success === "false") return void res.redirect(`/#/settings/accounts?connect_error=${encodeURIComponent(String(q.error ?? q.message ?? "The connection was cancelled"))}`);
-      if (q.session) return void res.redirect(`/#/settings/accounts?pending=${encodeURIComponent(String(q.session))}`);
+      if (q.session) {
+        // Remember which workspace this page-picking session belongs to.
+        const doc = getDoc();
+        doc.pendingSocial = [...(doc.pendingSocial ?? []).filter((p) => Date.now() - Date.parse(p.at) < 3600_000), { session: String(q.session).slice(0, 200), at: now() }];
+        save();
+        return void res.redirect(`/#/settings/accounts?pending=${encodeURIComponent(String(q.session))}`);
+      }
       await syncAccounts(req.workspaceId!);
       log({ kind: "account", message: `Connected ${q.username ? `@${q.username}` : "a social account"}.` });
       save();
@@ -453,16 +611,20 @@ export function createApp() {
   );
 
   // Facebook / LinkedIn: pick which pages to connect.
+  const ownPending = (session: string) => {
+    if (!(getDoc().pendingSocial ?? []).some((p) => p.session === session && Date.now() - Date.parse(p.at) < 3600_000)) throw new HttpError(404, "That connection has expired. Connect the account again.");
+    return session;
+  };
   api.get(
     "/social/pending/:session",
-    wrap(async (req, res) => res.json({ pages: await pendingPages(String(req.params.session)) })),
+    wrap(async (req, res) => res.json({ pages: await pendingPages(ownPending(String(req.params.session))) })),
   );
   api.post(
     "/social/pending/:session",
     wrap(async (req, res) => {
       const ids = Array.isArray(req.body?.pageIds) ? req.body.pageIds.map(String).slice(0, 50) : [];
       if (!ids.length) throw new HttpError(400, "Pick at least one page");
-      await finalizePending(String(req.params.session), ids);
+      await finalizePending(ownPending(String(req.params.session)), ids);
       await syncAccounts(req.workspaceId!);
       res.json(stateFor());
     }),
@@ -546,9 +708,15 @@ export function createApp() {
   };
   const startJob = (req: Request, j: CaptionJob) => {
     if (!transcriptionAvailable()) throw new HttpError(503, "Transcription isn't available on this server");
+    try {
+      // Queued before it's added, so a full queue doesn't leave a job stuck as "working".
+      enqueueCaptionJob({ workspaceId: req.workspaceId!, jobId: j.id, kind: "transcribe", actor: req.actor });
+    } catch (err) {
+      void videoStore().deletePrefix(j.sourceKey).catch(() => undefined);
+      throw err;
+    }
     const doc = getDoc();
     doc.captionJobs = [j, ...(doc.captionJobs ?? [])].slice(0, 200);
-    enqueueCaptionJob({ workspaceId: req.workspaceId!, jobId: j.id, kind: "transcribe", actor: req.actor });
     log({ kind: "clip", message: `Captioning "${j.name}" — transcribing.` });
     save();
   };
@@ -617,8 +785,8 @@ export function createApp() {
     const j = findJob(String(req.params.id));
     if (j.status === "transcribing" || j.status === "rendering") throw new HttpError(409, "Already working on it");
     if (typeof req.body?.language === "string" && (req.body.language === "auto" || LANGUAGES.some(([c]) => c === req.body.language))) j.languageHint = req.body.language;
-    Object.assign(j, { status: "transcribing", step: "Queued", error: undefined });
     enqueueCaptionJob({ workspaceId: req.workspaceId!, jobId: j.id, kind: "transcribe", actor: req.actor });
+    Object.assign(j, { status: "transcribing", step: "Queued", error: undefined });
     save();
     res.status(202).json(stateFor());
   });
@@ -628,8 +796,8 @@ export function createApp() {
     if (!j.words.length) throw new HttpError(409, "Transcribe the video first");
     if (j.status === "transcribing" || j.status === "rendering") throw new HttpError(409, "Already working on it");
     if (req.body?.captions && typeof req.body.captions === "object") j.captions = captionOverrides(req.body.captions);
-    Object.assign(j, { status: "rendering", step: "Queued", error: undefined });
     enqueueCaptionJob({ workspaceId: req.workspaceId!, jobId: j.id, kind: "render", actor: req.actor });
+    Object.assign(j, { status: "rendering", step: "Queued", error: undefined });
     save();
     res.status(202).json(stateFor());
   });
@@ -1012,9 +1180,19 @@ export function createApp() {
         },
         flush(cb) {
           const costs = [...tail.matchAll(/"cost"\s*:\s*([0-9.eE+-]+)/g)];
+          billed = true;
           runInWorkspace(ws, undefined, () => recordAI("editor", Number(costs.at(-1)?.[1] ?? 0)));
           cb();
         },
+      });
+      // If the viewer leaves mid-reply the provider still bills: charge an estimate
+      // from the request size so abandoned streams still count toward the budget.
+      let billed = false;
+      res.on("close", () => {
+        if (billed) return;
+        billed = true;
+        const inputChars = JSON.stringify(req.body?.messages ?? []).length;
+        runInWorkspace(ws, undefined, () => recordAI("editor", (inputChars / 4) * 3e-6 + 0.01));
       });
       Readable.fromWeb(upstream.body as never).pipe(meter).pipe(res);
     }),
@@ -1210,9 +1388,11 @@ export function createApp() {
     app.use((req, res, next) => (req.method === "GET" && !req.path.startsWith("/api") && !req.path.startsWith("/editor/") ? res.sendFile(path.join(dist, "index.html")) : next()));
   }
 
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     const status = err instanceof HttpError ? err.status : (err as { status?: number })?.status === 400 ? 400 : 500;
     if (status >= 500) console.error(err);
+    // Unexpected failures page the operator; deliberate ones (503 "not configured", 429 limits) don't.
+    if (status === 500) alert("server error", `${req.method} ${req.path.replace(/[\w-]{16,}/g, ":id")}: ${(err as Error)?.message ?? err}`, (err as Error)?.stack?.split("\n").slice(1, 4).join("\n"));
     res.status(status).json({ error: status >= 500 ? "Something went wrong" : (err as Error).message });
   });
   return app;

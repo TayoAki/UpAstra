@@ -172,5 +172,10 @@ describe("publishing through Outstand", () => {
     expect((await call(`/api/clips/${clip.id}/schedule`, "POST", { accountIds: ["acct_nope"] })).status).toBe(400);
     expect((await call(`/api/clips/${clip.id}/schedule`, "POST", { accountIds: [tt], at: new Date(Date.now() + 40 * 864e5).toISOString() })).status).toBe(400);
     expect((await call(`/api/clips/${clip.id}/schedule`, "POST", { accountIds: [tt], tiktok: { mode: "direct" } })).status).toBe(400);
+    // A page-picking session this workspace didn't start can't be read or finished.
+    expect((await call("/api/social/pending/someone-elses-session")).status).toBe(404);
+    expect((await call("/api/social/pending/someone-elses-session", "POST", { pageIds: ["p1"] })).status).toBe(404);
+    expect((await call("/api/social/callback?session=mine")).status).toBe(302);
+    expect((await call("/api/social/pending/mine")).status).not.toBe(404);
   });
 });

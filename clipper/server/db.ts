@@ -16,6 +16,9 @@ export interface UserRow {
   name: string;
   passwordHash: string;
   createdAt: string;
+  emailVerifiedAt?: string;
+  /** Sessions issued before this are rejected (set on password reset or change). */
+  sessionsValidAfter?: string;
 }
 
 export interface WorkspaceRow {
@@ -29,9 +32,12 @@ export interface WorkspaceRow {
 interface Backend {
   kind: "postgres" | "file";
   init(): Promise<void>;
+  /** Throws if the store can't be reached. */
+  ping(): Promise<void>;
   createUser(u: UserRow): Promise<void>;
   findUserByEmail(email: string): Promise<UserRow | undefined>;
   getUser(id: string): Promise<UserRow | undefined>;
+  updateUser(id: string, patch: Partial<Pick<UserRow, "passwordHash" | "emailVerifiedAt" | "sessionsValidAfter" | "name">>): Promise<void>;
   deleteUser(id: string): Promise<void>;
   createWorkspace(w: WorkspaceRow, doc: WorkspaceDoc): Promise<void>;
   workspaceForOwner(userId: string): Promise<WorkspaceRow | undefined>;
@@ -45,6 +51,8 @@ interface Backend {
   renameWorkspace(id: string, name: string): Promise<void>;
   deleteWorkspace(id: string): Promise<void>;
   loadDoc(id: string): Promise<WorkspaceDoc | undefined>;
+  /** Workspaces with renders or caption jobs that were in progress (to resume them after a restart). */
+  workspacesWithPendingWork(): Promise<string[]>;
   /** Every workspace with its owner's email and usage record (for the operator's usage view). */
   listWorkspaceUsage(): Promise<(WorkspaceRow & { email: string; usage?: WorkspaceDoc["usage"] })[]>;
   saveDoc(id: string, doc: WorkspaceDoc): Promise<void>;
@@ -71,10 +79,23 @@ class PgBackend implements Backend {
       CREATE TABLE IF NOT EXISTS co_external (
         kind TEXT NOT NULL, external_id TEXT NOT NULL, workspace_id TEXT NOT NULL REFERENCES co_workspaces(id) ON DELETE CASCADE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (kind, external_id));
-      CREATE INDEX IF NOT EXISTS co_external_recent ON co_external(kind, created_at);`);
+      CREATE INDEX IF NOT EXISTS co_external_recent ON co_external(kind, created_at);
+      ALTER TABLE co_users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+      ALTER TABLE co_users ADD COLUMN IF NOT EXISTS sessions_valid_after TIMESTAMPTZ;`);
+  }
+  async ping() {
+    await this.pool.query("SELECT 1");
   }
   private user = (r: Record<string, unknown> | undefined): UserRow | undefined =>
-    r && { id: r.id as string, email: r.email as string, name: r.name as string, passwordHash: r.password_hash as string, createdAt: new Date(r.created_at as string).toISOString() };
+    r && {
+      id: r.id as string,
+      email: r.email as string,
+      name: r.name as string,
+      passwordHash: r.password_hash as string,
+      createdAt: new Date(r.created_at as string).toISOString(),
+      emailVerifiedAt: r.email_verified_at ? new Date(r.email_verified_at as string).toISOString() : undefined,
+      sessionsValidAfter: r.sessions_valid_after ? new Date(r.sessions_valid_after as string).toISOString() : undefined,
+    };
   async createUser(u: UserRow) {
     await this.pool.query("INSERT INTO co_users (id, email, name, password_hash, created_at) VALUES ($1,$2,$3,$4,$5)", [u.id, u.email, u.name, u.passwordHash, u.createdAt]);
   }
@@ -86,6 +107,12 @@ class PgBackend implements Backend {
   }
   async deleteUser(id: string) {
     await this.pool.query("DELETE FROM co_users WHERE id=$1", [id]);
+  }
+  async updateUser(id: string, patch: Partial<Pick<UserRow, "passwordHash" | "emailVerifiedAt" | "sessionsValidAfter" | "name">>) {
+    const cols: Record<string, string> = { passwordHash: "password_hash", emailVerifiedAt: "email_verified_at", sessionsValidAfter: "sessions_valid_after", name: "name" };
+    const keys = Object.keys(patch).filter((k) => k in cols) as (keyof typeof patch)[];
+    if (!keys.length) return;
+    await this.pool.query(`UPDATE co_users SET ${keys.map((k, n) => `${cols[k]}=$${n + 2}`).join(", ")} WHERE id=$1`, [id, ...keys.map((k) => patch[k] ?? null)]);
   }
   async createWorkspace(w: WorkspaceRow, doc: WorkspaceDoc) {
     await this.pool.query("INSERT INTO co_workspaces (id, owner_id, name, data, created_at) VALUES ($1,$2,$3,$4,$5)", [w.id, w.ownerId, w.name, JSON.stringify(doc), w.createdAt]);
@@ -117,6 +144,15 @@ class PgBackend implements Backend {
   async deleteWorkspace(id: string) {
     await this.pool.query("DELETE FROM co_workspaces WHERE id=$1", [id]);
   }
+  async workspacesWithPendingWork() {
+    const rows = (
+      await this.pool.query(
+        `SELECT id FROM co_workspaces WHERE jsonb_path_exists(data, '$.clips[*].render.status ? (@ == "queued" || @ == "analyzing" || @ == "voicing" || @ == "rendering")')
+           OR jsonb_path_exists(data, '$.captionJobs[*].status ? (@ == "transcribing" || @ == "rendering")')`,
+      )
+    ).rows;
+    return rows.map((r) => r.id as string);
+  }
   async listWorkspaceUsage() {
     const rows = (await this.pool.query("SELECT w.id, w.owner_id, w.name, w.created_at, u.email, w.data->'usage' AS usage FROM co_workspaces w JOIN co_users u ON u.id = w.owner_id ORDER BY w.created_at")).rows;
     return rows.map((r) => ({ ...this.ws(r)!, email: r.email as string, usage: (r.usage ?? undefined) as WorkspaceDoc["usage"] }));
@@ -145,6 +181,7 @@ class FileBackend implements Backend {
     fs.mkdirSync(this.dir, { recursive: true });
     fs.writeFileSync(this.platformFile!, JSON.stringify({ users: this.users, workspaces: this.workspaces, external: this.external }, null, 1));
   }
+  async ping() {}
   async init() {
     if (this.dir && fs.existsSync(this.platformFile!)) Object.assign(this, JSON.parse(fs.readFileSync(this.platformFile!, "utf8")));
   }
@@ -157,6 +194,11 @@ class FileBackend implements Backend {
   }
   async getUser(id: string) {
     return this.users.find((u) => u.id === id);
+  }
+  async updateUser(id: string, patch: Partial<Pick<UserRow, "passwordHash" | "emailVerifiedAt" | "sessionsValidAfter" | "name">>) {
+    const u = this.users.find((x) => x.id === id);
+    if (u) Object.assign(u, patch);
+    this.persist();
   }
   async deleteUser(id: string) {
     for (const w of this.workspaces.filter((x) => x.ownerId === id)) await this.deleteWorkspace(w.id);
@@ -205,6 +247,14 @@ class FileBackend implements Backend {
     this.docs.delete(id);
     if (this.dir) fs.rmSync(path.join(this.dir, "workspaces", `${id}.json`), { force: true });
     this.persist();
+  }
+  async workspacesWithPendingWork() {
+    const ids: string[] = [];
+    for (const w of this.workspaces) {
+      const d = await this.loadDoc(w.id);
+      if (d?.clips.some((c) => c.render && !["done", "failed"].includes(c.render.status)) || d?.captionJobs?.some((j) => j.status === "transcribing" || j.status === "rendering")) ids.push(w.id);
+    }
+    return ids;
   }
   async listWorkspaceUsage() {
     return Promise.all(
@@ -265,13 +315,22 @@ const ctx = new AsyncLocalStorage<{ workspaceId: string; userId?: string; actor?
 export const runInWorkspace = <T,>(workspaceId: string, userId: string | undefined, fn: () => T, actor?: "human" | "agent") => ctx.run({ workspaceId, userId, actor }, fn);
 export const currentWorkspaceId = () => ctx.getStore()?.workspaceId;
 
+// One load per workspace at a time: two requests arriving together must share
+// the same in-memory document, or one's changes would overwrite the other's.
+const loading = new Map<string, Promise<void>>();
 export async function loadTenant(workspaceId: string) {
   if (tenants.has(workspaceId)) return;
-  const doc = await getBackend().loadDoc(workspaceId);
-  if (!doc) throw new HttpError(404, "Workspace not found");
-  const full = { ...emptyDoc(), ...doc };
-  for (const hook of tenantLoadHooks) hook(workspaceId, full);
-  tenants.set(workspaceId, { doc: full });
+  const inflight = loading.get(workspaceId);
+  if (inflight) return inflight;
+  const p = (async () => {
+    const doc = await getBackend().loadDoc(workspaceId);
+    if (!doc) throw new HttpError(404, "Workspace not found");
+    const full = { ...emptyDoc(), ...doc };
+    for (const hook of tenantLoadHooks) hook(workspaceId, full);
+    tenants.set(workspaceId, { doc: full });
+  })().finally(() => loading.delete(workspaceId));
+  loading.set(workspaceId, p);
+  return p;
 }
 
 /** Run when a workspace document is loaded into memory (e.g. to fix up work interrupted by a restart). */

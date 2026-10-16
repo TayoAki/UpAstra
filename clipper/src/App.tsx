@@ -28,6 +28,38 @@ export function Tabs({ tabs, active, onPick }: { tabs: { id: string; label: stri
   );
 }
 
+/** Until the email is confirmed, a reminder (dismissable for this visit). */
+function ConfirmEmailBanner() {
+  const { me, run, busy } = useApp();
+  const [hidden, setHidden] = useState(() => {
+    try {
+      return sessionStorage.getItem("hideConfirm") === "1";
+    } catch {
+      return false;
+    }
+  });
+  if (me.user.emailVerified || hidden) return null;
+  const hide = () => {
+    try {
+      sessionStorage.setItem("hideConfirm", "1");
+    } catch {
+      /* private mode */
+    }
+    setHidden(true);
+  };
+  return (
+    <div className="flash" role="status">
+      Confirm your email so you can recover your account. We sent a link to {me.user.email}.
+      <button className="btn sm" disabled={busy} onClick={() => run(() => api.resendVerification(), "Sent it again")}>
+        Resend
+      </button>
+      <button className="btn sm ghost" onClick={hide}>
+        Later
+      </button>
+    </div>
+  );
+}
+
 export function App() {
   const { me, setMe, state } = useApp();
   const [route] = useRoute();
@@ -88,6 +120,7 @@ export function App() {
 
   return (
     <div className={`shell ${right ? "" : "no-right"}`}>
+      <ConfirmEmailBanner />
       <nav className="rail" aria-label="Main">
         <div className="logo" title="UGCMediaClips">
           <LogoMark size={32} />
@@ -113,6 +146,8 @@ export function App() {
                 <div className="small muted">{me.user.email}</div>
               </div>
               <button onClick={() => (setMenu(false), go("/settings/account"))}>Account settings</button>
+              <button onClick={() => (setMenu(false), window.open("#/terms", "_blank"))}>Terms</button>
+              <button onClick={() => (setMenu(false), window.open("#/privacy", "_blank"))}>Privacy</button>
               <button onClick={() => api.logout().then(() => setMe(null))}>
                 <span className="row">
                   <LogOut size={14} /> Sign out

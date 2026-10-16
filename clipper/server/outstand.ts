@@ -64,7 +64,7 @@ export async function authUrl(network: string, tenantId: string, redirectUri: st
 export async function listAccounts(tenantId: string): Promise<OutstandAccount[]> {
   const r = await call<{ data?: OutstandAccount[] }>("GET", `/social-accounts?tenantId=${encodeURIComponent(tenantId)}&limit=100`);
   // Tenant isolation is ours to enforce: never trust the filter alone.
-  return (r.data ?? []).filter((a) => !a.tenant_id || a.tenant_id === tenantId);
+  return (r.data ?? []).filter((a) => a.tenant_id === tenantId);
 }
 
 export async function pendingPages(session: string): Promise<{ id: string; name: string; network?: string; picture?: string }[]> {

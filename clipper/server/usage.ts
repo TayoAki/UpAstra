@@ -1,5 +1,6 @@
 import type { AIKind, MonthUsage, UsageReport, WorkspaceUsage } from "../shared/types";
 import { currentWorkspaceId, getDoc, HttpError, save } from "./db";
+import { alert } from "./alerts";
 
 // What each workspace uses, kept in its document: AI dollars as billed by the
 // provider, plus renders, caption jobs and posts. Powers the daily AI budget
@@ -9,8 +10,15 @@ const day = () => new Date().toISOString().slice(0, 10);
 export const monthKey = (d = new Date()) => d.toISOString().slice(0, 7);
 export const emptyMonth = (): MonthUsage => ({ ai: {}, renders: 0, renderSec: 0, captionJobs: 0, captionSec: 0, posts: 0 });
 
-/** Dollars of AI a workspace may spend per UTC day. */
-export const dailyBudget = () => Number(process.env.AI_DAILY_BUDGET_USD ?? 5);
+/** Dollars of AI a workspace may spend per UTC day (less until its owner confirms their email). */
+const unverified = new Set<string>();
+export const setUnverified = (workspaceId: string, on: boolean) => void (on ? unverified.add(workspaceId) : unverified.delete(workspaceId));
+export const dailyBudget = (workspaceId = currentWorkspaceId()) =>
+  workspaceId && unverified.has(workspaceId) ? Math.min(Number(process.env.AI_UNVERIFIED_BUDGET_USD ?? 1), Number(process.env.AI_DAILY_BUDGET_USD ?? 5)) : Number(process.env.AI_DAILY_BUDGET_USD ?? 5);
+
+/** Dollars of AI the whole server may spend per UTC day, across every workspace. */
+const globalSpend = { day: "", usd: 0 };
+export const globalBudget = () => Number(process.env.AI_GLOBAL_DAILY_BUDGET_USD ?? 100);
 
 /** Estimates for what isn't billed per call (Railway compute, Outstand posts). */
 export const RATES = {
@@ -36,7 +44,13 @@ const month = (u: WorkspaceUsage) => (u.months[monthKey()] ??= emptyMonth());
 export function checkAIBudget() {
   const u = usage();
   const budget = dailyBudget();
-  if (u && budget > 0 && u.dayUsd >= budget) throw new HttpError(429, `Today's AI budget ($${budget.toFixed(2)}) is used up. It resets at midnight UTC.`);
+  if (u && budget > 0 && u.dayUsd >= budget)
+    throw new HttpError(429, `Today's AI budget ($${budget.toFixed(2)}) is used up. It resets at midnight UTC.${unverified.has(currentWorkspaceId() ?? "") ? " Confirm your email for a bigger budget." : ""}`);
+  if (globalSpend.day === day() && globalBudget() > 0 && globalSpend.usd >= globalBudget()) {
+    console.error(`[usage] server-wide AI budget ($${globalBudget()}) reached`);
+    alert("AI paused", `The server-wide daily AI budget ($${globalBudget()}) is used up; AI is off for everyone until midnight UTC.`);
+    throw new HttpError(503, "AI is paused for today because of high demand. It resets at midnight UTC.");
+  }
 }
 
 /** After an AI call: what the provider billed. Outside a workspace (tests, scripts) it's a no-op. */
@@ -44,6 +58,8 @@ export function recordAI(kind: AIKind, usd: number) {
   const u = usage();
   if (!u) return;
   const c = Number.isFinite(usd) && usd > 0 ? usd : 0;
+  if (globalSpend.day !== day()) Object.assign(globalSpend, { day: day(), usd: 0 });
+  globalSpend.usd += c;
   u.dayUsd = round(u.dayUsd + c);
   u.dayCalls++;
   const m = month(u);

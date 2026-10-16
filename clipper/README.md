@@ -166,3 +166,44 @@ This is a separate service from Studio Operator, built from this folder:
 - The image includes ffmpeg. Give the service at least 2 GB of memory; footage is staged on local disk while it's copied to the bucket.
 - Tables are prefixed `co_`, so it can share a Postgres instance without touching other apps' tables.
 - Run 1 replica: workspace documents are cached in memory.
+
+## Running it for real users
+
+**Accounts and email**
+- Sign-up sends a confirmation link. "Forgot password" emails a one-time reset link that expires after 1 hour; using it signs out every other session.
+- Settings → Your account lets people change their password or sign out everywhere.
+- Email goes through [Resend](https://resend.com): set `RESEND_API_KEY` and `EMAIL_FROM` (an address on a domain you've verified in Resend).
+- Links are built from `APP_URL`, never from the request's Host header.
+- Without `RESEND_API_KEY`, nothing is sent. In development the links are printed to the log; in production they aren't, because they sign people in.
+- Until someone confirms their email, their workspace's daily AI budget is `AI_UNVERIFIED_BUDGET_USD` (default $1). This only applies while email is configured.
+
+**Limits**
+- Per workspace per day: `AI_DAILY_BUDGET_USD` (default $5) and `AI_DAILY_LIMIT` (default 150 calls).
+- Across the whole server per day: `AI_GLOBAL_DAILY_BUDGET_USD` (default $100).
+- Queue caps per workspace: `MAX_QUEUED_RENDERS` (20) and `MAX_QUEUED_CAPTION_JOBS` (5).
+- Logins are limited per address (IPv6 grouped by /64) and per account. Sign-ups and resets are limited per address.
+
+**Restarts and deploys**
+- Renders and caption jobs cut off by a restart resume on their own, at most twice each.
+- On startup, after `RESUME_DELAY_SEC` (default 45), the server finds workspaces with interrupted work and picks it up.
+- `RENDER_CONCURRENCY` sets how many renders run at once (about 1.6 vCPU and 2 GB each).
+
+**Footage**
+- Drive footage is downloaded once and cached in the bucket.
+- When Drive's public download limit blocks a file, a `GOOGLE_API_KEY` (an API key with the Drive API enabled) lets the server try Drive's API instead.
+
+**Monitoring**
+- `ALERT_WEBHOOK_URL` takes a Slack or Discord incoming webhook. It receives unexpected server errors, crashes, failed renders, caption jobs and agent runs, email failures, and the server-wide AI budget running out.
+- The same problem alerts at most once per 15 minutes, and at most 30 alerts go out per hour.
+- Problems users fix themselves (a blocked Drive file, a bad link) don't alert.
+- `/api/health` checks the database and returns 503 if it's down.
+
+**Security**
+- Pages are served with a Content Security Policy (except the third-party editor at `/editor`), plus HSTS, `nosniff`, `DENY` framing and a strict referrer policy.
+- ffmpeg only reads real audio/video containers, from local files or our own storage's signed links.
+- Fetching links from briefs is limited to public addresses. The check happens at connect time, so DNS rebinding can't get around it.
+- The editor's AI proxy forwards only the fields the editor needs.
+
+**Legal**
+- `#/terms` and `#/privacy` are linked from sign-up and the account menu. They're a starting draft: have them reviewed.
+- Set `LEGAL_NAME` (your company's legal name) and `CONTACT_EMAIL` (shown on both pages).

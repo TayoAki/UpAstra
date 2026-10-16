@@ -4,6 +4,7 @@ import type { AgentRun, AgentStep } from "../shared/types";
 import { getDoc, HttpError, newId, now, runInWorkspace, save, tenantLoadHooks } from "./db";
 import { aiLive, flattenToolSchema, forwardChatAs, spendAI } from "./llm";
 import { createMcpServer, httpApi } from "./mcp";
+import { alert, isUserError } from "./alerts";
 
 // The Clipping Agent: a chat in the app that runs the whole loop — briefs,
 // clip plans, renders, captions, scheduling — with the same tools external
@@ -209,6 +210,7 @@ async function loop(ctx: AgentContext, runId: string, resume?: "approve" | "decl
         run.status = "failed";
         run.error = (err as Error).message.slice(0, 300);
         console.error(`[agent] ${runId} failed:`, run.error);
+        if (!isUserError(run.error)) alert("agent run failed", run.error, `workspace ${ctx.workspaceId} · run ${runId}`);
       }
     } finally {
       run.updatedAt = now();

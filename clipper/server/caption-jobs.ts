@@ -4,12 +4,13 @@ import path from "node:path";
 import { resolveCaptionStyle } from "../shared/caption-styles";
 import type { CaptionJob } from "../shared/types";
 import { buildAss, groups } from "./captions";
-import { getDoc, loadTenant, log, now, runInWorkspace, save, tenantLoadHooks } from "./db";
+import { getDoc, HttpError, loadTenant, log, now, runInWorkspace, save, tenantLoadHooks } from "./db";
 import { prepareFonts } from "./fonts";
 import { probe, run } from "./media";
 import { videoStore } from "./storage";
 import { NO_SPACES, transcribe } from "./transcribe";
 import { recordUsage } from "./usage";
+import { alert, isUserError } from "./alerts";
 
 // Captions page jobs: transcribe an uploaded video (any of Whisper's ~99
 // languages), let the user fix words, then burn styled captions in. One job at
@@ -20,6 +21,8 @@ const queue: Task[] = [];
 let busy = false;
 
 export function enqueueCaptionJob(task: Task) {
+  const max = Number(process.env.MAX_QUEUED_CAPTION_JOBS ?? 5);
+  if (queue.filter((t) => t.workspaceId === task.workspaceId).length >= max) throw new HttpError(429, `You already have ${max} videos waiting for captions. Try again when some finish.`);
   queue.push(task);
   void pump();
 }
@@ -38,10 +41,22 @@ async function pump() {
   }
 }
 
-// A restart drops queued and running work: say so instead of spinning forever.
-tenantLoadHooks.push((_ws, doc) => {
-  for (const j of doc.captionJobs ?? [])
-    if (j.status === "transcribing" || j.status === "rendering") Object.assign(j, { status: j.status === "rendering" ? "ready" : "failed", error: "Interrupted by a server restart — try again.", step: undefined });
+// Work cut off by a restart (deploys included) starts again, at most twice.
+tenantLoadHooks.push((ws, doc) => {
+  let resumed = false;
+  for (const j of doc.captionJobs ?? []) {
+    if ((j.status !== "transcribing" && j.status !== "rendering") || queue.some((t) => t.jobId === j.id)) continue;
+    if ((j.resumes ?? 0) >= 2) {
+      Object.assign(j, { status: j.status === "rendering" ? "ready" : "failed", error: "Interrupted by a server restart — try again.", step: undefined });
+      continue;
+    }
+    j.resumes = (j.resumes ?? 0) + 1;
+    j.step = "Resuming after a server restart";
+    queue.push({ workspaceId: ws, jobId: j.id, kind: j.status === "rendering" ? "render" : "transcribe" });
+    resumed = true;
+  }
+  // Runs once the workspace has finished loading.
+  if (resumed) setImmediate(() => void pump());
 });
 
 const findJob = (id: string) => getDoc().captionJobs?.find((j) => j.id === id);
@@ -59,6 +74,7 @@ async function runTask(t: Task) {
   } catch (err) {
     const msg = (err as Error).message.slice(0, 400);
     console.error(`[captions] ${t.kind} ${j.id} failed:`, msg);
+    if (!isUserError(msg)) alert(`caption ${t.kind} failed`, msg.slice(0, 300), `workspace ${t.workspaceId} · job ${j.id}`);
     set(j, t.kind === "render" ? { status: "ready", error: `Render failed: ${msg}`, step: undefined } : { status: "failed", error: msg, step: undefined });
   }
 }

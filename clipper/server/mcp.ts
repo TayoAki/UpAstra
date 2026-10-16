@@ -160,7 +160,7 @@ export function createMcpServer(api: ApiCall): McpServer {
   /** Write plans, approve the ones that follow the brief, queue renders. */
   async function planAndRender(campaignId: string, count: number, voice: string, render: boolean) {
     const before = new Set((await state()).clips.map((c) => c.id));
-    const s = await api<State>("POST", `/campaigns/${campaignId}/clips`, { count });
+    const s = await api<State>("POST", `/campaigns/${encodeURIComponent(campaignId)}/clips`, { count });
     const fresh = s.clips.filter((c) => !before.has(c.id));
     const queued: string[] = [];
     if (render) {
@@ -243,7 +243,7 @@ export function createMcpServer(api: ApiCall): McpServer {
       const c = campaignIn(await state(), campaignId);
       const f = footageId ? c.footage.find((x) => x.id === footageId) : c.footage.find((x) => x.kind === "video" && !x.analyzedAt && !x.analysisError);
       if (!f) return "Every video already has its moments logged.";
-      const s = await api<State>("POST", `/campaigns/${campaignId}/footage/${f.id}/analyze`, {});
+      const s = await api<State>("POST", `/campaigns/${encodeURIComponent(campaignId)}/footage/${f.id}/analyze`, {});
       const done = campaignIn(s, campaignId).footage.find((x) => x.id === f.id)!;
       return { footage: done.name, moments: done.moments, remaining: campaignIn(s, campaignId).footage.filter((x) => x.kind === "video" && !x.analyzedAt).length };
     },
@@ -282,7 +282,7 @@ export function createMcpServer(api: ApiCall): McpServer {
       lengthSec: z.number().int().positive().optional(),
     },
     async ({ clipId, ...patch }) => {
-      const s = await api<State>("PUT", `/clips/${clipId}`, patch);
+      const s = await api<State>("PUT", `/clips/${encodeURIComponent(clipId)}`, patch);
       return clipFull(clipIn(s, clipId));
     },
   );
@@ -292,7 +292,7 @@ export function createMcpServer(api: ApiCall): McpServer {
     "Approve or reject a clip plan. Approving a plan that fails a brief rule needs override: true — only do that when the user has accepted the risk.",
     { clipId: z.string(), decision: z.enum(["approve", "reject"]), override: z.boolean().default(false) },
     async ({ clipId, decision, override }) => {
-      const s = await api<State>("PUT", `/clips/${clipId}`, { status: decision === "approve" ? "approved" : "rejected", override });
+      const s = await api<State>("PUT", `/clips/${encodeURIComponent(clipId)}`, { status: decision === "approve" ? "approved" : "rejected", override });
       return clipLine(clipIn(s, clipId));
     },
   );
@@ -302,7 +302,7 @@ export function createMcpServer(api: ApiCall): McpServer {
     "Render an approved plan into a finished 1080×1920 MP4 (footage cut at the best moments, hook, word-timed captions, CTA card, optional AI voiceover). Queued; follow with wait_for_renders.",
     { clipId: z.string(), voice: VOICE.default("ash") },
     async ({ clipId, voice }) => {
-      const s = await api<State>("POST", `/clips/${clipId}/render`, { voice });
+      const s = await api<State>("POST", `/clips/${encodeURIComponent(clipId)}/render`, { voice });
       return clipLine(clipIn(s, clipId));
     },
   );
@@ -369,8 +369,8 @@ export function createMcpServer(api: ApiCall): McpServer {
     "A captioning job: status, detected language, the transcript, and a share link once rendered.",
     { jobId: z.string() },
     async ({ jobId }) => {
-      const j = await api<CaptionJob>("GET", `/captions/${jobId}`);
-      return captionJobOut(j, j.status === "done" ? (await api<{ url: string }>("GET", `/captions/${jobId}/link`)).url : undefined, true);
+      const j = await api<CaptionJob>("GET", `/captions/${encodeURIComponent(jobId)}`);
+      return captionJobOut(j, j.status === "done" ? (await api<{ url: string }>("GET", `/captions/${encodeURIComponent(jobId)}/link`)).url : undefined, true);
     },
     true,
   );
@@ -402,7 +402,7 @@ export function createMcpServer(api: ApiCall): McpServer {
       youtubeTitle: z.string().max(100).optional(),
     },
     async ({ clipId, accountIds, at, caption, tiktokDirect, tiktokPrivacy, youtubeTitle }) => {
-      const r = await api<{ posts: string[]; state: State }>("POST", `/clips/${clipId}/schedule`, {
+      const r = await api<{ posts: string[]; state: State }>("POST", `/clips/${encodeURIComponent(clipId)}/schedule`, {
         accountIds,
         at,
         caption,
@@ -433,7 +433,7 @@ export function createMcpServer(api: ApiCall): McpServer {
     "Cancel a scheduled post before it goes out (on every account it was going to).",
     { postId: z.string() },
     async ({ postId }) => {
-      await api("POST", `/posts/${postId}/cancel`, {});
+      await api("POST", `/posts/${encodeURIComponent(postId)}/cancel`, {});
       return "Cancelled.";
     },
   );
@@ -472,7 +472,7 @@ export function createMcpServer(api: ApiCall): McpServer {
     },
     async ({ postId, status, ...metrics }) => {
       const m = Object.fromEntries(Object.entries(metrics).filter(([, v]) => v !== undefined));
-      const s = await api<State>("PUT", `/posts/${postId}`, { metrics: m, status });
+      const s = await api<State>("PUT", `/posts/${encodeURIComponent(postId)}`, { metrics: m, status });
       const p = s.posts.find((x) => x.id === postId)!;
       return { post: postLine(p), campaign: s.campaigns.find((c) => c.id === p.campaignId)?.stats };
     },

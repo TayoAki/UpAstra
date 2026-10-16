@@ -15,6 +15,7 @@ export function SettingsView({ tab }: { tab: string }) {
   const [ws, setWs] = useState(me.workspace.name);
   const [acct, setAcct] = useState({ platform: "tiktok" as Platform, handle: "", niche: "", followers: "" });
   const [pw, setPw] = useState("");
+  const [cp, setCp] = useState({ current: "", next: "" });
 
   return (
     <>
@@ -117,6 +118,39 @@ export function SettingsView({ tab }: { tab: string }) {
                 </p>
               </div>
             </div>
+            <Panel title="Email">
+              <p className="small muted" style={{ margin: 0 }}>
+                {me.user.email} · {me.user.emailVerified ? "confirmed" : "not confirmed yet"}
+              </p>
+              {!me.user.emailVerified && (
+                <button className="btn sm mt" disabled={busy} onClick={() => run(() => api.resendVerification(), `Sent a confirmation link to ${me.user.email}`)}>
+                  Send the confirmation link again
+                </button>
+              )}
+            </Panel>
+            <Panel title="Change password">
+              <form
+                className="row wrap"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void run(() => api.changePassword(cp.current, cp.next), "Password changed. Other devices are signed out.").then((m) => m && (setMe(m), setCp({ current: "", next: "" })));
+                }}
+              >
+                <input className="input" style={{ maxWidth: 220 }} type="password" autoComplete="current-password" placeholder="Current password" value={cp.current} onChange={(e) => setCp({ ...cp, current: e.target.value })} />
+                <input className="input" style={{ maxWidth: 220 }} type="password" autoComplete="new-password" placeholder="New password (8+ characters)" value={cp.next} onChange={(e) => setCp({ ...cp, next: e.target.value })} />
+                <button className="btn primary" disabled={busy || !cp.current || cp.next.length < 8}>
+                  Change password
+                </button>
+              </form>
+            </Panel>
+            <Panel title="Sessions">
+              <p className="small muted" style={{ marginTop: 0 }}>
+                Signed in on a device you don't use any more? Sign out of every browser and device, including this one. Agent keys aren't affected.
+              </p>
+              <button className="btn" disabled={busy} onClick={() => confirm("Sign out of every device, including this one?") && run(() => api.logoutEverywhere()).then((r) => r && setMe(null))}>
+                Sign out everywhere
+              </button>
+            </Panel>
             <Panel title="Delete account">
               <p className="small muted" style={{ marginTop: 0 }}>
                 Deletes your account, your workspace, and every campaign, clip plan and post in it. This can't be undone.

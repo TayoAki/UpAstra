@@ -20,9 +20,30 @@ export function netArgs(url: string): string[] {
   return out;
 }
 
+// Inputs are uploads and downloads we don't control. ffmpeg picks a demuxer
+// from a file's contents, and some formats (playlists, for example) make it
+// open further files or URLs. So every input may only be a real audio/video
+// container, read from a local file or (for our own storage's signed links)
+// over HTTP(S), and never anything it points to.
+const FORMATS = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,flv,mpegts,wav,mp3,aac,ogg,flac,s16le,concat";
+const protocolsFor = (input: string) => (/^https?:/.test(input) ? "https,http,tls,tcp,crypto" : "file");
+
+/** Add input restrictions in front of every ffmpeg `-i` (and ffprobe's input). */
+export function hardenInputs(cmd: string, args: string[]): string[] {
+  const guard = (input: string) => ["-protocol_whitelist", protocolsFor(input), "-format_whitelist", FORMATS];
+  if (cmd === "ffprobe") return [...guard(args[args.length - 1] ?? ""), ...args];
+  if (cmd !== "ffmpeg") return args;
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "-i" && i + 1 < args.length) out.push(...guard(args[i + 1]));
+    out.push(args[i]);
+  }
+  return out;
+}
+
 export function run(cmd: string, args: string[], timeoutMs = 20 * 60_000): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const p = spawn(cmd, hardenInputs(cmd, args), { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     p.stdout.on("data", (d) => (stdout += d));

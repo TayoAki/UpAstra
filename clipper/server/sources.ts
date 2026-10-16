@@ -1,5 +1,9 @@
+import dns, { type LookupAddress } from "node:dns";
 import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import http from "node:http";
+import https from "node:https";
+import { isIP, type LookupFunction } from "node:net";
+import { Readable } from "node:stream";
 import type { FootageFile, LinkRef } from "../shared/types";
 import { HttpError, newId } from "./db";
 
@@ -8,14 +12,47 @@ import { HttpError, newId } from "./db";
 
 const UA = "Mozilla/5.0 (compatible; UGCMediaClips/1.0)";
 
-function privateIP(ip: string): boolean {
+export function privateIP(ip: string): boolean {
   if (isIP(ip) === 6) {
     const l = ip.toLowerCase();
     if (l.startsWith("::ffff:")) return privateIP(l.slice(7));
-    return l === "::1" || l === "::" || /^(fc|fd|fe8|fe9|fea|feb)/.test(l);
+    // Loopback, unspecified, unique-local, link-local, NAT64 and 6to4 (both can wrap private IPv4).
+    return l === "::1" || l === "::" || /^(fc|fd|fe8|fe9|fea|feb)/.test(l) || l.startsWith("64:ff9b:") || l.startsWith("2002:");
   }
-  const [a, b] = ip.split(".").map(Number);
-  return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  const [a, b, c] = ip.split(".").map(Number);
+  return (
+    a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) ||
+    (a === 198 && (b === 18 || b === 19)) || (a === 192 && b === 0 && c === 0) || a >= 224
+  );
+}
+
+const allowPrivate = () => process.env.ALLOW_PRIVATE_FETCH === "1";
+
+// Checked at connect time, so a name can't pass the check and then resolve
+// somewhere private for the actual request (DNS rebinding).
+const guardedLookup: LookupFunction = (host, opts, cb) =>
+  dns.lookup(host, { ...opts, all: true }, (err, addrs) => {
+    const list = (addrs ?? []) as LookupAddress[];
+    if (err || !list.length) return (cb as (e: Error | null, a: string, f: number) => void)(err ?? new Error(`Couldn't find ${host}`), "", 0);
+    if (!allowPrivate() && list.some((x) => privateIP(x.address))) return (cb as (e: Error | null, a: string, f: number) => void)(Object.assign(new Error("That address can't be fetched"), { code: "EPRIVATE" }), "", 0);
+    if (opts.all) (cb as unknown as (e: null, a: LookupAddress[]) => void)(null, list);
+    else cb(null, list[0].address, list[0].family);
+  });
+
+/** GET a URL, connecting only to the address the guarded lookup approved. */
+function pinnedGet(u: URL, headers: Record<string, string>, signal: AbortSignal): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const req = (u.protocol === "https:" ? https : http).request(u, { method: "GET", headers, lookup: guardedLookup, signal }, (res) => {
+      const h = new Headers();
+      for (const [k, v] of Object.entries(res.headers)) if (v !== undefined) h.set(k, Array.isArray(v) ? v.join(", ") : v);
+      const status = res.statusCode ?? 502;
+      const empty = status === 204 || status === 304 || (status >= 300 && status < 400);
+      if (empty) res.resume();
+      resolve(new Response(empty ? null : (Readable.toWeb(res) as ReadableStream), { status, headers: h }));
+    });
+    req.on("error", (e: Error & { code?: string }) => reject(e.code === "EPRIVATE" ? new HttpError(400, e.message) : e));
+    req.end();
+  });
 }
 
 /** Fetch a public URL, refusing anything that resolves to a private network (also after redirects). */
@@ -25,8 +62,13 @@ export async function safeFetch(url: string, init: RequestInit = {}, hops = 4): 
   const addrs = isIP(u.hostname) ? [{ address: u.hostname }] : await lookup(u.hostname, { all: true }).catch(() => []);
   if (!addrs.length) throw new HttpError(422, `Couldn't find ${u.hostname}`);
   // Tests serve footage from localhost; nothing else may reach private networks.
-  if (addrs.some((a) => privateIP(a.address)) && process.env.ALLOW_PRIVATE_FETCH !== "1") throw new HttpError(400, "That address can't be fetched");
-  const res = await fetch(u, { ...init, redirect: "manual", headers: { "User-Agent": UA, ...(init.headers ?? {}) }, signal: init.signal ?? AbortSignal.timeout(15_000) });
+  if (addrs.some((a) => privateIP(a.address)) && !allowPrivate()) throw new HttpError(400, "That address can't be fetched");
+  const headers = { "User-Agent": UA, ...((init.headers as Record<string, string>) ?? {}) };
+  const signal = init.signal ?? AbortSignal.timeout(15_000);
+  // Behind an outbound proxy (local development) the proxy connects; otherwise
+  // connect only to an address checked at connect time.
+  const viaProxy = !!(process.env.HTTPS_PROXY || process.env.https_proxy);
+  const res = viaProxy ? await fetch(u, { ...init, redirect: "manual", headers, signal }) : await pinnedGet(u, headers, signal);
   if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
     if (hops <= 0) throw new HttpError(422, "Too many redirects");
     return safeFetch(new URL(res.headers.get("location")!, u).toString(), init, hops - 1);
