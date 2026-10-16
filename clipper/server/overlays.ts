@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { TIERS, type Overlay, type Tier } from "../shared/types";
 import { assColor, type Timed } from "./captions";
+import { FONT_WIDTHS, WIDE_EM } from "./font-metrics";
 import { videoStore } from "./storage";
 
 // Overlays timed to the voiceover: a viewer comment that pops up, an emoji that
@@ -84,23 +85,83 @@ export function roundedRect(w: number, h: number, r: number): string {
   ].join(" ");
 }
 
-/** Greedy word wrap by character count (ASS can't wrap text placed with \pos to a box). */
-export function wrap(text: string, perLine: number, maxLines: number): string[] {
+// ---- Text fitting -----------------------------------------------------------------
+// ASS can't wrap text placed with \pos into a box, so overlays wrap and size
+// their own text from libass advance widths measured for the bundled fonts
+// (scripts/measure-fonts.mjs, within ~3% of a real render, never under).
+
+const WIDE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\u3000-\u303f\uff00-\uffef]/u;
+const EMOJI = /\p{Extended_Pictographic}/u;
+/** The widest bundled font: a safe guess for brand uploads we have no metrics for. */
+const FALLBACK_WIDTHS = FONT_WIDTHS["Archivo Black"];
+
+/** Rendered width of a single line of text at an ASS font size. */
+export function textWidth(text: string, size: number, font: string): number {
+  const m = FONT_WIDTHS[font] ?? FALLBACK_WIDTHS;
+  let w = 0;
+  for (const ch of text) {
+    if (m[ch] !== undefined) w += m[ch];
+    else if (WIDE.test(ch)) w += WIDE_EM;
+    else if (EMOJI.test(ch)) w += 0.8;
+    else w += m[ch.normalize("NFD")[0]] ?? 0.62;
+  }
+  return w * size;
+}
+
+export interface FitOptions {
+  font: string;
+  size: number;
+  minSize: number;
+  maxWidth: number;
+  maxLines: number;
+}
+
+function wrapToWidth(words: string[], size: number, o: FitOptions): string[] {
+  const fits = (t: string) => textWidth(t, size, o.font) <= o.maxWidth;
   const out: string[] = [];
   let line = "";
-  for (const w of text.split(/\s+/).filter(Boolean)) {
-    if ((line + " " + w).trim().length > perLine && line) {
-      out.push(line);
-      line = w;
-    } else line = `${line} ${w}`.trim();
+  for (const w of words) {
+    const joined = line ? `${line} ${w}` : w;
+    if (fits(joined)) {
+      line = joined;
+      continue;
+    }
+    if (line) out.push(line);
+    // A word too wide for a line of its own (or an unspaced CJK run) breaks by character.
+    let piece = "";
+    for (const ch of w) {
+      if (!piece || fits(piece + ch)) piece += ch;
+      else {
+        out.push(piece);
+        piece = ch;
+      }
+    }
+    line = piece;
   }
   if (line) out.push(line);
-  if (out.length > maxLines) {
-    const kept = out.slice(0, maxLines);
-    kept[maxLines - 1] = `${kept[maxLines - 1].replace(/[\s.,;:!?]+$/, "")}…`;
-    return kept;
-  }
   return out;
+}
+
+/**
+ * Wrap text to a box: at the largest size from `size` down to `minSize` that
+ * fits in `maxLines`, and only at `minSize` cut the last line with an ellipsis.
+ */
+export function fitText(text: string, o: FitOptions): { lines: string[]; size: number } {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return { lines: [], size: o.size };
+  const step = Math.max(1, Math.round(o.size * 0.06));
+  for (let size = o.size; ; size = Math.max(o.minSize, size - step)) {
+    const lines = wrapToWidth(words, size, o);
+    if (lines.length <= o.maxLines) return { lines, size };
+    if (size <= o.minSize) {
+      const kept = lines.slice(0, o.maxLines);
+      let last = kept[kept.length - 1];
+      const ell = (t: string) => `${t.replace(/[\s.,;:!?…]+$/u, "")}…`;
+      while (last && textWidth(ell(last), size, o.font) > o.maxWidth) last = [...last].slice(0, -1).join("");
+      kept[kept.length - 1] = ell(last);
+      return { lines: kept, size };
+    }
+  }
 }
 
 const TIER_COLORS: Record<Tier, string> = { S: "#FF7F7F", A: "#FFBF7F", B: "#FFDF7F", C: "#FFFF7F", D: "#BFFF7F" };
@@ -114,6 +175,109 @@ export interface OverlayLayout {
   font: string;
   accent: string;
   uppercase?: boolean;
+}
+
+// ---- Layout -------------------------------------------------------------------------
+
+const scaleOf = (L: OverlayLayout) => {
+  const k = Math.min(L.width, L.height) / 1080;
+  return (n: number) => Math.round(n * k);
+};
+export interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * The tier board as a grid: each tier's row holds up to three items across,
+ * and more items wrap onto extra lines inside the row with a smaller font.
+ * Names are fitted to their cell (shrunk, then cut with "…"), so nothing
+ * overlaps or runs off the frame.
+ */
+export function tierLayout(items: { text: string; tier: Tier }[], L: OverlayLayout) {
+  const px = scaleOf(L);
+  const left = px(40);
+  const width = L.width - 2 * left;
+  const rowH = Math.min(px(124), Math.floor((L.bandHeight - px(40)) / TIERS.length));
+  const top = L.bandTop + px(20);
+  const labelW = px(130);
+  const gap = px(20);
+  const outline = px(5);
+  const area = width - labelW - gap;
+  const count = new Map<Tier, number>();
+  for (const it of items) count.set(it.tier, (count.get(it.tier) ?? 0) + 1);
+  const seen = new Map<Tier, number>();
+  const placed = items.map((it) => {
+    const n = count.get(it.tier)!;
+    const j = seen.get(it.tier) ?? 0;
+    seen.set(it.tier, j + 1);
+    const cols = Math.min(3, n);
+    const lineH = (rowH - px(6)) / Math.ceil(n / cols);
+    const slotW = area / cols;
+    const size = Math.max(px(14), Math.min(px(48), Math.floor(lineH - 2 * outline)));
+    const fit = fitText(it.text, { font: L.font, size, minSize: Math.max(px(12), Math.floor(size * 0.6)), maxWidth: slotW - px(12) - 2 * outline, maxLines: 1 });
+    const text = fit.lines[0] ?? "";
+    const x = left + labelW + gap + (j % cols) * slotW + outline;
+    const cy = top + TIERS.indexOf(it.tier) * rowH + px(3) + lineH * (Math.floor(j / cols) + 0.5);
+    const w = textWidth(text, fit.size, L.font);
+    const box: Box = { x: x - outline, y: cy - fit.size / 2 - outline, w: w + 2 * outline, h: fit.size + 2 * outline };
+    return { text, size: fit.size, x, cy, box };
+  });
+  return { left, top, width, labelW, rowH, items: placed };
+}
+
+export interface CommentIn {
+  start: number;
+  end: number;
+  text: string;
+  user: string;
+}
+
+/**
+ * Where each comment card goes. A card is checked against every card still
+ * on screen when it appears, not just the previous one. If there's no room
+ * it gets fewer body lines, then waits for a card to leave, and is only left
+ * out if it would have under 0.6 s on screen. While a tier board covers the
+ * footage, cards sit in the space above the footage instead.
+ */
+export function commentLayout(comments: CommentIn[], L: OverlayLayout, board?: { from: number; to: number }) {
+  const px = scaleOf(L);
+  const w = px(820);
+  const x = L.width / 2 - w / 2;
+  const gap = px(16);
+  const out: (Box & CommentIn & { body: string[]; bodySize: number; shown: boolean })[] = [];
+  for (const c0 of [...comments].sort((a, b) => a.start - b.start)) {
+    let c = { ...c0 };
+    let done = false;
+    for (let attempt = 0; attempt < comments.length + 1 && !done; attempt++) {
+      const overBoard = !!board && c.start < board.to && c.end > board.from;
+      // The band over the footage, or the space above it during a tier board.
+      const region = overBoard ? { top: px(20), bottom: L.bandTop - px(24) } : { top: L.bandTop + px(40), bottom: L.bandTop + L.bandHeight - px(20) };
+      const live = out.filter((p) => p.shown && p.start < c.end && c.start < p.end);
+      for (const maxLines of [3, 2, 1]) {
+        const fit = fitText(c.text, { font: L.font, size: px(46), minSize: px(38), maxWidth: w - px(152), maxLines });
+        if (!fit.lines.length) break;
+        const h = px(118) + fit.lines.length * Math.round(fit.size * (56 / 46));
+        // Top-down in the band; bottom-up (nearest the footage) above it.
+        const tries = overBoard ? [region.bottom - h, ...live.map((p) => p.y - gap - h)].sort((a, b) => b - a) : [region.top, ...live.map((p) => p.y + p.h + gap)].sort((a, b) => a - b);
+        const y = tries.find((y) => y >= region.top && y + h <= region.bottom && live.every((p) => y + h + gap <= p.y || y >= p.y + p.h + gap));
+        if (y !== undefined) {
+          out.push({ ...c, x, y, w, h, body: fit.lines, bodySize: fit.size, shown: true });
+          done = true;
+          break;
+        }
+      }
+      if (done) break;
+      // No room now: wait until the first card on screen leaves.
+      const next = Math.min(...live.map((p) => p.end).filter((e) => e > c.start));
+      if (!Number.isFinite(next) || next > c.end - 0.6) break;
+      c = { ...c, start: next };
+    }
+    if (!done) out.push({ ...c0, x, y: 0, w, h: 0, body: [], bodySize: 0, shown: false });
+  }
+  return out;
 }
 
 /** Styles the overlay events use (appended to the [V4+ Styles] section). */
@@ -144,20 +308,13 @@ export function overlayEvents(placed: Placed[], L: OverlayLayout): string[] {
   const tierItems = placed.filter((x) => x.o.kind === "tier" && x.o.text?.trim());
   const board = tierItems.length ? { from: tierItems[0].start, to: Math.max(...tierItems.map((t) => t.end)) } : undefined;
 
-  // Comment bubbles, stacked so two at once don't overlap.
-  let lastBottom = 0;
-  let lastEnd = -1;
-  for (const p of placed.filter((x) => x.o.kind === "comment")) {
-    const user = (p.o.user || "viewer").replace(/^@/, "").slice(0, 24);
-    const body = wrap(esc(p.o.text ?? ""), 27, 3);
-    if (!body.length) continue;
-    const w = px(820);
-    const h = px(118) + body.length * px(56);
-    const x = cx - w / 2;
-    const overBoard = board && p.start < board.to && p.end > board.from;
-    const y = overBoard ? Math.max(px(20), L.bandTop - h - px(24)) : p.start < lastEnd ? lastBottom + px(16) : L.bandTop + px(40);
-    lastBottom = y + h;
-    lastEnd = p.end;
+  // Comment cards, laid out so cards on screen together never overlap.
+  const comments = placed
+    .filter((x) => x.o.kind === "comment" && x.o.text?.trim())
+    .map((p) => ({ start: p.start, end: p.end, text: esc(p.o.text!), user: (p.o.user || "viewer").replace(/^@/, "").slice(0, 24) }));
+  for (const p of commentLayout(comments, L, board)) {
+    if (!p.shown) continue;
+    const { x, y, w, h, user } = p;
     // Slide up a little and fade, together.
     const mv = (x0: number, y0: number) => `\\move(${Math.round(x0)},${Math.round(y0 + px(28))},${Math.round(x0)},${Math.round(y0)},0,160)\\fad(140,180)`;
     lines.push(`Dialogue: 10,${ts(p.start)},${ts(p.end)},OvShape,,0,0,0,,{\\an7${mv(x, y)}\\1c&H00FFFFFF&\\p1}${roundedRect(w, h, px(34))}{\\p0}`);
@@ -165,17 +322,19 @@ export function overlayEvents(placed: Placed[], L: OverlayLayout): string[] {
     lines.push(`Dialogue: 11,${ts(p.start)},${ts(p.end)},OvShape,,0,0,0,,{\\an7${mv(x + px(28), y + px(26))}\\1c${assColor(L.accent)}\\shad0\\p1}${roundedRect(av, av, av / 2)}{\\p0}`);
     lines.push(`Dialogue: 12,${ts(p.start)},${ts(p.end)},OvUser,,0,0,0,,{\\an5\\move(${Math.round(x + px(28) + av / 2)},${Math.round(y + px(26) + av / 2 + px(28))},${Math.round(x + px(28) + av / 2)},${Math.round(y + px(26) + av / 2)},0,160)\\fad(140,180)\\1c&H00FFFFFF&\\fs${px(34)}\\b1}${esc(user[0].toUpperCase())}`);
     lines.push(`Dialogue: 12,${ts(p.start)},${ts(p.end)},OvUser,,0,0,0,,{\\an7${mv(x + px(116), y + px(30))}}Reply to @${esc(user)}`);
-    lines.push(`Dialogue: 12,${ts(p.start)},${ts(p.end)},OvBody,,0,0,0,,{\\an7${mv(x + px(116), y + px(74))}}${body.join("\\N")}`);
+    lines.push(`Dialogue: 12,${ts(p.start)},${ts(p.end)},OvBody,,0,0,0,,{\\an7${mv(x + px(116), y + px(74))}${p.bodySize !== px(46) ? `\\fs${p.bodySize}` : ""}}${p.body.join("\\N")}`);
   }
 
   // Pop-up words in the middle of the footage, alternating tilt.
   placed
     .filter((x) => x.o.kind === "text" && x.o.text?.trim())
     .forEach((p, i) => {
-      const text = esc(L.uppercase === false ? p.o.text!.trim() : p.o.text!.trim().toUpperCase()).slice(0, 40);
+      const text = esc(L.uppercase === false ? p.o.text!.trim() : p.o.text!.trim().toUpperCase()).slice(0, 80);
+      // Fitted with room for the 112% pop and the outline.
+      const fit = fitText(text, { font: L.font, size: px(124), minSize: px(64), maxWidth: (L.width - px(80)) / 1.12 - 2 * px(9), maxLines: 2 });
       const y = L.bandTop + L.bandHeight * 0.42;
       lines.push(
-        `Dialogue: 8,${ts(p.start)},${ts(p.end)},OvPop,,0,0,0,,{\\an5\\pos(${Math.round(cx)},${Math.round(y)})\\frz${i % 2 ? -4 : 4}\\fscx40\\fscy40\\t(0,110,\\fscx112\\fscy112)\\t(110,190,\\fscx100\\fscy100)\\fad(0,160)}${text}`,
+        `Dialogue: 8,${ts(p.start)},${ts(p.end)},OvPop,,0,0,0,,{\\an5\\pos(${Math.round(cx)},${Math.round(y)})${fit.size !== px(124) ? `\\fs${fit.size}` : ""}\\frz${i % 2 ? -4 : 4}\\fscx40\\fscy40\\t(0,110,\\fscx112\\fscy112)\\t(110,190,\\fscx100\\fscy100)\\fad(0,160)}${fit.lines.join("\\N")}`,
       );
     });
 
@@ -195,19 +354,15 @@ export function overlayEvents(placed: Placed[], L: OverlayLayout): string[] {
       shape(from, to, left, y + px(3), TIER_COLORS[t], roundedRect(labelW, rowH - px(6), px(10)), 4, "\\shad0\\fad(200,0)");
       lines.push(`Dialogue: 5,${ts(from)},${ts(to)},OvTierLabel,,0,0,0,,{\\an5\\pos(${Math.round(left + labelW / 2)},${Math.round(y + rowH / 2)})\\fad(200,0)}${t}`);
     });
-    const perRow = new Map<Tier, number>();
-    for (const p of tiers) {
-      const t = (TIERS as readonly string[]).includes(p.o.tier ?? "") ? (p.o.tier as Tier) : "C";
-      const idx = perRow.get(t) ?? 0;
-      perRow.set(t, idx + 1);
-      const name = esc(p.o.text!.trim()).slice(0, 22);
-      const slots = 3;
-      const slotW = (width - labelW - px(20)) / slots;
-      const x = left + labelW + px(20) + (idx % slots) * slotW;
-      const y = top + TIERS.indexOf(t) * rowH + rowH / 2 + (idx >= slots ? px(26) : 0);
-      const fs = name.length > 12 ? px(38) : px(48);
-      lines.push(`Dialogue: 6,${ts(p.start)},${ts(to)},OvTierItem,,0,0,0,,{\\an4\\move(${Math.round(x)},${Math.round(y - px(40))},${Math.round(x)},${Math.round(y)},0,180)\\fs${fs}\\fad(120,0)}${name}`);
-    }
+    const grid = tierLayout(
+      tiers.map((p) => ({ text: esc(p.o.text!.trim()), tier: (TIERS as readonly string[]).includes(p.o.tier ?? "") ? (p.o.tier as Tier) : "C" })),
+      L,
+    );
+    tiers.forEach((p, i) => {
+      const it = grid.items[i];
+      if (!it.text) return;
+      lines.push(`Dialogue: 6,${ts(p.start)},${ts(to)},OvTierItem,,0,0,0,,{\\an4\\move(${Math.round(it.x)},${Math.round(it.cy - px(40))},${Math.round(it.x)},${Math.round(it.cy)},0,180)\\fs${it.size}\\fad(120,0)}${it.text}`);
+    });
   }
   return lines;
 }

@@ -7,7 +7,7 @@ import { cueInScript, sanitizeOverlays } from "../shared/overlays";
 import type { Overlay } from "../shared/types";
 import { buildAss, timeWords } from "../server/captions";
 import { compose, ffmpegAvailable } from "../server/media";
-import { notoName, overlayEvents, placeOverlays, roundedRect, stickerGraph, wrap } from "../server/overlays";
+import { fitText, notoName, overlayEvents, placeOverlays, roundedRect, stickerGraph } from "../server/overlays";
 
 const script = "Ranking every car. The Octane is S tier, no question. The Dominus? C tier. The Octane again, still S tier.";
 const words = timeWords(script, 10);
@@ -78,7 +78,7 @@ describe("overlays", () => {
     expect(ass).toContain("Style: OvTierItem,");
     expect(ass.indexOf("[Events]")).toBeGreaterThan(ass.indexOf("Style: OvPop,"));
     expect(roundedRect(100, 50, 10).startsWith("m 10 0 l 90 0 b")).toBe(true);
-    expect(wrap("one two three four five six seven", 10, 2)).toEqual(["one two", "three four…"]);
+    expect(fitText("one two three four five six seven", { font: "Poppins Black", size: 40, minSize: 40, maxWidth: 160, maxLines: 2 }).lines).toEqual(["one two", "three four…"]);
   });
 
   it("names Noto emoji images and builds the sticker graph", () => {
