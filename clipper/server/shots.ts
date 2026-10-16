@@ -16,28 +16,46 @@ const norm = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p
 export function shotTimes(shots: { seconds: number; phrase?: string }[], words: Word[], duration: number): { start: number; len: number; bound: boolean }[] {
   const n = shots.length;
   if (!n) return [];
-  const toks = words.map((w) => norm(w.text));
-  // Each phrase, searched for after the previous one (so repeated words resolve in order).
-  let from = 0;
-  const anchor: (number | undefined)[] = shots.map((s, i) => {
-    if (i === 0) return 0;
-    const cue = s.phrase ? norm(s.phrase).split(" ").filter(Boolean) : [];
-    if (!cue.length) return undefined;
-    for (let k = from; k <= toks.length - cue.length; k++)
-      if (cue.every((c, q) => toks[k + q] === c)) {
-        from = k + 1;
-        return words[k].start;
-      }
-    return undefined;
+  // Match phrases on the words' text joined without spaces (character
+  // offsets map back to words), so unspaced scripts (Chinese, Japanese,
+  // Thai) bind too. A Latin phrase must start on a word boundary.
+  let stream = "";
+  const owner: number[] = [];
+  const wordStart = new Set<number>();
+  words.forEach((w, i) => {
+    const t = norm(w.text).replace(/ /g, "");
+    wordStart.add(stream.length);
+    stream += t;
+    for (let k = 0; k < t.length; k++) owner.push(i);
   });
-  // Keep only anchors that leave every shot at least MIN_SHOT.
+  const find = (phrase: string, from: number): { at: number; end: number } | undefined => {
+    const p = norm(phrase).replace(/ /g, "");
+    if (!p) return undefined;
+    const boundary = /^[\p{Script=Latin}\p{N}]/u.test(p);
+    for (let at = stream.indexOf(p, from); at >= 0; at = stream.indexOf(p, at + 1)) if (!boundary || wordStart.has(at)) return { at, end: at + p.length };
+    return undefined;
+  };
+  const anchor: (number | undefined)[] = new Array(n).fill(undefined);
+  anchor[0] = 0;
+  let cursor = 0;
+  // Shot 1's own words come first: later phrases are searched for after them.
+  const opening = shots[0].phrase ? find(shots[0].phrase, 0) : undefined;
+  if (opening && owner[opening.at] === 0) cursor = opening.end;
   let last = 0;
   let lastIdx = 0;
   for (let i = 1; i < n; i++) {
-    const a = anchor[i];
-    if (a === undefined) continue;
-    if (a < last + MIN_SHOT * (i - lastIdx) || a > duration - MIN_SHOT * (n - i)) anchor[i] = undefined;
-    else [last, lastIdx] = [a, i];
+    const phrase = shots[i].phrase;
+    if (!phrase) continue;
+    // The first occurrence that leaves every shot at least MIN_SHOT; an earlier one is skipped, a later one ends the search.
+    for (let m = find(phrase, cursor); m; m = find(phrase, m.at + 1)) {
+      const t = words[owner[m.at]].start;
+      if (t < last + MIN_SHOT * (i - lastIdx)) continue;
+      if (t <= duration - MIN_SHOT * (n - i)) {
+        anchor[i] = t;
+        [last, lastIdx, cursor] = [t, i, m.end];
+      }
+      break;
+    }
   }
   // Between anchors, shots share the time by their planned seconds (each ≥ MIN_SHOT when there's room).
   const out: { start: number; len: number; bound: boolean }[] = [];

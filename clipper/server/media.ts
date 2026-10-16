@@ -211,11 +211,11 @@ export async function cutSegment(url: string, start: number, seconds: number, ha
  * shots start on a cut instead of a few frames before or after it. Only the
  * 0.8 s around `t` is decoded, at 64 px wide.
  */
-export async function sceneCutNear(src: string, t: number, radius = 0.4): Promise<number> {
+export async function sceneCutNear(src: string, t: number, radius = 0.4, earlierOnly = false): Promise<number> {
   const from = Math.max(0, t - radius);
   try {
     const { stderr } = await run("ffmpeg", [...netArgs(src), "-v", "info", "-ss", from.toFixed(3), "-t", (t + radius - from).toFixed(3), "-i", src, "-an", "-vf", "scale=64:-2,select='gt(scene,0.25)',showinfo", "-f", "null", "-"], 60_000);
-    const cuts = [...stderr.matchAll(/pts_time:([\d.]+)/g)].map((m) => from + Number(m[1])).filter((c) => Math.abs(c - t) <= radius);
+    const cuts = [...stderr.matchAll(/pts_time:([\d.]+)/g)].map((m) => from + Number(m[1])).filter((c) => Math.abs(c - t) <= radius && (!earlierOnly || c <= t));
     if (!cuts.length) return t;
     return Math.round(cuts.reduce((a, b) => (Math.abs(b - t) < Math.abs(a - t) ? b : a)) * 1000) / 1000;
   } catch {

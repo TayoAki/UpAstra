@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ffmpegAvailable, sceneCutNear } from "../server/media";
 import { shotTimes } from "../server/shots";
+import { scriptWords } from "../server/align";
 import { PLANNER_PROMPT, toDraft } from "../server/scripts";
 
 // B3.2': a shot starts on a scene cut when one is within 0.4 s of where it
@@ -23,6 +24,9 @@ describe.skipIf(!ffmpegAvailable())("snapping to cuts", () => {
     expect(await sceneCutNear(video, 8.3)).toBeCloseTo(8, 1);
     expect(await sceneCutNear(video, 6)).toBe(6);
     expect(await sceneCutNear(video, 0.1)).toBe(0.1);
+    // Only earlier cuts, for shots that must keep the beat after their moment.
+    expect(await sceneCutNear(video, 3.8, 0.4, true)).toBe(3.8);
+    expect(await sceneCutNear(video, 8.3, 0.4, true)).toBeCloseTo(8, 1);
   }, 60_000);
 });
 
@@ -84,5 +88,28 @@ describe("planner shot rules", () => {
     const d = toDraft({ narration: "The Octane hits like a truck. Play Car League now.", shots: [{ footageName: "Gameplay", moment: "goal", seconds: 4, phrase: "The Octane hits" }, { footageName: "Gameplay", moment: "menu", seconds: 3, phrase: "free rewards forever" }] }, camp);
     expect(d.shots[0].phrase).toBe("The Octane hits");
     expect(d.shots[1].phrase).toBeUndefined();
+  });
+});
+
+describe("phrase binding, harder cases", () => {
+  const timedWords = (ws: string[]) => ws.map((t, i) => ({ text: t, start: i * 0.4, end: i * 0.4 + 0.35 }));
+
+  it("finds the right occurrence of a repeated brand name", () => {
+    const words = timedWords("the octane is the fastest car in the game the octane wins every single match play now".split(" "));
+    const t = shotTimes([{ seconds: 3, phrase: "the octane is the fastest car" }, { seconds: 3, phrase: "the octane" }, { seconds: 2, phrase: "play now" }], words, 8);
+    expect(t.map((x) => x.bound)).toEqual([true, true, true]);
+    expect(t[1].start).toBeCloseTo(9 * 0.4, 5); // the second "the octane"
+    expect(t[2].start).toBeCloseTo(15 * 0.4, 5); // "play" is word 15
+  });
+
+  it("binds phrases in Chinese and Japanese, where words aren't spaced", () => {
+    const zh = shotTimes([{ seconds: 3, phrase: "这个游戏太好玩了" }, { seconds: 3, phrase: "现在就在罗布乐思上玩吧" }], timedWords(scriptWords("这个游戏太好玩了。现在就在罗布乐思上玩吧！", "zh")), 8);
+    const zw = scriptWords("这个游戏太好玩了。现在就在罗布乐思上玩吧！", "zh");
+    expect(zh[1].bound).toBe(true);
+    expect(zh[1].start).toBeCloseTo(zw.findIndex((w) => w.startsWith("现在")) * 0.4, 5);
+    const jw = scriptWords("このゲームは最高です。今すぐ遊ぼう。", "ja");
+    const ja = shotTimes([{ seconds: 3 }, { seconds: 3, phrase: "今すぐ遊ぼう" }], timedWords(jw), 6);
+    expect(ja[1].bound).toBe(true);
+    expect(ja[1].start).toBeCloseTo(jw.findIndex((w) => w.startsWith("今")) * 0.4, 5);
   });
 });

@@ -288,12 +288,13 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
       const len = Math.round(timing[i].len * 1000) / 1000;
       const total = f.durationSec ?? 0;
       const m = pickMoment(s.moment, f.moments ?? [], used);
+      const endAnchored = !!m && ["goal", "save", "near-miss"].includes(m.type);
       let start: number;
       if (i === 0) opening = m?.type;
       if (m) {
         used.add(`${m.start}-${m.end}`);
         // Land goals and saves inside the shot with a beat after; everything else starts on the moment.
-        start = ["goal", "save", "near-miss"].includes(m.type) ? m.end - len + 1 : m.start;
+        start = endAnchored ? m.end - len + 1 : m.start;
       } else start = total * (0.12 + (0.7 * (i + 1)) / (shots.length + 1));
       start = Math.max(0, Math.min(start, Math.max(0, total - len - 0.5)));
       step(r, "rendering", `Cutting shot ${i + 1} of ${shots.length} from "${f.name}"`);
@@ -305,7 +306,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
         receipts: (r.steps ??= {}),
         name: `shot${i + 1}`,
         kind: "cut",
-        version: 2, // 2: snaps to a nearby scene cut
+        version: 3, // 2: snaps to a nearby scene cut; 3: end-anchored moments snap only earlier
         params: { source: f.storageKey ?? cacheKey(f), start: requested, len, audio: f.hasAudio !== false, total, cut: cutSignature() },
         file: out,
         save,
@@ -313,7 +314,8 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
           const src = await footageSource(f);
           checkCancelled();
           // Start on a scene cut if there's one within 0.4 s.
-          start = Math.max(0, Math.min(await sceneCutNear(src, start), Math.max(0, total - len - 0.5)));
+          // (A shot timed to end just after its moment only snaps earlier, keeping the beat after it.)
+          start = Math.max(0, Math.min(await sceneCutNear(src, start, 0.4, endAnchored), Math.max(0, total - len - 0.5)));
           await cutSegment(src, start, len, f.hasAudio !== false, out);
           // Goals often fade to black before the replay: if a shot has more than a
           // moment of black, slide it away from the black and cut again.
