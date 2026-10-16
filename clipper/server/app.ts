@@ -31,7 +31,8 @@ import { bundledFontsDir, fontInfo, measureFont } from "./fonts";
 import { accentOf, BUNDLED_FONTS, CAPTION_STYLES, resolveCaptionStyle, type BrandKit, type CaptionOverrides } from "../shared/caption-styles";
 import { probe, run } from "./media";
 import { storageKind, videoStore } from "./storage";
-import { checkClip } from "../shared/rules";
+import { checkClip, speechLoad, speechSeconds, UNITS_PER_SECOND } from "../shared/rules";
+import { spokenText } from "../shared/markup";
 import { planClips, type PlanGuide } from "./scripts";
 import { makeVariants } from "./variants";
 import { enqueueFormat, formatForPlanner } from "./formats";
@@ -1505,6 +1506,37 @@ export function createApp() {
       res.json({ source: label, window: { start, end }, cuts: await sceneCutsIn(src, start, end) });
     }),
   );
+
+  // One clip's render state, for cheap polling: no full /state. `stalled` means
+  // it says it's rendering but no worker has it (queued or running).
+  api.get("/clips/:id/status", (req, res) => {
+    const clip = findClip(String(req.params.id));
+    const r = clip.render;
+    const pending = isPending(clip.id);
+    const active = !!r && !["done", "failed"].includes(r.status);
+    res.json({
+      id: clip.id,
+      status: clip.status,
+      pending,
+      stalled: active && !pending,
+      render: r && { status: r.status, step: r.step, error: r.error, voice: r.voice, requestedAt: r.requestedAt, startedAt: r.startedAt, finishedAt: r.finishedAt, durationSec: r.durationSec, cost: r.cost, captionTiming: r.captionTiming, log: r.log, steps: r.steps },
+    });
+  });
+
+  // How long a script will take to say, from this workspace's measured voice pace when there is one.
+  api.post("/estimate-voiceover", (req, res) => {
+    const text = String(req.body?.text ?? "");
+    if (!text.trim()) throw new HttpError(400, "Give text");
+    if (text.length > 20_000) throw new HttpError(400, "Text is too long");
+    const voice = req.body?.voice ? String(req.body.voice) : undefined;
+    const rates = getDoc().voiceRates ?? {};
+    const learned = voice ? rates[voice] : undefined;
+    const avg = Object.values(rates);
+    const unitsPerSec = learned?.unitsPerSec ?? (avg.length ? avg.reduce((n, r) => n + r.unitsPerSec, 0) / avg.length : UNITS_PER_SECOND);
+    const spoken = spokenText(text);
+    const load = speechLoad(spoken);
+    res.json({ spoken, units: Math.round(load * 10) / 10, unitsPerSec: Math.round(unitsPerSec * 100) / 100, seconds: Math.round(speechSeconds(spoken, unitsPerSec) * 10) / 10, calibrated: learned ? `${learned.n} render(s) of ${voice}` : avg.length ? "average of this workspace's voices" : false });
+  });
 
   api.post("/clips/:id/render/cancel", (req, res) => {
     const clip = findClip(String(req.params.id));

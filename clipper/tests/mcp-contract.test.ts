@@ -95,4 +95,43 @@ describe("MCP contract", () => {
     const no = await client.callTool({ name: "contact_sheet", arguments: { clipId: made.plans[0].id } });
     expect(parse(no).error.code).toBe("CONFLICT");
   });
+
+  it("waits on each clip's status and stops early, with evidence, when no worker has it", async () => {
+    const paths: string[] = [];
+    let polls = 0;
+    const fake: ApiCall = async (_m, path) => {
+      paths.push(path);
+      if (path === "/clips/clip_a/status") {
+        polls++;
+        // Rendering for a few polls, then the worker is gone.
+        return { id: "clip_a", pending: polls < 3, stalled: polls >= 3, render: { status: "rendering", step: "Cutting shots", log: [{ at: 4.2, step: "Cutting shots" }] } } as never;
+      }
+      if (path === "/state") return { clips: [{ id: "clip_a", title: "A", render: { status: "rendering", step: "Cutting shots" } }] } as never;
+      throw new Error(`unexpected ${path}`);
+    };
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await createMcpServer(fake).connect(a);
+    const local = new Client({ name: "t", version: "1" });
+    await local.connect(b);
+    const t0 = Date.now();
+    const r = parse(await local.callTool({ name: "wait_for_renders", arguments: { clipIds: ["clip_a"], timeoutSec: 60 } }));
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(r.clips[0]).toMatchObject({ id: "clip_a", stalled: true, evidence: expect.stringMatching(/No worker/) });
+    expect(r.next).toEqual([expect.objectContaining({ tool: "render_clip", args: { clipId: "clip_a" } })]);
+    expect(paths.filter((p) => p === "/state")).toHaveLength(1); // the full state only once, for links
+    await local.close();
+  });
+
+  it("estimates a voiceover and reports a clip's status", async () => {
+    const est = parse(await client.callTool({ name: "estimate_voiceover", arguments: { text: "Get <$5|five dollars> off today." } }));
+    expect(est).toMatchObject({ format: "ugc.estimate_voiceover@1", spoken: "Get five dollars off today.", calibrated: false });
+    expect(est.seconds).toBeGreaterThan(1);
+    const made = parse(await client.callTool({ name: "brief_to_shorts", arguments: { briefText: brief, count: 1, render: false } }));
+    const log = parse(await client.callTool({ name: "get_render_log", arguments: { clipId: made.plans[0].id } }));
+    expect(log).toMatchObject({ id: made.plans[0].id, pending: false, stalled: false });
+    const cancel = await client.callTool({ name: "cancel_render", arguments: { clipId: made.plans[0].id } });
+    expect(parse(cancel).error.code).toBe("CONFLICT");
+    const tr = await client.callTool({ name: "transcribe", arguments: {} });
+    expect(parse(tr).error.code).toBe("INVALID_ARGUMENT");
+  });
 });

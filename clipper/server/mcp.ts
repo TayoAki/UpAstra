@@ -496,30 +496,92 @@ export function createMcpServer(api: ApiCall): McpServer {
     true,
   );
 
+  type ClipStatus = { id: string; pending: boolean; stalled: boolean; render?: { status: string; step?: string; error?: string; durationSec?: number; log?: { at: number; step: string }[] } };
+  const statusOf = (id: string) => api<ClipStatus>("GET", `/clips/${encodeURIComponent(id)}/status`);
+
   tool(
     "wait_for_renders",
-    "Wait for renders to finish (polls up to timeoutSec), then return each clip's status and its shareable video link. Call again if some are still rendering.",
-    { clipIds: z.array(z.string()).min(1), timeoutSec: z.number().int().min(5).max(240).default(90) },
+    "Wait for renders to finish (up to timeoutSec), then return each clip's status and its shareable video link. Returns early if a render has stalled (no worker has it). Call again if some are still rendering.",
+    { clipIds: z.array(z.string()).min(1).max(50), timeoutSec: z.number().int().min(5).max(240).default(90) },
     async ({ clipIds, timeoutSec }) => {
       const until = Date.now() + timeoutSec * 1000;
-      let s = await state();
-      const pending = () => clipIds.filter((id) => {
-        const r = s.clips.find((c) => c.id === id)?.render;
-        return r && !["done", "failed"].includes(r.status);
-      });
-      while (pending().length && Date.now() < until) {
-        await sleep(5000);
-        s = await state();
+      const done = (x: ClipStatus) => !x.render || ["done", "failed"].includes(x.render.status) || x.stalled;
+      // Each clip's own status (not the whole workspace), checked every 100 ms after a change, backing off to 1 s.
+      const sig = (xs: ClipStatus[]) => JSON.stringify(xs.map((x) => [x.render?.status, x.render?.step, x.stalled]));
+      let st = await Promise.all(clipIds.map((id) => statusOf(id).catch(() => ({ id, pending: false, stalled: false }) as ClipStatus)));
+      let delay = 100;
+      while (!st.every(done) && Date.now() < until) {
+        await sleep(Math.min(delay, Math.max(0, until - Date.now())));
+        const prev = sig(st);
+        st = await Promise.all(clipIds.map((id) => statusOf(id).catch(() => ({ id, pending: false, stalled: false }) as ClipStatus)));
+        delay = sig(st) === prev ? Math.min(1000, delay * 2) : 100;
       }
+      const s = await state();
       const out = await Promise.all(
-        clipIds.map(async (id) => {
-          const c = s.clips.find((x) => x.id === id);
-          if (!c) return { id, error: "not found" };
-          return { id, title: c.title, render: c.render?.status ?? "not started", step: c.render?.step, error: c.render?.error, durationSec: c.render?.durationSec, videoUrl: await linkFor(c) };
+        st.map(async (x) => {
+          const c = s.clips.find((y) => y.id === x.id);
+          if (!c) return { id: x.id, error: "not found" };
+          const stalled = x.stalled ? { stalled: true, evidence: `No worker has this render (not queued or running); its last step was "${x.render?.step}" (${x.render?.log?.at(-1)?.at ?? "?"} s in).` } : {};
+          return { id: x.id, title: c.title, render: c.render?.status ?? "not started", step: c.render?.step, error: c.render?.error, durationSec: c.render?.durationSec, videoUrl: await linkFor(c), ...stalled };
         }),
       );
-      const still = pending();
-      return { clips: out, stillRendering: still, next: still.length ? [{ tool: "wait_for_renders", args: { clipIds: still }, why: "Some renders are still going." }] : [] };
+      const still = st.filter((x) => !done(x)).map((x) => x.id);
+      const stuck = st.filter((x) => x.stalled).map((x) => x.id);
+      const next: Next[] = [
+        ...(still.length ? [{ tool: "wait_for_renders", args: { clipIds: still }, why: "Some renders are still going." }] : []),
+        ...stuck.map((id) => ({ tool: "render_clip", args: { clipId: id }, why: "This render stalled; start it again (a recorded voiceover is reused)." })),
+      ];
+      return { clips: out, stillRendering: still, next };
+    },
+    true,
+  );
+
+  tool(
+    "get_render_log",
+    "A render's timeline: each step with seconds since it started, which expensive steps were reused or paid for, the error if it failed, and whether it has stalled.",
+    { clipId: z.string() },
+    async ({ clipId }) => statusOf(clipId),
+    true,
+  );
+
+  tool(
+    "cancel_render",
+    "Stop a clip's render: taken out of the queue, or stopped where it is. Steps already finished (a recorded voiceover, cut shots) are kept and reused next time.",
+    { clipId: z.string() },
+    async ({ clipId }) => {
+      await api("POST", `/clips/${encodeURIComponent(clipId)}/render/cancel`, {});
+      return { clipId, cancelled: true, next: [{ tool: "render_clip", args: { clipId }, why: "Render it again when ready; finished steps are reused." }] satisfies Next[] };
+    },
+  );
+
+  tool(
+    "estimate_voiceover",
+    "How long a script takes to say (seconds), from this workspace's measured voice pace when there is one. Markup counts as spoken: <$5|five dollars> is \"five dollars\". Free.",
+    { text: z.string().min(1).max(20_000), voice: VOICE.optional() },
+    async ({ text: t, voice }) => api("POST", "/estimate-voiceover", { text: t, voice }),
+    true,
+  );
+
+  tool(
+    "transcribe",
+    "Word timings: of a rendered clip's voiceover (clipId; free), or of any video with speech at a public link (url; runs speech recognition, up to waitSec).",
+    { clipId: z.string().optional(), url: z.string().url().optional(), language: z.string().default("auto"), waitSec: z.number().int().min(0).max(240).default(120) },
+    async ({ clipId, url, language, waitSec }) => {
+      if (!clipId === !url) throw new ToolError("INVALID_ARGUMENT", "Give clipId or url (one of them)");
+      if (clipId) {
+        const pack = await api<{ captions: { words: { text: string; start: number; end: number }[] }[] }>("GET", `/clips/${encodeURIComponent(clipId)}/edit-pack`);
+        const words = pack.captions.flatMap((c) => c.words);
+        return { clipId, words, text: words.map((w) => w.text).join(" ") };
+      }
+      const { job } = await api<{ job: { id: string } }>("POST", "/captions/from-url", { url, language });
+      const until = Date.now() + waitSec * 1000;
+      let j = await api<CaptionJob>("GET", `/captions/${job.id}`);
+      for (let delay = 250; ["uploaded", "transcribing"].includes(j.status) && Date.now() < until; delay = Math.min(2000, delay * 2)) {
+        await sleep(delay);
+        j = await api<CaptionJob>("GET", `/captions/${job.id}`);
+      }
+      if (j.status !== "ready" && j.status !== "done") return { jobId: j.id, status: j.status, error: j.error, next: [{ tool: "get_caption_job", args: { jobId: j.id }, why: "Still transcribing; check again." }] satisfies Next[] };
+      return { jobId: j.id, language: j.language, words: j.words.map((w) => ({ text: w.text, start: w.start, end: w.end })), text: j.words.map((w) => w.text).join(j.joiner ?? " ") };
     },
   );
 
