@@ -82,5 +82,5 @@ describe("brand kit api", () => {
     const camp = (await (await call("/api/campaigns", "POST", { text: brief })).json()).campaign;
     const saved = await (await call(`/api/campaigns/${camp.id}`, "PUT", { captions: { style: "boxed", wordsPerCaption: 2, bogus: 1 } })).json();
     expect(saved.campaigns[0].captions).toEqual({ style: "boxed", wordsPerCaption: 2 });
-  });
+  }, 60_000); // a font upload measures the font through libass
 });
