@@ -65,7 +65,8 @@ describe("agent access", () => {
     expect(made.campaign.requiredPhrases.join(" ")).toMatch(/Car League/);
     expect(made.plans).toHaveLength(2);
     expect(made.renderQueued).toEqual([]);
-    expect(made.next).toMatch(/No plan passed/);
+    expect(made.note).toMatch(/No plan passed/);
+    expect(made.next.map((n: { tool: string }) => n.tool)).toEqual(["review_clip", "review_clip"]);
 
     const clipId = made.plans[0].id;
     const failed = await client.callTool({ name: "review_clip", arguments: { clipId, decision: "approve" } });

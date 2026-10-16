@@ -10,6 +10,33 @@ import { HOOK_STYLES, PLATFORMS, VOICES } from "../shared/types";
 // rule, QA check, spend cap and render queue applies unchanged. Actions show
 // up in Activity marked as done by an agent.
 
+/** Stable error codes agents can branch on (B6.2). */
+export type ErrorCode = "INVALID_ARGUMENT" | "FORBIDDEN" | "NOT_FOUND" | "CONFLICT" | "FAILED_PRECONDITION" | "QUOTA_EXCEEDED" | "UNAVAILABLE" | "INTERNAL";
+
+const HELP: Record<ErrorCode, string> = {
+  INVALID_ARGUMENT: "Fix the arguments (see the tool's schema) and call again.",
+  FORBIDDEN: "The agent key is missing, revoked or not allowed this; ask the user for a new key.",
+  NOT_FOUND: "Check the id: overview lists campaigns and clips, get_campaign a campaign's clips.",
+  CONFLICT: "It changed state meanwhile; read it again (get_clip / get_campaign) and retry.",
+  FAILED_PRECONDITION: "It isn't ready for this yet; read it (get_clip / get_campaign) for what's missing.",
+  QUOTA_EXCEEDED: "A spend cap or plan limit was reached; tell the user, don't retry.",
+  UNAVAILABLE: "A service is down or not set up (see overview → services); retry later.",
+  INTERNAL: "Something went wrong on the server; retry once, then tell the user.",
+};
+
+export class ToolError extends Error {
+  constructor(
+    readonly code: ErrorCode,
+    message: string,
+    readonly help = HELP[code],
+  ) {
+    super(message);
+  }
+}
+
+const codeFor = (status: number): ErrorCode =>
+  status === 400 || status === 415 ? "INVALID_ARGUMENT" : status === 401 || status === 403 ? "FORBIDDEN" : status === 404 ? "NOT_FOUND" : status === 409 ? "CONFLICT" : status === 422 ? "FAILED_PRECONDITION" : status === 429 ? "QUOTA_EXCEEDED" : status === 502 || status === 503 ? "UNAVAILABLE" : "INTERNAL";
+
 export type ApiCall = <T = unknown>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown) => Promise<T>;
 
 /** Calls the UGCMediaClips HTTP API with a workspace agent key. */
@@ -23,7 +50,7 @@ export function httpApi(baseUrl: string, key: string, extraHeaders: Record<strin
       signal: AbortSignal.timeout(10 * 60_000),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+    if (!res.ok) throw new ToolError(codeFor(res.status), (data as { error?: string }).error ?? `HTTP ${res.status}`);
     return data as never;
   };
 }
@@ -40,7 +67,18 @@ interface State {
 }
 
 const text = (value: unknown) => ({ content: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }] });
-const fail = (err: unknown) => ({ content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true });
+/** Every tool error as `{ ok: false, error: { code, message, help } }`. */
+const fail = (err: unknown) => {
+  const e = err instanceof ToolError ? err : new ToolError(/Input validation error|Invalid arguments/.test(String((err as Error)?.message ?? err)) ? "INVALID_ARGUMENT" : "INTERNAL", String((err as Error)?.message ?? err));
+  return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, error: { code: e.code, message: e.message, help: e.help } }, null, 2) }], isError: true };
+};
+/** A suggested next call: which tool, with what, and why. */
+export interface Next {
+  tool: string;
+  args: Record<string, unknown>;
+  why: string;
+}
+const isPlain = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const failing = (c: Clip) => c.qa.checks.filter((x) => !x.pass).map((x) => (x.note ? `${x.rule} — ${x.note}` : x.rule));
@@ -137,10 +175,17 @@ export function createMcpServer(api: ApiCall): McpServer {
     },
   );
 
+  // Schema errors are raised by the SDK before a handler runs; give them the same shape.
+  (server as unknown as { createToolError: (message: string) => unknown }).createToolError = (message: string) => fail(new Error(message));
+
+  // Strict arguments (an unknown key is an error, not ignored), and every
+  // result stamped with a versioned format; arrays and strings go under `result`.
   const tool = <S extends z.ZodRawShape>(name: string, description: string, shape: S, run: (args: z.infer<z.ZodObject<S>>) => Promise<unknown>, readOnly = false) =>
-    server.registerTool(name, { description, inputSchema: shape, annotations: { readOnlyHint: readOnly } } as never, (async (args: z.infer<z.ZodObject<S>>) => {
+    server.registerTool(name, { description, inputSchema: z.object(shape).strict(), annotations: { readOnlyHint: readOnly } } as never, (async (args: z.infer<z.ZodObject<S>>) => {
       try {
-        return text(await run(args));
+        const value = await run(args);
+        const format = `ugc.${name}@1`;
+        return text(isPlain(value) ? { format, ...value } : { format, result: value });
       } catch (err) {
         return fail(err);
       }
@@ -149,12 +194,12 @@ export function createMcpServer(api: ApiCall): McpServer {
   const state = () => api<State>("GET", "/state");
   const campaignIn = (s: State, id: string) => {
     const c = s.campaigns.find((x) => x.id === id);
-    if (!c) throw new Error(`Campaign ${id} not found (see overview)`);
+    if (!c) throw new ToolError("NOT_FOUND", `Campaign ${id} not found (see overview)`);
     return c;
   };
   const clipIn = (s: State, id: string) => {
     const c = s.clips.find((x) => x.id === id);
-    if (!c) throw new Error(`Clip ${id} not found`);
+    if (!c) throw new ToolError("NOT_FOUND", `Clip ${id} not found`);
     return c;
   };
   const linksFor = (c: Clip) =>
@@ -175,7 +220,21 @@ export function createMcpServer(api: ApiCall): McpServer {
       }
     }
     const after = await state();
-    return { plans: fresh.map((c) => clipFull(after.clips.find((x) => x.id === c.id) ?? c)), renderQueued: queued };
+    const plans = fresh.map((c) => after.clips.find((x) => x.id === c.id) ?? c);
+    return { plans: plans.map((c) => clipFull(c)), renderQueued: queued, next: planNext(plans, queued) };
+  }
+
+  /** After planning: wait for what's rendering, then review what's left as a draft. */
+  function planNext(plans: Clip[], queued: string[]): Next[] {
+    const next: Next[] = [];
+    if (queued.length) next.push({ tool: "wait_for_renders", args: { clipIds: queued }, why: "Renders take about a minute each; this returns the video links." });
+    for (const c of plans.filter((x) => !queued.includes(x.id)))
+      next.push(
+        c.qa.pass
+          ? { tool: "review_clip", args: { clipId: c.id, decision: "approve" }, why: "This plan follows the brief; approve it to render." }
+          : { tool: "review_clip", args: { clipId: c.id }, why: `Fails: ${failing(c).join("; ")}. Fix it with edit_clip, or approve with override only if the user accepts the risk.` },
+      );
+    return next;
   }
 
   tool(
@@ -202,16 +261,17 @@ export function createMcpServer(api: ApiCall): McpServer {
       briefText: z.string().optional().describe("The brief pasted as text (use when there's no public link)"),
       count: z.number().int().min(1).max(6).default(3),
       voice: VOICE.default("ash"),
+      render: z.boolean().default(true).describe("Approve passing plans and queue their renders (false: plans only, for review)"),
     },
-    async ({ briefUrl, briefText, count, voice }) => {
-      if (!briefUrl && !briefText) throw new Error("Give briefUrl or briefText");
+    async ({ briefUrl, briefText, count, voice, render }) => {
+      if (!briefUrl && !briefText) throw new ToolError("INVALID_ARGUMENT", "Give briefUrl or briefText");
       const { campaign } = await api<{ campaign: Campaign }>("POST", "/campaigns", briefUrl ? { url: briefUrl } : { text: briefText });
-      const r = await planAndRender(campaign.id, count, voice, true);
+      const r = await planAndRender(campaign.id, count, voice, render);
       const s = await state();
       return {
         campaign: campaignSummary(campaignIn(s, campaign.id), s),
         ...r,
-        next: r.renderQueued.length ? `Renders take about a minute each. Call wait_for_renders with ${JSON.stringify(r.renderQueued)}.` : "No plan passed every rule — see failingRules, then edit_clip or review_clip.",
+        note: r.renderQueued.length ? "Renders take about a minute each." : render ? "No plan passed every rule — see failingRules, then edit_clip or review_clip." : "Plans only; review them, then render_clip.",
       };
     },
   );
@@ -221,10 +281,16 @@ export function createMcpServer(api: ApiCall): McpServer {
     "Add a clipping campaign from its brief. Extracts payout (CPM, cap), required phrases, call to action, banned claims, length, platforms and footage links, and lists the footage.",
     { briefUrl: z.string().url().optional(), briefText: z.string().optional() },
     async ({ briefUrl, briefText }) => {
-      if (!briefUrl && !briefText) throw new Error("Give briefUrl or briefText");
+      if (!briefUrl && !briefText) throw new ToolError("INVALID_ARGUMENT", "Give briefUrl or briefText");
       const { campaign } = await api<{ campaign: Campaign }>("POST", "/campaigns", briefUrl ? { url: briefUrl } : { text: briefText });
       const s = await state();
-      return campaignSummary(campaignIn(s, campaign.id), s);
+      const c = campaignIn(s, campaign.id);
+      const unwatched = c.footage.some((f) => f.kind === "video" && !f.analyzedAt && !f.analysisError);
+      const next: Next[] = [
+        ...(unwatched ? [{ tool: "find_moments", args: { campaignId: c.id }, why: "Logging the footage's highlights first makes plans and cuts use real moments." }] : []),
+        { tool: "plan_clips", args: { campaignId: c.id }, why: "Write clip plans checked against this brief." },
+      ];
+      return { ...campaignSummary(c, s), next };
     },
   );
 
@@ -293,7 +359,7 @@ export function createMcpServer(api: ApiCall): McpServer {
     { url: z.string().url(), name: z.string().optional() },
     async ({ url, name }) => {
       const r = await api<{ format: ReferenceFormat }>("POST", "/formats/from-url", { url, name });
-      return { id: r.format.id, name: r.format.name, status: r.format.status, next: "Call get_format until status is ready, then plan_clips with formatId." };
+      return { id: r.format.id, name: r.format.name, status: r.format.status, next: [{ tool: "get_format", args: { formatId: r.format.id }, why: "Call until status is ready, then plan_clips with formatId." }] satisfies Next[] };
     },
   );
 
@@ -344,7 +410,9 @@ export function createMcpServer(api: ApiCall): McpServer {
     },
     async ({ clipId, ...patch }) => {
       const s = await api<State>("PUT", `/clips/${encodeURIComponent(clipId)}`, patch);
-      return clipFull(clipIn(s, clipId));
+      const c = clipIn(s, clipId);
+      const next: Next[] = c.status === "draft" ? [{ tool: "review_clip", args: { clipId, decision: "approve" }, why: c.qa.pass ? "It follows the brief now." : `Still fails: ${failing(c).join("; ")}.` }] : c.status === "approved" ? [{ tool: "render_clip", args: { clipId }, why: "Render the edited plan." }] : [];
+      return { ...clipFull(c), next };
     },
   );
 
@@ -354,7 +422,8 @@ export function createMcpServer(api: ApiCall): McpServer {
     { clipId: z.string(), decision: z.enum(["approve", "reject"]), override: z.boolean().default(false) },
     async ({ clipId, decision, override }) => {
       const s = await api<State>("PUT", `/clips/${encodeURIComponent(clipId)}`, { status: decision === "approve" ? "approved" : "rejected", override });
-      return clipLine(clipIn(s, clipId));
+      const next: Next[] = decision === "approve" ? [{ tool: "render_clip", args: { clipId }, why: "Approved plans render into the finished video." }] : [];
+      return { ...clipLine(clipIn(s, clipId)), next };
     },
   );
 
@@ -364,7 +433,7 @@ export function createMcpServer(api: ApiCall): McpServer {
     { clipId: z.string(), voice: VOICE.default("ash") },
     async ({ clipId, voice }) => {
       const s = await api<State>("POST", `/clips/${encodeURIComponent(clipId)}/render`, { voice });
-      return clipLine(clipIn(s, clipId));
+      return { ...clipLine(clipIn(s, clipId)), next: [{ tool: "wait_for_renders", args: { clipIds: [clipId] }, why: "Returns the video link when the render finishes." }] satisfies Next[] };
     },
   );
 
@@ -390,7 +459,8 @@ export function createMcpServer(api: ApiCall): McpServer {
           return { id, title: c.title, render: c.render?.status ?? "not started", step: c.render?.step, error: c.render?.error, durationSec: c.render?.durationSec, videoUrl: await linkFor(c) };
         }),
       );
-      return { clips: out, stillRendering: pending() };
+      const still = pending();
+      return { clips: out, stillRendering: still, next: still.length ? [{ tool: "wait_for_renders", args: { clipIds: still }, why: "Some renders are still going." }] : [] };
     },
   );
 
