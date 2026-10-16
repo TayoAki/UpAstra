@@ -77,7 +77,7 @@ All of it is CPU-only, with no new paid providers, and keeps today's API and MCP
 - **A markup or authoring language, package system or generic build graph:** our plans are LLM-written JSON checked in code; the ceremony costs more than it buys.
 - **Server-side yt-dlp downloads:** platform-ToS and IP-block risk.
 - **WhisperX, torch or pyannote on Railway:** too heavy for CPU-only; whisper.cpp stays.
-- **Generated presenters and video generation (Seedance etc.):** a later PRD. The async-job lifecycle is designed for it now, so it can be added.
+- **Generated presenters and video generation (Seedance etc.):** a later PRD. OpenRouter now lists Seedance 2.x, Hailuo 3, Grok Imagine video, GPT Image 2, Nano Banana and Seedream (checked 2026-10-16, study 10 check). That would need new client code beyond `/chat/completions`, but probably no new gateway key; PixVerse, Wan Image and voice cloning still would. The async-job lifecycle in M1 is designed so this can be added.
 - **Head-tracking caption regions:** they need paid per-frame tracking, with marginal value for gameplay footage.
 
 ## Delivery Milestones
@@ -100,6 +100,7 @@ All of it is CPU-only, with no new paid providers, and keeps today's API and MCP
 - [ ] Does the BT.709 shift show on real phones (iOS and Android players), or only in tooling?
 - [ ] Should display/spoken markup be visible to users in the script editor, or only written by the planner?
 - [ ] Is SFX wanted by default, or opt-in per brief? Some brands forbid added sound.
+- [ ] Which OpenRouter endpoint and parameters serve video output, and at what cost per second? This decides whether generation is the next PRD.
 - [ ] Which libass WASM build (licence, size) suits the browser preview?
 - [ ] Per-step receipts: a Postgres table, or JSONB on the render document? This depends on the expected write rate per render.
 
