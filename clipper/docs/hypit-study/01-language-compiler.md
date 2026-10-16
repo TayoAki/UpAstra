@@ -116,7 +116,7 @@ It also contains the `.svrun` parser (subpath `./run`). Markup has no built-in d
   - imports after the body are rejected, and an error message carries `bad.svrun:2:` (`:272-279`).
 
 **Quality notes.**
-- (+) The parser is small and strict, with very good error *codes* (about 40 distinct `MARKUP_*` and `RUN_*` codes) and precise offsets for syntax errors.
+- (+) The parser is small and strict, with very good error *codes* (62 distinct `MARKUP_*` and `RUN_*` codes) and precise offsets for syntax errors.
 - (+) The discover/decode split lets the compiler find imports without running package decoders. Discovery runs once and is reused (`packages/compiler/test/compiler.test.ts:346-361`).
 - (+) Surfaces receive a capability (`resolveAsset`), never a filesystem. Records handed to surfaces are cloned.
 - (−) **Errors raised inside surfaces lose their location.** Handlers are awaited without try/catch (`src/frontend.ts:247`, `:270`). The shared helpers throw plain `Error` with no offset (`src/element.ts:9`, `:11`, `:32`). So "`lab:Result` requires id" carries no `file:line:col`, even though `element.range` was available.
@@ -618,7 +618,7 @@ It also stores a terminal outcome and execution evidence. Execution state itself
 5. **Reuse is a forward, not a copy; only finished results can be reused** (`packages/result/src/node/store.ts:370-395`, `writer.ts:228-241`). Variant renders reference the parent's shots and voice. This keeps storage cost down and provenance clear.
 6. **Value documents with blob slots** (`packages/result/src/writer.ts:191-226`). A render manifest is plain JSON with `null` slots plus a resource list. Domain data can never be mistaken for a file reference.
 7. **Tag vocabulary as data** (`packages/markup/src/types.ts:136-189`). One registry describes each overlay, caption and shot kind's attributes, constraints and an example. Generate the LLM schema, the MCP tool schema and the editor UI from it.
-8. **Strict error codes with exact positions** (`packages/markup/src/error.ts`, about 40 `MARKUP_*`/`RUN_*` codes). Use stable codes plus a JSON pointer for every plan or brief validation failure, so the agent and the UI can act on them in code.
+8. **Strict error codes with exact positions** (`packages/markup/src/error.ts`; 62 `MARKUP_*`/`RUN_*` codes). Use stable codes plus a JSON pointer for every plan or brief validation failure, so the agent and the UI can act on them in code.
 9. **Sortable timestamped ids with a nonce, and date-bucketed storage** (`packages/protocol/src/build-id.ts:20-23`, `packages/result/src/node/store.ts:199-213`). These make cheap newest-first S3 listing of renders per workspace possible.
 10. **Bounded write concurrency that drains on failure** (`packages/result/src/writer.ts:88-113`). A small, correct pattern for uploading render parts.
 
