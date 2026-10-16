@@ -2,7 +2,7 @@
 
 **Batch:** 11, Agent skill & playbooks
 **Source:** `hypit-ai/hypit` at commit `dc2b7a8f31b1ef1443a79ca448548d69e3ceb6a0`, read-only
-**Scope:** `skills/hypit/` (66 files, 9,820 lines: 61 Markdown docs plus 1 YAML, 3 SVS/SVRun, 1 SVML and 1 TS example). Every file was read in full, top to bottom.
+**Scope:** `skills/hypit/` (71 files, 9,820 lines: 63 Markdown docs plus 1 YAML, 2 SVS, 3 SVRun, 1 SVML and 1 TS example) *(corrected in check)*. Every file was read in full, top to bottom.
 
 | Group | Files | Lines |
 | --- | --- | --- |
@@ -10,8 +10,10 @@
 | `references/creation/` | 5 | 976 |
 | `references/environment/` | 4 | 1,172 |
 | `references/playbooks/` (index + 7 formats) | 8 | 758 |
-| `references/playbooks/craft/` (11 crafts + 2 examples) | 13 | 1,771 |
-| `references/production/` (29 docs + 8 examples) | 34 | 4,811 |
+| `references/playbooks/craft/` (12 crafts + 2 examples) | 14 | 1,865 |
+| `references/production/` (30 docs + 8 examples) | 38 | 4,717 |
+
+*(group rows corrected in check: the craft and production counts were wrong; the 9,820 total was right)*
 
 All paths below are relative to the repo root. `SK` = `skills/hypit/`, `R` = `skills/hypit/references/`.
 
@@ -41,7 +43,7 @@ The writing style matters for how we use it:
 - Persona and voice: "Speak aloud as the work develops" (`:37-42`); match the sensibility the video calls for, from "quick internet wit" to "playful absurdity" (`:30-31`).
 - Mandatory pre-reads: read image direction and the Kit before writing any image prompt (`:106-110`), voice direction before choosing a voice (`:111`), and video direction before any video prompt (`:112-117`).
 - Standing responsibilities (`:218-262`): Money, Existing work, Execution, Secrets, Evidence, Files are the memory, Project ownership, and "Done means watched."
-- A 57-row routing table that maps each question to its reference page (`:264-323`).
+- A 56-row routing table that maps each question to its reference page (`:266-323`, rows `:268-323`) *(corrected in check)*.
 
 **How it works (key directives).**
 - Performance-led work: "author meaning in Script and let the accepted performance give it time" (`:68-69`). "Selections carry explanations or comparisons; Moments carry answers or payoffs" (`:71-72`).
@@ -53,7 +55,7 @@ The writing style matters for how we use it:
 
 **Quality notes.**
 - (+) Clear ownership model. Every fact has one owning file or page.
-- (−) The routing table has duplicate destinations: `audio-clips.md` at `:295` and `:302`, `visual-clips.md` at `:301` and `:313`. The rows also overlap semantically.
+- (−) The routing table has duplicate destinations: `audio-clips.md` at `:295` and `:302`, `visual-clips.md` at `:301` and `:313`, and `media.md` at `:300` and `:306` *(added in check)*. The rows also overlap semantically.
 - (−) The prose is dense and abstract ("domain projectors can translate local evidence through equal-length absolute Windows", `:52-53`). It is costly in tokens for an LLM and hard for a human.
 
 ---
@@ -315,7 +317,7 @@ This is the format closest to our product: campaign footage plus an AI voiceover
 - Studio default port is 5179; comments live in `FEEDBACK.json` as `{id, run, at, text, resolved}` (`R/production/studio.md:24-25`, `:87-94`).
 
 **Quality notes.**
-- (−) The canonical example contradicts the doctrine. `R/production/examples/production.svml:22` defines a `proof` Selection and `:50-52` declares a semantic Projection, yet the proof label is timed by clock (`proof-label from="opening.start+2s" for="2s"`, `:48`, consumed at `:64-65`), and nothing consumes the projection. The skill itself says to bind such graphics to Selections (`R/creation/script-and-time.md:236-239`).
+- (−) The canonical example contradicts the doctrine. `R/production/examples/production.svml:22` defines a `proof` Selection and `:50-52` declares a semantic Projection, yet the proof label is timed by clock (`proof-label from="opening.start+2s" for="2s"`, `:48`, consumed at `:64-65` and placed in the Film at `:69`), and nothing in the file references `story-time` (contrast `R/production/timing.md:17-22`, where the same projection id feeds `semantic:Window`/`semantic:Instant`). The skill itself says to bind such graphics to Selections (`R/creation/script-and-time.md:236-239`).
 - (−) Editing debris: `R/playbooks/craft/sound-mix.md:54-55` links "Audio Clip" and "Audio Clips" to the same page as if they were two things. `R/playbooks/formats/narration-led-demo.md:65` and `R/playbooks/craft/voice-and-performance.md:213-214`, `:219` cite paths as code spans rather than links.
 - (−) Template ordering differs between examples: `R/production/source-syntax.md:126-136` puts dialogue first, while `R/production/examples/direction.svs:4-13` puts direction first. This is harmless but undocumented.
 - (+) The ownership tables (`R/production/review.md:155-161`, `R/production/authoring.md:170-180`, `R/environment/profile.md:268-279`) are excellent operational design.
@@ -365,11 +367,11 @@ No tests exist for this batch. The skill contains documentation and examples onl
 
 How it maps onto our product:
 
-- Our clips are mostly **narration-led**: an AI voiceover over campaign gameplay or footage. `server/render.ts:24`, `:188-235` voices the narration and cuts shots. So `R/playbooks/formats/narration-led-demo.md` is the format closest to our default product. The ranking and street-interview reveal patterns map onto our existing `tier`, `emoji` and `text` overlays (`shared/types.ts:165-170`).
+- Our clips are mostly **narration-led**: an AI voiceover over campaign gameplay or footage. `server/render.ts:22-26` (pipeline comment), `:188-247` (voiceover and duration) and `:250-262` (shot cutting) *(corrected in check)*. So `R/playbooks/formats/narration-led-demo.md` is the format closest to our default product. The ranking and street-interview reveal patterns map onto our existing `tier`, `emoji` and `text` overlays (`shared/types.ts:163-168`) *(corrected in check)*.
 - **The biggest conceptual gap is semantic time for shots.** We already bind *overlays* to spoken words (`server/scripts.ts:22`, `shared/overlays.ts:10-13`). But `server/render.ts:252-262` sizes *shots* by scaling each plan's `seconds` against the measured voice duration. That is exactly the "percentage of the outer window" pattern the skill warns against (`R/production/component-design.md:140-144`). Rewording or re-voicing shifts proof shots off the claims they support.
 - Our speech-rate model is a single `WORDS_PER_SECOND = 2.6` (`shared/rules.ts:49`). Hypit counts syllables with pace presets and padding (`R/creation/script-and-time.md:188-208`).
 - Our caption grouping is count-plus-punctuation (`shared/caption-styles.ts:105-121`). It will happily split "the / best", "not / bad" or "3 / goals". The skill gives concrete linguistic keep-together rules (`R/playbooks/craft/captions.md:63-67`).
-- Our format breakdown (`server/formats.ts:21-37`) already asks for beats, pacing, captions and overlays. But it records **seconds** (`atSec`, `start`/`end`), not the expressive relationship the skill insists on (`R/creation/reference-video.md:212-214`). It also samples at a flat 2 fps (`server/formats.ts:100`), which the skill says misses brief events (`R/creation/reference-video.md:130-133`).
+- Our format breakdown (`server/formats.ts:21-35`) *(corrected in check)* already asks for beats, pacing, captions and overlays. But it records **seconds** (`atSec`, `start`/`end`), not the expressive relationship the skill insists on (`R/creation/reference-video.md:212-214`). It also samples at a flat 2 fps (`server/formats.ts:100`), which the skill says misses brief events (`R/creation/reference-video.md:130-133`).
 - Image, video and voice generation craft (casting, Kits, Seedance) is **Low** today. We cut supplied footage on CPU-only Railway. It becomes **Medium** if we add AI B-roll or AI talking heads.
 
 ---
@@ -383,13 +385,13 @@ The rule of thumb: **encode as code** anything checkable or computable from data
 | # | What | Where in our app | Source |
 | --- | --- | --- | --- |
 | A1 | **Phrase-anchored shots.** Add `shots[].cue` (a phrase copied from the narration, like overlay cues). After `align.ts` times the voiceover, cut each shot to start at its cue's first word, with the previous shot ending there. Fall back to proportional `seconds` only when there is no cue. Let the outgoing shot own the pause by default, with an option to flip ownership. | `server/render.ts:252-262`, `shared/overlays.ts` (reuse `cueInScript`), `server/scripts.ts` SYSTEM + `toDraft` | `R/creation/script-and-time.md:160-163`, `:241-246`; `R/production/script-syntax.md:218-233`; `R/production/component-design.md:140-144` |
-| A2 | **Syllable-based duration estimate** with pace presets (`normal` ~ conversational, `fast` default for brisk clips) and per-format padding. Calibrate the rate from a cloned reference's own transcript (syllables per spoken second). This replaces the single `WORDS_PER_SECOND`. | `shared/rules.ts:49`, `:102`; `server/scripts.ts:48`, `:142`; store the measured rate on `FormatBreakdown` in `server/formats.ts` | `R/creation/script-and-time.md:188-214` |
+| A2 | **Syllable-based duration estimate** with pace presets (`normal` ~ conversational, `fast` default for brisk clips) and per-format padding. Calibrate the rate from a cloned reference's own transcript (syllables per spoken second). This replaces the single `WORDS_PER_SECOND`. | `shared/rules.ts:49`, `:102`; `server/scripts.ts:18`, `:50`, `:142` *(corrected in check)*; store the measured rate on `FormatBreakdown` in `server/formats.ts` | `R/creation/script-and-time.md:188-214` |
 | A3 | **Linguistic caption grouping.** In `groupWords`, never end a group on an article, preposition, negation, auxiliary or number when the next word completes it. Keep number+unit, "not X" and multi-word names (from brief `requiredPhrases` / product name) together. For CJK, group by characters up to a width budget measured with the actual font, not a fixed count. | `shared/caption-styles.ts:105-121`, `server/captions.ts:73` | `R/playbooks/craft/captions.md:63-82` |
 | A4 | **Caption QA checks**: minimum on-screen time per group (no flicker handoffs), maximum characters per group at style size (no overfull block), and the CTA/required phrase kept in one group. Surface failures in clip QA. | `server/captions.ts`, `shared/rules.ts` (`checkClip`) | `R/playbooks/craft/captions.md:249-251`; `R/production/review.md:110-111` |
 | A5 | **"Trail" karaoke mode** (spoken words stay highlighted) alongside the existing current-word karaoke. It is cheap in ASS (`\k` vs per-word color resets). | `shared/caption-styles.ts:5` (`CaptionAnimation`), `server/captions.ts` | `R/playbooks/craft/captions.md:98-100` |
 | A6 | **One Moment, many layers.** When several overlays share a cue, start them on the same word. Optionally add a short SFX or flash only on reveal-type overlays (`tier`, `emoji`), never on every cut. | `server/overlays.ts:52`; render audio mix | `R/playbooks/formats/street-interview.md:70-76`; `R/playbooks/craft/sound-mix.md:41-44` |
 | A7 | **Speech-aware music ducking**: when music is added (the editor supports it, `README.md:43`), drop gain around spoken spans, more around overlay-cued numbers and claims, and lift in pauses. ffmpeg `sidechaincompress` or volume envelopes from word times. | render mix / editor export | `R/playbooks/craft/sound-mix.md:35-39`; gains `R/production/audio-clips.md:14-26` |
-| A8 | **Handoff integrity checks** after cutting: no shot shorter than ~2 frames, no source exhausted before its window (black or frozen tail), no gap between shots. We partly do the black check already (`server/render.ts:278-279`). | `server/render.ts` | `R/production/review.md:122-126`; `R/production/visual-clips.md:50-52`; `R/playbooks/craft/b-roll.md:77-81` |
+| A8 | **Handoff integrity checks** after cutting: no shot shorter than ~2 frames, no source exhausted before its window (black or frozen tail), no gap between shots. We partly do the black check already (`server/render.ts:278-281`). | `server/render.ts` | `R/production/review.md:122-126`; `R/production/visual-clips.md:50-52`; `R/playbooks/craft/b-roll.md:77-81` |
 | A9 | **Denser reference sampling** in format breakdown: keep 2 fps overall, but sample the first ~3 s (the hook) and ±0.5 s around each detected scene cut at 6–10 fps in the proxy. This catches brief pop-ups without much extra cost. | `server/formats.ts:94-104` | `R/creation/reference-video.md:123-133` |
 | A10 | **Display vs spoken text for TTS** (Dual Text). Store an optional `say` map (e.g. `"3v3" → "three versus three"`, brand pronunciations) applied only to the TTS input. Captions keep the display form, and alignment maps the spoken tokens back to display words. | `server/render.ts:203` (`speak(clip.narration…)`), `server/align.ts` | `R/creation/script-and-time.md:58-111`; `R/production/script-syntax.md:61-67` |
 | A11 | **No crossfades or silent padding at voice seams** when variants or multi-take voices are stitched. | `server/variants.ts`, render | `R/playbooks/craft/voice-and-performance.md:68-78` |
@@ -408,7 +410,7 @@ The rule of thumb: **encode as code** anything checkable or computable from data
 7. **When adapting a format**: if our footage can't carry a reference system (no face cam, no UI), redistribute its job to overlays, text or a different shot rather than dropping the beat. *Source:* `R/creation/transformations.md:41-42`, `:20-23`.
 8. Add an optional `say` field for words TTS should pronounce differently from how they display (A10).
 
-**`server/formats.ts` SYSTEM** (`:21-37`). Reshape the breakdown toward relationships:
+**`server/formats.ts` SYSTEM** (`:21-35`) *(corrected in check)*. Reshape the breakdown toward relationships:
 
 1. For every beat and overlay, add **`anchor`**: what it responds to in the speech or action ("on the verdict word", "covers the claim about speed", "after the question, before the answer"), plus **`job`**: the viewer function from this closed list: *establish, contrast, accumulate proof, amplify reaction, make process legible, hand off*. Keep `atSec` as evidence only. *Source:* `R/creation/reference-video.md:17-21`, `:212-214`; `R/creation/script-and-time.md:248-251`.
 2. For each **persistent visual system** (board, strip, counter, caption treatment), record its entry, persistence across cuts, how new items enter (replace, add or cover) and its exit. *Source:* `R/creation/reference-video.md:39-43`, `:164-166`.
@@ -552,4 +554,28 @@ This keeps Hypit's best idea (meaning-bound timing plus format-specific craft) a
 | references/production/video-downloads.md | 47 | ✅ |
 | references/production/visual-clips.md | 86 | ✅ |
 | references/production/vocabulary.md | 124 | ✅ |
-| **Total (66 files)** | **9,820** | ✅ |
+| **Total (71 files)** *(corrected in check)* | **9,820** | ✅ |
+
+---
+
+## Check
+
+Independent second review against `hypit-ai/hypit` at `dc2b7a8f31b1ef1443a79ca448548d69e3ceb6a0` (`skills/hypit/`, read-only), plus our app under `clipper/`.
+
+**Method.** I listed every file under `skills/hypit/` with `wc -l` and diffed the result against §9. Then I opened about 165 of the roughly 230 `path:line` citations (about 70%), covering every number and default in §3. That included: the SKILL.md routing table; brief and project-files; reference-video sampling; script-and-time estimate, pace, padding and rounding; transformations; the environment Profile capacity example and WhisperX `small/cpu/int8`; every format page; captions (grouping, language table, `current/trail`, `step/wipe`, `all/on-start/typewriter`); caption-tracking head-box formula; b-roll; sound-mix; voice ~5 s reference and the no-handle/no-crossfade rule; video-direction (Seedance 2 Mini 720p, pause-trim cuts, `fast`); image-direction (2K/1K, `9:16`, casting wording and the "very fair skin" repeats at `examples/image-direction.md:33,54,70,102`, `conversation-images.md:50,181`); review, authoring, builds, caption-authoring and caption-presentation; fonts, prompt-kits, component-design (20/50/80%) and track-authoring; vocabulary `person-reference`; media 48 kHz; audio-clips gains (0.18, 12f/18f, 0.45, 600 ms, 3f); spatial 600×337.5 / ~1066.7×600; browser-capture 540x960×2 and Chrome ≥153; video-downloads H.264 ~1080p; studio port 5179 and `FEEDBACK.json` shape; `.github/workflows/ci.yml:8,14`.
+
+**`examples/production.svml:48-52` contradiction: confirmed.** `:22` defines `@{proof}`. `:48` times `proof-label` by clock (`opening.start+2s`, `for="2s"`). `:50-52` declares `semantic:Projection id="story-time"`, and nothing in the file consumes it. The label is consumed at `:64-65` and `:69`. This goes against `R/creation/script-and-time.md:236-239`. Template order also differs: `source-syntax.md:126-136` puts dialogue first (order 10), while `examples/direction.svs:4-13` puts direction first (order 10). Confirmed.
+
+**Our-app claims.**
+- `server/render.ts:252-262`: confirmed. `planned` sums `max(1, seconds)` (`:252`), and each shot gets `max(1.5, seconds*duration/planned)`, with the last shot taking the remainder (`:262`). That is proportional sizing with no reference to word times.
+- `shared/rules.ts:49` `WORDS_PER_SECOND = 2.6`: confirmed. It is used at `rules.ts:102` and `server/scripts.ts:18`, `:50`, `:142` (the notes said `:48`; corrected).
+- `shared/caption-styles.ts:105-121` `groupWords`: confirmed. It groups up to `max = 3` words and breaks after punctuation, then closes gaps under 0.25 s. There is no linguistic keep-together logic. It is wrapped by `server/captions.ts:73`.
+- `server/formats.ts:100`: confirmed. `fps=2,scale=432:-2` with drawtext, inside `buildReferenceProxy` (`:94-104`). The SYSTEM prompt spans `:21-35`, not `:21-37` (corrected). `formatForPlanner` (`:215-231`) passes `atSec`, `start` and `end` seconds: confirmed.
+- Also confirmed: `shared/overlays.ts:10-13` `cueInScript`, `server/scripts.ts:22` overlay cues, `server/render.ts:203` `speak(clip.narration…)` and `README.md:43` (music in the editor).
+
+**Totals.** About 165 claims checked. 154 were confirmed and 11 corrected: the scope file count and type breakdown, two group-table rows, the coverage total, the routing-table row count, `render.ts:24/:188-235`, `types.ts:165-170`, `scripts.ts:48` and `formats.ts:21-37` (twice). That is about 6.7%, all of them counts or line offsets; none changed a substantive finding. 2 claims were extended: the `media.md` routing duplicate, and the `production.svml:69` / `timing.md:17-22` context. 0 were removed and 0 marked unverified.
+
+**Coverage.** All 71 files under `skills/hypit/` appear in §9, with exact `wc -l` line counts (diffed). No files needed adding. Only the stated totals (66 files, and the group rows) were wrong.
+
+**Verdict: Verified ✅.** Fewer than 10% of claims needed correction, every correction was a count or line offset, and coverage is complete.
+

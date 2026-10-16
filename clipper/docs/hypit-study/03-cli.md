@@ -60,16 +60,16 @@ These are listed from their module declarations. They are outside this batch, so
 
 | Root | Module | Sub-verbs and key options | Notes |
 | --- | --- | --- | --- |
-| `runtime` | `@hypit/runtime-local` (`runtime-local/src/cli.ts:366`) | `init`, `use`, `unset`, `up`, `status`, `logs`, `down` (`:352-356`) | Local Worker lifecycle |
+| `runtime` | `@hypit/runtime-local` (`runtime-local/src/cli.ts:366`) | `init`, `use`, `unset`, `up`, `status`, `logs`, `down` (`:352-356`) | Local Worker lifecycle. The module also owns a hidden `_worker` root (`:366`) |
 | `programs` | same | `prepare`, `up`, `status`, `down` with `--endpoint` (`:357-358`) | Local model servers (e.g. WhisperX) |
 | `paths` | same | `--project`, `--runtime` (`:359-360`) | Where state lives |
-| `media` | `@hypit/media-local` (`media-local/src/cli.ts:8`) | `probe`, `cut`, `frames`, `tile`, `tiles`, `boundaries` (`media-local/src/files.ts:19`) | Local only: "No Runtime Profile, network request or project state" (`files.ts:824`) |
+| `media` | `@hypit/media-local` (`media-local/src/cli.ts:8`) | `probe`, `cut`, `frames`, `tile`, `tiles`, `boundaries` (`media-local/src/files.ts:19`) | Local only: "No Runtime Profile, network request or project state" (`files.ts:822`) *(corrected in check)* |
 | `transcribe` | `@hypit/whisperx` (`whisperx/src/cli.ts:143`) | `<audio/video> --to <json> --language <code>` (`:87`) | One immediate request with no Build state (`:89`) |
 | `estimate` | `@hypit/speech-estimate` (`speech-estimate/src/cli.ts:143`) | `--text` or `<svml> --segment`, plus `--pace` or `--rate`, `--rounding`, `--padding` (`:87-89`) | Speech duration estimate |
 | `download` | `@hypit/yt-dlp` (`yt-dlp/src/cli.ts:81`) | `<url> --to <video.mp4>`; `download prepare` (`:44,54`) | Reference or source video |
-| `capture` | `@hypit/browser-capture` (`browser-capture/src/cli.ts:194`) | `screenshot <url> --to` with `--selector/--clip/--viewport/...` (`:11-32`) | Web page capture |
+| `capture` | `@hypit/browser-capture` (`browser-capture/src/cli.ts:194`) | `screenshot <url> --to` with `--selector/--clip/--viewport/...`, plus `capture run <script.mjs>` and `capture install-browser` (`:11-32`) | Web page capture |
 | `vocabulary` | `@hypit/video` (`video/src/commands.ts:9`) | Installed packages and Surfaces | Author vocabulary discovery |
-| `studio`, `snapshot` | `@hypit/studio` (`studio/src/cli.ts:6`) | `studio --run <build.svrun>`, `snapshot --studio <url>` (`:49`) | Browser editor and frame grabs |
+| `studio`, `snapshot` | `@hypit/studio` (`studio/src/cli.ts:6`) | `studio --run <build.svrun>`, `snapshot --studio <url>` (`:8`; the file is 28 lines) *(corrected in check)* | Browser editor and frame grabs |
 
 **Media verbs in detail** (`files.ts:806-826`). These are the most interesting for us:
 - `media frames <file> (--at s,s | --every s | --every-frame) [--label-time] [--transcript json] --to <dir>`: individual frames named by source time. `--transcript` prints word times and context under each picture.
@@ -85,7 +85,7 @@ These are listed from their module declarations. They are outside this batch, so
 
 **Dispatch and context** (`main.ts:52-582`, `application.ts:87-132`, `installed-application.ts:278-320`)
 - Help is resolved first (`main.ts:58-63`).
-- The project is found upward through a `package.json` with `hypit.project: true`, or set with `--project` (README:131-135). The Runtime Profile comes from `--runtime` or the project's selection (`main.ts:110-118`).
+- The project is found upward through a `package.json` with `hypit.project: true`, or set with `--project` (README:100-104) *(corrected in check)*. The Runtime Profile comes from `--runtime` or the project's selection (`main.ts:110-118`).
 - Commands split into four families: environment (`doctor/auth`), project-result (Runtime-free), execution (`logs/status/activity/cancel/result finish|discard`), and author (`check/plan/pricing/build`) (`main.ts:119-159`).
 - Runtime hosts are memoized per `(profile, packageRoot)` (`main.ts:85-101`).
 
@@ -108,7 +108,7 @@ A test checks this whole sequence: a preflight error means no Program is started
 - Polling starts at 100 ms and doubles to 1 s while nothing changes (`:134,146`).
 - Progress lines are coalesced to at most one per 5 s (`:11`). Heartbeats fire at 30 s, then every 60 s (`:8-9`).
 - The comparison key deliberately ignores Worker scheduling churn (`ready/running/waiting` → "working", `:35-41`) and capacity leases (`:76-90`).
-- If the Worker stops, observation throws with two copy-paste evidence commands (`runtime status`, `logs <id>`) (`:160-168`), not a misleading "Result read failed".
+- If the Worker stops, observation throws with two copy-paste evidence commands (`runtime status`, `logs <id>`) (`:160-168`), not a misleading "Result read failed" (README:61-63; test title at `control-commands.test.ts:721`).
 - Progress goes to `writeProgress` (stderr), so stdout stays the single final JSON (`main.ts:376-381`, `node-application.ts:52-53`).
 
 **Results without a Runtime**
@@ -121,7 +121,7 @@ A test checks this whole sequence: a preflight error means no Program is started
 - Usage errors carry `code: "CLI_USAGE"` and `help: "hypit help <cmd>"` (`usage-error.ts:2-8`, `arguments.ts:44-51`).
 - Commands call `io.setExitCode(1)` for semantic failures while still printing their result. Examples: a plan with issues, a failed Build, an unavailable log (`main.ts:486`, `execution.ts:104`).
 
-**Command hints.** Every "next step" line is a fully scoped, shell-quoted command that keeps `--project/--runtime` (`command-hint.ts:8-20`, used e.g. `main.ts:435-485`). The README says the CLI "formats these existing commands; it does not choose which one the Agent must execute next" (README:86-89).
+**Command hints.** Every "next step" line is a fully scoped, shell-quoted command that keeps `--project/--runtime` (`command-hint.ts:8-20`, used e.g. `main.ts:435-485`). The README says the CLI "formats these existing commands; it does not choose which one the Agent must execute next" (README:57-58) *(corrected in check)*.
 
 **Immediate requests** (used by `transcribe`). `selectCliProvider` resolves the single Need against the Profile before any spend, and gives specific errors for no Endpoint, an ambiguous binding or an unsupported request (`immediate.ts:47-69`). A `MemoryResourceStore` scratch area means no Build or Result state is created (`immediate.ts:15-17`). `transcribe` then streams phase changes to stderr and writes a `hypit.whisperx-transcribe@1` view (`whisperx/src/cli.ts:116-138`).
 
@@ -156,16 +156,17 @@ A test checks this whole sequence: a preflight error means no Program is started
 - **Scale-aware rendering.** Grouping repeated requests (`output.ts:483-495`) keeps a 40-request plan readable.
 
 **Weaknesses, bugs and smells**
-- **`--project=<dir>` is half-supported.** The installed host accepts the `=` form (`installed-application.ts:176`), but the generic parser treats any `--x=y` as unknown (`arguments.ts:423`), so `hypit plan run.svrun --project=/p` fails after the host already resolved it.
-- **Dead code.** `rejectDuplicateProfile` (`arguments.ts:496-503`) and `usage()` (`:505-511`) have no caller in `cli/src` or `runtime-local/src`.
+- **`--project=<dir>` is half-supported.** The installed host accepts the `=` form (`installed-application.ts:176`), but the generic parser treats any `--x=y` as unknown (`arguments.ts:423`), so `hypit plan run.svrun --project=/p` fails with `unknown option --project=/p` after the host already resolved it and loaded that project's command selections (`installed-application.ts:304-308`). Only `hypit cli ...` accepts the `=` form all the way through (`:195`). No other parser in `packages/` accepts it either. *(confirmed in check)*
+- **Dead code.** `rejectDuplicateProfile` (`arguments.ts:496-503`) and `usage()` (`:505-511`) have no caller in `cli/src` or `runtime-local/src`. *(confirmed in check: there are no references anywhere in `packages/`. `index.ts` doesn't re-export `usage`, and `rejectDuplicateProfile` is module-private.)*
 - **OAuth wait has no deadline.**
   - Only the token exchange has a timeout (`oauth.ts:177`). The wait for the browser callback (`:175`) has none, so `auth login` hangs forever if the tab is closed.
-  - `JSON.parse(body)` on a 200 non-JSON response is unguarded (`:204`).
-- **Possible duplicate Runtime host.** `build` may open a second host when `--package-root` differs, because the memo key includes packageRoot (`main.ts:325` vs `:342`).
-- **Non-atomic manifest edit.** `cli use/remove` rewrites the user's `package.json` with `writeFile` and reformats it to 2-space JSON (`installed-application.ts:239,250`).
-- **No exit for agents.** `activity --watch` is an unbounded `while(true)` with a 1 s sleep (`execution.ts:215-218`). That's fine for a human; an agent must use `--jsonl` and kill it.
+  - `JSON.parse(body)` on a 200 non-JSON response is unguarded (`:204`), so the user gets a raw `SyntaxError`. *(both confirmed in check)*
+  - **Added in check:** the first non-`OPTIONS` request of any kind settles the callback. A wrong path, a state mismatch or a stray request such as `/favicon.ico` rejects the login, and the `finally` closes the server (`oauth.ts:114-150`). One unrelated request to the port aborts `auth login`.
+- ~~**Possible duplicate Runtime host.**~~ Refuted. Both calls build the same memo key: `main.ts:325` resolves packageRoot via `packageRootForProject()` = `args.packageRoot ?? projectRoot` (`:74-75`, `:88`), and `:342` passes `sourcePackageRoot` = `args.packageRoot ?? effectiveWorkspaceRoot` (`:162`), which is the same value. So `build` reuses one host. *(corrected in check)*
+- **Non-atomic manifest edit.** `cli use/remove` rewrites the user's `package.json` with `writeFile` and reformats it to 2-space JSON (`installed-application.ts:239,250`). *(Confirmed in check. There's no temp file and rename, and the user's indentation is lost. Mitigation: `use` loads and indexes the selection before it writes, so a rejected package leaves `package.json` unchanged. See `installed-application.ts:236-239` and `test/installed-application.test.ts:92-101`.)*
+- **No exit for agents.** `activity --watch` is an unbounded `while(true)` with a 1 s sleep (`execution.ts:215-218`). That's fine for a human; an agent must use `--jsonl` and kill it. *(Confirmed in check. The parser doesn't accept `--max-wait-ms` for `activity` (`arguments.ts:186`), and `runtime.close()` in the `finally` (`execution.ts:385-386`) never runs. Each tick is written only when the view changes (`:182`). Also note that `build --follow` and `status --watch` have no default cap without `--max-wait-ms` (`observation.ts:158-159`). They end only when the Build finishes or the Worker stops.)*
 - **Inconsistent JSON views across modules.** `media` JSON outputs have no `format` field (`media-local/src/files.ts:562,630,647,730,796`), unlike the `hypit.cli-*@1` convention.
-- **Abstract vocabulary.** Prose and messages are very abstract ("Distribution", "Candidate", "Satisfaction", "Need"). The README spends many lines on philosophy (README:71-94), and the cognitive load is high.
+- **Abstract vocabulary.** Prose and messages are very abstract ("Distribution", "Candidate", "Satisfaction", "Need"). The README spends many lines on philosophy (README:36-48) *(corrected in check)*, and the cognitive load is high.
 
 ### 1.7 Relevance to UGCMediaClips: **High** (for the agent/MCP surface)
 
@@ -202,13 +203,13 @@ A data-only ABI (`hypit.studio-companion@1`) through which component packages te
 
 ### 2.3 How it works
 
-- **Identity.** Package-local ids are qualified as `<physical package>#<id>`, and a local id containing `#` is rejected (`:843-848`). An executable facet therefore cannot impersonate an official companion (README:203-207). Tested at `test/identity.test.ts:26-33`.
-- **Exact matching.** Companions match outputs by full `TypeRef` and origins by `ModuleRef + Surface` (README:186-189). `requiredReferencedValue` demands exactly one reference with that input name and exact type, and throws otherwise (`:931-946`).
+- **Identity.** Package-local ids are qualified as `<physical package>#<id>`, and a local id containing `#` is rejected (`:843-848`). An executable facet therefore cannot impersonate an official companion (README:154-157) *(corrected in check)*. `test/identity.test.ts:26-33` tests the qualification. Nothing tests the rejection of `#`.
+- **Exact matching.** Companions match outputs by full `TypeRef` and origins by `ModuleRef + Surface` (README:143-145) *(corrected in check)*. `requiredReferencedValue` demands exactly one reference with that input name and exact type, and throws otherwise (`:931-946`).
 - **No ordinal guessing.**
   - `authoredChildFor` matches by explicit `id` or by a typed value whose `.id` equals the authored id. More than one match throws (`:981-997`).
   - `temporalLineageFor` returns undefined for no match (read-only) and throws on ambiguity (`:999-1010`).
-  - Tested at `identity.test.ts:9-24`.
-- **Edit authority.** An Inspector field is editable only if its binding resolves to a source `edit` endpoint (`:213-224`). Timeline handles carry explicit sources and temporal authority (`:302-321`). Inversion through package-private producers is delegated to `temporalRelations[].invert`, which returns candidate plans. Studio composes them and commits only a unique survivor (README:236-242).
+  - Only `authoredChildFor` is tested (`identity.test.ts:9-24`). `temporalLineageFor` has no test in this package. *(corrected in check)*
+- **Edit authority.** An Inspector field is editable only if its binding resolves to a source `edit` endpoint (`:213-224`). Timeline handles carry explicit sources and temporal authority (`:302-321`). Inversion through package-private producers is delegated to `temporalRelations[].invert`, which returns candidate plans. Studio composes them and commits only a unique survivor (README:196-201) *(corrected in check)*.
 - **Frame model.** Intervals are half-open (`startFrame`, `endFrameExclusive`, `:548-549`), and `stackOrder` breaks ties (`:550-551`).
 
 ### 2.4 Tests
@@ -313,7 +314,7 @@ At every step the agent reads one JSON object on stdout and a non-zero exit when
    - Make errors structured, `{ok:false, error:{code, message, help}}` (pattern from `output.ts:1028-1039`), instead of `Error: <text>` (`mcp.ts:43`).
    - Keep `isError`, but give the model a stable `code` (`QUOTA_EXCEEDED`, `FOOTAGE_MISSING`, `QA_FAILED`, ...) to branch on.
 4. **Fail-closed tool arguments.** zod objects strip unknown keys by default. A model that sends `formatID` or `autorender` today gets silently ignored values. Use strict schemas so typos error (the Hypit equivalent is `arguments.ts:299-305`). This is a one-line change per tool.
-5. **A consistent `next` field with exact tool calls.** Only `brief_to_shorts` and `clone_format` return `next` (`mcp.ts:214,296`). Adopt the command-hint idea: every state-changing tool returns `next: [{tool, args, why}]` with ids filled in. Hypit keeps this scoped and doesn't pick the action for the agent (README:86-89). That fits our in-app agent's 30-step budget (`agent.ts:16`).
+5. **A consistent `next` field with exact tool calls.** Only `brief_to_shorts` and `clone_format` return `next` (`mcp.ts:214,296`). Adopt the command-hint idea: every state-changing tool returns `next: [{tool, args, why}]` with ids filled in. Hypit keeps this scoped and doesn't pick the action for the agent (README:57-58) *(corrected in check)*. That fits our in-app agent's 30-step budget (`agent.ts:16`).
 6. **A standalone `transcribe` tool.** Take a URL or footage id and return word-timed JSON plus language, without rendering. We have the pieces (`server/transcribe.ts:42`, `/captions/:id/transcribe`). `get_caption_job` currently returns joined text, which drops timing (`mcp.ts:116`).
 7. **`cancel_render` and `get_render_log`.** Mirror `cancel` and `logs --lines` (tail plus `omittedRecords`, `execution.ts:89-103`). This turns "render failed" into something an agent can fix.
 8. **Cheaper, better-behaved waiting.** `wait_for_renders` fetches the full `/state` every 5 s (`mcp.ts:383-384`). Adopt Hypit's observation shape:
@@ -327,7 +328,7 @@ At every step the agent reads one JSON object on stdout and a non-zero exit when
 
 - **Local Runtime Profiles, Workers, Programs, Endpoint bindings and `auth login`.** We're multi-tenant and own the provider keys. Per-user credential stores and an OAuth loopback (`oauth.ts`) solve a desktop-tool problem we don't have. Outstand already handles social OAuth.
 - **Package-installed command composition** (`installed-application.ts`, `hypit.cli.use`). We are not a distribution others extend, and dynamic `import()` of project packages (`:128`) would be a supply-chain liability on a shared server.
-- **Leaving orchestration policy entirely to a Skill.** Hypit's CLI refuses to choose a next action (README:86-89), and the 328-line Skill plus about 40 reference docs carry the workflow. Our users and automations need `brief_to_shorts`-style one-call paths that work with no agent in the loop. Keep workflow tools, and add primitives beside them.
+- **Leaving orchestration policy entirely to a Skill.** Hypit's CLI refuses to choose a next action (README:57-58), and the 328-line Skill plus 62 reference docs (`skills/hypit/references/**/*.md`) carry the workflow *(corrected in check)*. Our users and automations need `brief_to_shorts`-style one-call paths that work with no agent in the loop. Keep workflow tools, and add primitives beside them.
 - **The Studio Companion ABI.** It is a large data contract for a bespoke timeline and source language. With OpenReel, only the principle "edits must map back to plan fields or be read-only" is worth keeping.
 - **Abstract vocabulary in user-facing text** ("Satisfaction", "Candidate", "Need", "Distribution"). Our tool descriptions are plain and should stay that way.
 - **Unbounded watch loops** (`execution.ts:215`) and **no-deadline OAuth waits** (`oauth.ts:175`). Any agent-facing wait we add must have a cap, as `wait_for_renders` already does (`mcp.ts:374`, max 240 s).
@@ -400,3 +401,51 @@ All files were read in full, except the out-of-batch module files in the last gr
 | *Ours:* clipper/server/mcp.ts (584), clipper/server/agent.ts (226), clipper/README.md (1-80) | — | ✅ |
 
 **Test-reading caveat:** I read the source files in full. For the larger test files, I read every test title and the bodies of the representative tests cited above. I didn't trace every line of all 3,973 test lines.
+
+## Check
+
+Second reviewer. I checked against `hypit` at `dc2b7a8f` (read-only) and against `/home/user/UpAstra/clipper` for the "Our app" claims.
+
+**Totals**
+- **Claims checked:** about 200 `path:line` citations and numeric claims.
+  - §1 source: about 110.
+  - §1.3 contributed-module surface: about 20.
+  - §2 studio-companion: about 30.
+  - §3–4 our-app comparisons: about 35.
+  - Test claims: all 20 cited test bodies.
+  - Spot-checks: 5 more test files (`application`, `plan-needs`, `view`, `secret-input`, `command-hint`) and the imports in `programs-command`/`runtime-selection`. These were consistent with the notes.
+- **Confirmed:** about 188.
+- **Corrected:** 12.
+  - Wrong line citations:
+    - `files.ts:824` → `:822`;
+    - `studio/src/cli.ts:49` → `:8`;
+    - cli README `:131-135` → `:100-104`;
+    - cli README `:86-89` → `:57-58` (3 places);
+    - cli README `:71-94` → `:36-48`;
+    - studio-companion README `:203-207` → `:154-157`;
+    - studio-companion README `:186-189` → `:143-145`;
+    - studio-companion README `:236-242` → `:196-201`.
+  - "About 40 reference docs" → 62.
+  - The "possible duplicate Runtime host" bug is **refuted**: both calls compute the same memo key.
+  - The identity test overstated coverage. `temporalLineageFor` and the `#`-rejection path are untested.
+- **Removed or unverified:** 0.
+- **Reported bugs:**
+  - Confirmed:
+    - `--project=` is half-supported (`installed-application.ts:176` vs `arguments.ts:423`);
+    - dead code at `arguments.ts:496-511`;
+    - OAuth callback wait has no deadline (`oauth.ts:175`);
+    - `JSON.parse` is unguarded (`oauth.ts:204`);
+    - the `package.json` rewrite is non-atomic;
+    - `activity --watch` never exits.
+  - Refuted: the duplicate Runtime host.
+- **Added in check:**
+  - a stray loopback request aborts OAuth login (`oauth.ts:114-150`);
+  - `cli use` validates before writing;
+  - `build --follow`/`status --watch` have no default cap;
+  - the hidden `_worker` root;
+  - the `capture run`/`install-browser` sub-verbs.
+
+**Coverage:** complete. All 35 `cli/src` files (6,261 lines), 17 `cli/test` files (3,973 lines, 122 `test(` calls, 532 `assert.*`), both READMEs, both `package.json` files and the 3 studio-companion files are in the table, and every `wc -l` matches. No files were added.
+
+**Verdict: Verified ✅.** About 6% of claims needed correction and coverage is complete. The substantive fix is the removal of the duplicate-host bug. The other corrections are mostly README line drift.
+
