@@ -429,9 +429,11 @@ export function createApp() {
       const user = (await b.getUser(req.userId!))!;
       if (!(await verifyPassword(String(req.body?.password ?? ""), user.passwordHash))) throw new HttpError(401, "Wrong password");
       forgetTenant(req.workspaceId!);
-      await videoStore()
-        .deletePrefix(`${req.workspaceId}/`)
-        .catch((e) => console.error("[account] video cleanup failed:", e));
+      // The workspace's files, and its cached render steps (kept under steps/).
+      for (const prefix of [`${req.workspaceId}/`, `steps/${req.workspaceId}/`])
+        await videoStore()
+          .deletePrefix(prefix)
+          .catch((e) => console.error("[account] video cleanup failed:", e));
       await b.deleteWorkspace(req.workspaceId!);
       await b.deleteUser(user.id);
       clearSession(res);
