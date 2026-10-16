@@ -285,14 +285,14 @@ The key idea: one self-contained HTML document is a pure function of an **absolu
 **How it works.**
 - *Fixed wrapper stack per clip* (`src/lower.ts:298-347`): `placement` (absolute Frame px) → `pose` (Motion animation, constant origin) → `frame` (clip, radius, border, shadow, `clip-path: path()`, made relative to the Frame origin, `:60-72`) → for each layer: `sampling` (Ken-Burns transform) → `appearance` (CSS filter, opacity) → `mapping` (`matrix(xx,yx,xy,yy,tx,ty)`) → media element.
 - *Blur overscan.* The source is enlarged by `ceil(2 × blur / minScale)` px and clipped back to its mapped outline, so a blur never fades its own edge (`src/lower.ts:195-210`). This is the "blurred fill" look done properly.
-- *Fit.* Fit resolves once against the Frame inset (border + padding) to an explicit `SpatialMap2D` (`src/spatial.ts:27-51`, `src/frame-treatment.ts:42-55`). Tests pin `contain 800² into 380×280 → scale 0.345, tx 162, ty 212` (`test/visual-track.test.ts:93-94`, file line numbers ~217-253).
+- *Fit.* Fit resolves once against the Frame inset (border + padding) to an explicit `SpatialMap2D` (`src/spatial.ts:27-51`, `src/frame-treatment.ts:42-55`). Tests pin `contain 800² into 380×280 → scale 0.345, tx 162, ty 212` (`test/visual-track.test.ts:233`).
 - *Source time.* Symbolic relations (rate, anchors, wrap, fit) resolve to exact rational pieces by binary search over valid target frames (`src/source-time.ts:116-152, 207-241`). Sources **must already be normalized to the Timeline frame rate** (`src/source-time.ts:220-222`).
 - *Motion.* Poses carry `translate`, `rotate`, `scale` and `opacity` keyframes at start/end±Nf/percent, and must cover the whole clip clock exactly (`src/motion.ts:79-122`). Easing is limited to `linear` and `ease-in`, `ease-out`, `ease-in-out` (`:64-66`).
 
 **Tests.** 18 + 1 studio test. Highlights:
-- Clip paths are translated into Frame-local coordinates (`test/visual-track.test.ts` "owned clip path…": `M 0 0 L 400 0 L 360 300 L 40 300 Z`).
-- Self-blur shares one resource across two samples, with 103 px overscan for a 24 px blur.
-- A hold is kept as `rate 0/1` (piecewise source time).
+- Clip paths are translated into Frame-local coordinates: `M 0 0 L 400 0 L 360 300 L 40 300 Z` (`test/visual-track.test.ts:273`).
+- Self-blur shares one resource across two samples, with 103 px overscan for a 24 px blur (`:320-321`).
+- A hold is kept as `rate 0/1` (`:377`).
 - Exact reverse, end-aligned, wrap and fit source-time resolution.
 - The audio member of synchronized media is never emitted.
 
@@ -463,3 +463,158 @@ Every source, test, README and package file in the batch was read top to bottom.
 
 | File | Lines | Read |
 |---|---|---|
+| `packages/html-program/README.md` | 77 | ✅ |
+| `packages/html-program/package.json` | 43 | ✅ |
+| `packages/html-program/src/activation.ts` | 10 | ✅ |
+| `packages/html-program/src/capture-scope.ts` | 67 | ✅ |
+| `packages/html-program/src/component.ts` | 62 | ✅ |
+| `packages/html-program/src/document.ts` | 1033 | ✅ |
+| `packages/html-program/src/execution.ts` | 63 | ✅ |
+| `packages/html-program/src/fragment.ts` | 32 | ✅ |
+| `packages/html-program/src/frame-work.ts` | 148 | ✅ |
+| `packages/html-program/src/html-visual.ts` | 116 | ✅ |
+| `packages/html-program/src/index.ts` | 17 | ✅ |
+| `packages/html-program/src/manifest.ts` | 111 | ✅ |
+| `packages/html-program/src/playback.ts` | 229 | ✅ |
+| `packages/html-program/src/text.ts` | 1188 | ✅ |
+| `packages/html-program/src/types.ts` | 64 | ✅ |
+| `packages/html-program/src/visibility.ts` | 29 | ✅ |
+| `packages/html-program/test/capture-scope.test.ts` | 74 | ✅ |
+| `packages/html-program/test/document.test.ts` | 859 | ✅ |
+| `packages/html-program/test/frame-work.test.ts` | 95 | ✅ |
+| `packages/html-program/test/text-runtime.test.ts` | 164 | ✅ |
+| `packages/html-program/test/visibility.test.ts` | 35 | ✅ |
+| `packages/html-document/README.md` | 71 | ✅ |
+| `packages/html-document/package.json` | 21 | ✅ |
+| `packages/html-document/src/activation.ts` | 17 | ✅ |
+| `packages/html-document/src/component.ts` | 19 | ✅ |
+| `packages/html-document/src/document.ts` | 170 | ✅ |
+| `packages/html-document/src/fragment.ts` | 14 | ✅ |
+| `packages/html-document/src/index.ts` | 6 | ✅ |
+| `packages/html-document/src/manifest.ts` | 50 | ✅ |
+| `packages/html-document/src/surface.ts` | 25 | ✅ |
+| `packages/html-video/README.md` | 24 | ✅ |
+| `packages/html-video/package.json` | 47 | ✅ |
+| `packages/html-video/src/activation.ts` | 17 | ✅ |
+| `packages/html-video/src/fragment.ts` | 70 | ✅ |
+| `packages/html-video/src/index.ts` | 3 | ✅ |
+| `packages/html-video/src/manifest.ts` | 60 | ✅ |
+| `packages/html-video/src/surface.ts` | 61 | ✅ |
+| `packages/html-video/test/presentation.test.ts` | 20 | ✅ |
+| `packages/html-video/test/render.test.ts` | 419 | ✅ |
+| `packages/provider-html-local/README.md` | 94 | ✅ |
+| `packages/provider-html-local/package.json` | 48 | ✅ |
+| `packages/provider-html-local/src/activation.ts` | 128 | ✅ |
+| `packages/provider-html-local/src/browser-install.ts` | 5 | ✅ |
+| `packages/provider-html-local/src/browser.ts` | 118 | ✅ |
+| `packages/provider-html-local/src/capture-exit.ts` | 33 | ✅ |
+| `packages/provider-html-local/src/capture-process.ts` | 131 | ✅ |
+| `packages/provider-html-local/src/capture-worker.ts` | 38 | ✅ |
+| `packages/provider-html-local/src/capture.ts` | 331 | ✅ |
+| `packages/provider-html-local/src/concurrency.ts` | 95 | ✅ |
+| `packages/provider-html-local/src/frame-span-index.ts` | 109 | ✅ |
+| `packages/provider-html-local/src/index.ts` | 10 | ✅ |
+| `packages/provider-html-local/src/opaque-capture.ts` | 287 | ✅ |
+| `packages/provider-html-local/src/options.ts` | 27 | ✅ |
+| `packages/provider-html-local/src/ordered-frame-sink.ts` | 139 | ✅ |
+| `packages/provider-html-local/src/output.ts` | 73 | ✅ |
+| `packages/provider-html-local/src/process-tree.ts` | 88 | ✅ |
+| `packages/provider-html-local/src/process.ts` | 157 | ✅ |
+| `packages/provider-html-local/src/program.ts` | 80 | ✅ |
+| `packages/provider-html-local/src/progress.ts` | 53 | ✅ |
+| `packages/provider-html-local/src/provider.ts` | 98 | ✅ |
+| `packages/provider-html-local/src/render.ts` | 191 | ✅ |
+| `packages/provider-html-local/src/sampling.ts` | 99 | ✅ |
+| `packages/provider-html-local/src/server.ts` | 52 | ✅ |
+| `packages/provider-html-local/src/source-frame-decoder.ts` | 178 | ✅ |
+| `packages/provider-html-local/src/source-frame-store.ts` | 326 | ✅ |
+| `packages/provider-html-local/src/stage.ts` | 148 | ✅ |
+| `packages/provider-html-local/src/surface-validation.ts` | 209 | ✅ |
+| `packages/provider-html-local/src/weighted-capacity.ts` | 50 | ✅ |
+| `packages/provider-html-local/test/alpha.test.ts` | 85 | ✅ |
+| `packages/provider-html-local/test/browser-download.test.ts` | 108 | ✅ |
+| `packages/provider-html-local/test/browser.test.ts` | 76 | ✅ |
+| `packages/provider-html-local/test/capture-process.test.ts` | 269 | ✅ |
+| `packages/provider-html-local/test/concurrency.test.ts` | 62 | ✅ |
+| `packages/provider-html-local/test/frame-span-index.test.ts` | 44 | ✅ |
+| `packages/provider-html-local/test/frames.test.ts` | 60 | ✅ |
+| `packages/provider-html-local/test/ordered-frame-sink.test.ts` | 61 | ✅ |
+| `packages/provider-html-local/test/process-env.test.ts` | 70 | ✅ |
+| `packages/provider-html-local/test/progress.test.ts` | 29 | ✅ |
+| `packages/provider-html-local/test/provider.test.ts` | 186 | ✅ |
+| `packages/provider-html-local/test/range.test.ts` | 244 | ✅ |
+| `packages/provider-html-local/test/source-frame-decoder.test.ts` | 25 | ✅ |
+| `packages/provider-html-local/test/source-frame-store.test.ts` | 103 | ✅ |
+| `packages/provider-html-local/test/stage.test.ts` | 209 | ✅ |
+| `packages/provider-html-local/test/surface-validation.test.ts` | 153 | ✅ |
+| `packages/provider-html-local/test/visual-readiness.test.ts` | 439 | ✅ |
+| `packages/provider-html-local/test/weighted-capacity.test.ts` | 18 | ✅ |
+| `packages/browser-capture/README.md` | 92 | ✅ |
+| `packages/browser-capture/package.json` | 28 | ✅ |
+| `packages/browser-capture/src/browser.ts` | 33 | ✅ |
+| `packages/browser-capture/src/cli.ts` | 204 | ✅ |
+| `packages/browser-capture/src/index.ts` | 194 | ✅ |
+| `packages/browser-capture/test/capture.test.ts` | 117 | ✅ |
+| `packages/browser-capture/test/cli.test.ts` | 53 | ✅ |
+| `packages/visual-track/README.md` | 139 | ✅ |
+| `packages/visual-track/package.json` | 45 | ✅ |
+| `packages/visual-track/preview/build.svrun` | 5 | ✅ |
+| `packages/visual-track/preview/preview.svml` | 50 | ✅ |
+| `packages/visual-track/preview/recipes.svs` | 16 | ✅ |
+| `packages/visual-track/src/activation.ts` | 42 | ✅ |
+| `packages/visual-track/src/author.ts` | 204 | ✅ |
+| `packages/visual-track/src/component.ts` | 123 | ✅ |
+| `packages/visual-track/src/fragment.ts` | 56 | ✅ |
+| `packages/visual-track/src/frame-treatment.ts` | 55 | ✅ |
+| `packages/visual-track/src/index.ts` | 45 | ✅ |
+| `packages/visual-track/src/layers.ts` | 352 | ✅ |
+| `packages/visual-track/src/lower.ts` | 347 | ✅ |
+| `packages/visual-track/src/manifest.ts` | 438 | ✅ (a few lines over 200 chars read truncated) |
+| `packages/visual-track/src/motion.ts` | 145 | ✅ |
+| `packages/visual-track/src/program.ts` | 215 | ✅ |
+| `packages/visual-track/src/source-time.ts` | 241 | ✅ |
+| `packages/visual-track/src/spatial.ts` | 77 | ✅ |
+| `packages/visual-track/src/studio.ts` | 210 | ✅ |
+| `packages/visual-track/src/surface.ts` | 675 | ✅ (a few lines over 200 chars read truncated) |
+| `packages/visual-track/src/types.ts` | 252 | ✅ |
+| `packages/visual-track/test/studio-companion.test.ts` | 27 | ✅ |
+| `packages/visual-track/test/visual-track.test.ts` | 722 | ✅ (a few lines over 200 chars read truncated) |
+| `packages/composition/README.md` | 82 | ✅ |
+| `packages/composition/package.json` | 36 | ✅ |
+| `packages/composition/src/activation.ts` | 8 | ✅ |
+| `packages/composition/src/audio-level-automation.ts` | 44 | ✅ |
+| `packages/composition/src/component.ts` | 11 | ✅ |
+| `packages/composition/src/index.ts` | 29 | ✅ |
+| `packages/composition/src/introspection.ts` | 52 | ✅ |
+| `packages/composition/src/manifest.ts` | 12 | ✅ (a few lines over 200 chars read truncated) |
+| `packages/composition/src/schema.ts` | 200 | ✅ (a few lines over 200 chars read truncated) |
+| `packages/composition/src/track.ts` | 1456 | ✅ |
+| `packages/composition/src/visual.ts` | 222 | ✅ |
+| `packages/composition/test/render.test.ts` | 215 | ✅ |
+| `packages/composition/test/track.test.ts` | 318 | ✅ |
+| `packages/film/README.md` | 54 | ✅ |
+| `packages/film/package.json` | 49 | ✅ |
+| `packages/film/src/activation.ts` | 23 | ✅ |
+| `packages/film/src/component.ts` | 62 | ✅ |
+| `packages/film/src/fragment.ts` | 83 | ✅ |
+| `packages/film/src/index.ts` | 11 | ✅ |
+| `packages/film/src/manifest.ts` | 151 | ✅ |
+| `packages/film/src/program.ts` | 110 | ✅ |
+| `packages/film/src/recipe.ts` | 25 | ✅ |
+| `packages/film/src/studio.ts` | 17 | ✅ |
+| `packages/film/src/surface.ts` | 144 | ✅ |
+| `packages/film/src/types.ts` | 26 | ✅ |
+| `packages/film/test/film.test.ts` | 254 | ✅ |
+| `packages/film/test/surface.test.ts` | 223 | ✅ |
+| `packages/video/README.md` | 65 | ✅ |
+| `packages/video/package.json` | 72 | ✅ |
+| `packages/video/src/commands.ts` | 19 | ✅ |
+| `packages/video/src/compiler.ts` | 74 | ✅ |
+| `packages/video/src/distribution.ts` | 95 | ✅ |
+| `packages/video/src/index.ts` | 10 | ✅ |
+| `packages/video/src/package-selection.ts` | 34 | ✅ |
+| `packages/video/src/vocabulary.ts` | 355 | ✅ |
+| `packages/video/test/cli.test.ts` | 164 | ✅ |
+| `packages/video/test/packages.ts` | 66 | ✅ |
+| `packages/video/test/vocabulary.test.ts` | 143 | ✅ |
+| `packages/visual-track/preview/{Track,flush,rounded}.png` | binary | not read (images) |
