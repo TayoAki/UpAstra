@@ -26,14 +26,16 @@ const norm = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p
  * seconds. Tier items stay until the call to action. Overlays that can't be
  * placed are returned separately.
  */
-export function placeOverlays(overlays: Overlay[], words: Timed[], duration: number, until: number): { placed: Placed[]; missed: Overlay[] } {
+export function placeOverlays(overlays: Overlay[], words: Timed[], duration: number, until: number, moments: Record<string, number> = {}): { placed: Placed[]; missed: Overlay[] } {
   const toks = words.map((w) => norm(w.text));
   const usedAt = new Map<string, number>();
   const placed: Placed[] = [];
   const missed: Overlay[] = [];
   for (const o of overlays) {
     let start: number | undefined;
-    const cue = o.cue ? norm(o.cue).split(" ").filter(Boolean) : [];
+    // "@name" lands on a moment marked in the narration.
+    if (o.cue?.trim().startsWith("@")) start = moments[o.cue.trim().slice(1)];
+    const cue = o.cue && start === undefined ? norm(o.cue).split(" ").filter(Boolean) : [];
     if (cue.length) {
       const key = cue.join(" ");
       for (let i = usedAt.get(key) ?? 0; i <= toks.length - cue.length; i++) {

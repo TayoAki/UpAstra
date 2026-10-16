@@ -16,6 +16,7 @@ import { enqueueRender } from "../server/render";
 // clip again reuses the take and every shot; a resumed or retried render
 // checks the AI budget before paying.
 let tts = 0;
+const ttsHeard: string[] = [];
 let llm: http.Server;
 let videoServer: http.Server;
 let app: http.Server;
@@ -35,7 +36,7 @@ const PLAN = {
       angle: "Hype",
       hookStyle: "question",
       hook: "Have you played Turbo Ball yet?",
-      narration: "Have you played Turbo Ball yet? It is soccer with rocket cars. Play Turbo Ball now.",
+      narration: "Have you played Turbo Ball yet? It is <5v5|five versus five> soccer with rocket cars. Play Turbo Ball now.",
       onScreenText: [],
       cta: "Play Turbo Ball now",
       shots: [{ footageName: "Gameplay", moment: "goal", seconds: 6 }],
@@ -70,6 +71,7 @@ beforeAll(() => {
         const body = JSON.parse(raw);
         if (body.modalities?.includes("audio")) {
           tts++;
+          ttsHeard.push(body.messages[1].content);
           res.writeHead(200, { "Content-Type": "text/event-stream" });
           for (let i = 0; i < pcm.length; i += 9600) res.write(`data: ${JSON.stringify({ choices: [{ delta: { audio: { data: pcm.subarray(i, i + 9600).toString("base64") } } }] })}\n\n`);
           res.end(`data: ${JSON.stringify({ choices: [], usage: { cost: 0.02 } })}\n\ndata: [DONE]\n\n`);
@@ -127,6 +129,8 @@ describe.skipIf(!ffmpegAvailable())("step cache in renders", () => {
     const first = await settle(clip.id);
     expect(first.error).toBeUndefined();
     expect(tts).toBe(1);
+    // The voice reads the spoken side of the markup.
+    expect(ttsHeard[0]).toBe("Have you played Turbo Ball yet? It is five versus five soccer with rocket cars. Play Turbo Ball now.");
     expect(first.steps.voiceover).toMatchObject({ status: "done" });
     expect(first.steps.voiceover.reused).toBeFalsy();
 

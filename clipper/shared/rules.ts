@@ -1,3 +1,4 @@
+import { displayText, spokenText } from "./markup";
 import { sentences } from "./sentences";
 import type { CampaignBrief, CampaignStats, Clip, ClipStatus, Post, QACheck } from "./types";
 
@@ -171,8 +172,9 @@ function bannedTriggers(claims: string[]): { word: RegExp; claim: string }[] {
 
 export function checkClip(clip: Pick<Clip, "hook" | "narration" | "cta" | "lengthSec" | "onScreenText" | "shots"> & Partial<Pick<Clip, "render">>, brief: CampaignBrief): { pass: boolean; checks: QACheck[] } {
   const checks: QACheck[] = [];
-  const spoken = norm(clip.narration);
-  const all = norm([clip.narration, ...clip.onScreenText].join(" "));
+  // Required phrases must be said; banned claims count whether said or shown.
+  const spoken = norm(spokenText(clip.narration));
+  const all = norm([spokenText(clip.narration), displayText(clip.narration), ...clip.onScreenText].join(" "));
 
   // 1. Required phrases are said out loud.
   for (const phrase of brief.requiredPhrases) {
@@ -186,7 +188,7 @@ export function checkClip(clip: Pick<Clip, "hook" | "narration" | "cta" | "lengt
 
   // 3. CTA where the brief wants it.
   if (brief.cta.text) {
-    const tail = norm(brief.cta.placement === "end" ? sentences(clip.narration).slice(-2).join(" ") : clip.narration);
+    const tail = norm(brief.cta.placement === "end" ? sentences(spokenText(clip.narration)).slice(-2).join(" ") : spokenText(clip.narration));
     const want = significant(brief.cta.text);
     // An action ("play", "download"…) plus most of the CTA's other words.
     const [verb, ...rest] = want;
@@ -201,7 +203,7 @@ export function checkClip(clip: Pick<Clip, "hook" | "narration" | "cta" | "lengt
   checks.push({ rule: `Length ${min}–${max}s`, pass: clip.lengthSec >= min && clip.lengthSec <= max, note: `${clip.lengthSec}s planned` });
   // After a voiced render the real spoken length is known; before, estimate it from the word count.
   const measured = clip.render?.status === "done" && clip.render.voice !== "none" ? clip.render.spokenSec : undefined;
-  const talk = Math.round(measured ?? speechSeconds(clip.narration));
+  const talk = Math.round(measured ?? speechSeconds(spokenText(clip.narration)));
   checks.push({ rule: "Voiceover fits the clip", pass: talk <= clip.lengthSec + 2, note: measured !== undefined ? `${talk}s spoken` : `~${talk}s of narration` });
 
   // 5. No banned claims.

@@ -10,6 +10,7 @@ import { mediaLive, modelFor, speak } from "./llm";
 import { blackSpans, concat, compose, cutSegment, cutSignature, ffmpegAvailable, H, run, sceneCutNear, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
 import { cacheKey, footageSource, isCached } from "./footage-cache";
 import { cancelJob, cancelWaiting, checkCancelled, currentSignal, errorText, isPending, pendingCount, submitJob, waitingCount } from "./jobs";
+import { displayText, displayTimed, hasMarkup, parseNarration, spokenText } from "../shared/markup";
 import { shotTimes } from "./shots";
 import { sfxEvents } from "./sfx";
 import { cachedStep } from "./steps";
@@ -180,6 +181,11 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
       log({ campaignId: c.id, kind: "clip", message: `Couldn't fetch ${failed.size} footage file(s) for "${clip.title}"; used available footage instead (${substitutes.join(", ")}).` });
     }
 
+    // What the voice reads and what the captions show (they differ only where
+    // the narration is marked up, e.g. <$5|five dollars>).
+    const said = spokenText(clip.narration);
+    const shown = displayText(clip.narration);
+
     // 2. Voiceover.
     let voicePath: string | undefined;
     let spans: { start: number; end: number }[] | undefined;
@@ -213,7 +219,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
           for (let attempt = 1; attempt <= 2; attempt++) {
             step(r, "voicing", attempt === 1 ? `Recording the voiceover (${r.voice})` : "Re-recording the voiceover (the first take went off script)");
             checkAIBudget();
-            const v = await speak(clip.narration, r.voice);
+            const v = await speak(said, r.voice);
             r.cost = round2((r.cost + v.cost) * 1000) / 1000;
             const pcm = path.join(tmp, `vo${attempt}.pcm`);
             const wav = path.join(tmp, `vo${attempt}.wav`);
@@ -224,7 +230,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
               step(r, "voicing", "Timing every word of the voiceover");
               try {
                 const tr = await transcribe(wav, { glossary });
-                al = alignScript(clip.narration, tr.words, tr.language);
+                al = alignScript(said, tr.words, tr.language);
                 r.language = tr.language;
               } catch (err) {
                 console.error(`[render] transcription failed for ${clip.id}:`, (err as Error).message);
@@ -269,9 +275,12 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     } else r.captionTiming = "estimated";
     duration = Math.round(Math.min(Math.max(duration, 5), 180) * 100) / 100;
 
-    // When each word is said: from the voiceover's alignment, else estimated.
+    // When each word is said: from the voiceover's alignment, else estimated;
+    // then the shown words (markup like <$5|five dollars>) take their spoken words' times.
     const speechEnd = timed?.length ? timed[timed.length - 1].end : spans?.length ? spans[spans.length - 1].end : duration - 3.2;
-    const words = timed ?? timeWords(clip.narration, voicePath ? speechEnd : Math.max(3, duration - 3.2), voicePath ? spans : undefined);
+    const saidTimes = timed ?? timeWords(said, voicePath ? speechEnd : Math.max(3, duration - 3.2), voicePath ? spans : undefined);
+    // (Plain narration passes through untouched, keeping its own segmentation, e.g. for Chinese.)
+    const { words, moments } = hasMarkup(clip.narration) ? displayTimed(parseNarration(clip.narration), saidTimes) : { words: saidTimes, moments: {} as Record<string, number> };
 
     // 3. Cut the shots: each starts when its phrase is said (else shares the time by planned seconds).
     step(r, "rendering", "Cutting shots from the footage");
@@ -347,8 +356,8 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
 
     // 4. Captions, CTA, audio mix.
     step(r, "rendering", "Adding captions and the call to action");
-    const sents = sentences(clip.narration);
-    const lastStart = (timed && lastSentenceStart(clip.narration, timed, r.language))
+    const sents = sentences(shown);
+    const lastStart = (timed && lastSentenceStart(shown, words, r.language))
       ?? (voicePath && spans && spans.length === sents.length ? spans[spans.length - 1].start : duration - 3);
     const ctaText = c.brief.cta.text || clip.cta;
     const ctaFrom = Math.max(1, Math.min(lastStart, duration - 2.5));
@@ -357,7 +366,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     const captionGroups = groups(words, style.wordsPerCaption);
     // Overlays land on the words they're cued to (tier items stay until the call to action).
     const layout = { width: W, height: H, bandTop: VIDEO_TOP, bandHeight: VIDEO_H, font: style.font, fontWidths: style.fontWidths, accent: accentOf(brand), uppercase: style.uppercase, hook: { text: clip.hook, end: Math.min(HOOK_SECONDS, duration) } };
-    const { placed, missed } = placeOverlays(clip.overlays ?? [], words, duration, ctaFrom);
+    const { placed, missed } = placeOverlays(clip.overlays ?? [], words, duration, ctaFrom, moments);
     const crowded = hiddenComments(placed, layout);
     if (crowded.length) log({ campaignId: c.id, kind: "clip", message: `Left out ${crowded.length} comment overlay(s) in "${clip.title}": too many on screen at once (${crowded.map((x) => `@${x.user}`).join(", ")}).` });
     const { stickers, missing } = await emojiStickers(placed, layout, tmp);
@@ -422,7 +431,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     // Learn this voice's pace, so plans for it are timed better next time.
     if (voicePath && r.voice !== "none") {
       const doc = getDoc();
-      const rate = calibrate(doc.voiceRates?.[r.voice], speechLoad(clip.narration), speechEnd);
+      const rate = calibrate(doc.voiceRates?.[r.voice], speechLoad(said), speechEnd);
       if (rate) doc.voiceRates = { ...doc.voiceRates, [r.voice]: rate };
     }
     fresh.qa = checkClip(fresh, c.brief);
