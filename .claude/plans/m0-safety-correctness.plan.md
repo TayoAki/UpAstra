@@ -35,14 +35,14 @@ Each fix ships separately, test first.
 
 ## Tasks
 ### Task 1: Env allowlist and tree kill (B0.1)
-- **Action**: Pass `env` to `spawn` with only `PATH, HOME, LANG, LC_ALL, TMPDIR, FONTCONFIG_FILE, FONTCONFIG_PATH`, and `detached: true`. On timeout, `process.kill(-p.pid, "SIGKILL")`.
+- **Action**: Pass `env` to `spawn` with only `PATH, HOME, XDG_CACHE_HOME, LANG, LC_ALL, TMPDIR, SSL_CERT_FILE, FONTCONFIG_FILE, FONTCONFIG_PATH`, and `detached: true`. On timeout, `process.kill(-p.pid, "SIGKILL")`.
 - **Mirror**: the existing `run()` shape.
 - **Validate**: `npx vitest run tests/media-env.test.ts` passes: `run("sh", ["-c","env"])` shows no `OPENROUTER_API_KEY`, and a `sh -c "sleep 60 & wait"` that times out leaves no `sleep` alive.
 
 ### Task 2: Real proxy timestamps (B0.2)
-- **Action**: Remove `-skip_frame nokey` and keep `fps=…`, so `%{pts}` is the time of each real frame. Benchmark a 20-minute 1080p input, before and after, and record the wall time in the commit. If the slowdown is over 2×, use keyframes with no `fps` filter instead, and drawtext each keyframe's own PTS.
+- **Action**: Move `drawtext=%{pts}` ahead of `fps`, so each keyframe prints its own time, and use `fps=1:eof_action=pass` so the last keyframe isn't dropped. Benchmark a full 1 fps decode (drop `-skip_frame nokey`) on a 20-minute 1080p input, and switch to it if it is under 2× slower. Record both wall times in the commit.
 - **Mirror**: the `buildProxy` args style.
-- **Validate**: a fixture with colour steps every 1 s and keyframes every 5 s. The proxy frame labelled `00:00:07` has the colour of second 7.
+- **Validate**: a 20 s fixture with keyframes forced every 5 s and the colour changing each second. Each proxy frame's label equals the second of its picture, and a frame from 15 s exists (today the label runs late by up to 4 s, and frames stop at 14).
 
 ### Task 3: BT.709 (B0.3)
 - **Action**: Blend in RGB and convert once: `scale=in_color_matrix=bt709:in_range=tv,format=rgb24,ass=…` → sticker `overlay=…:format=rgb` → `scale=out_color_matrix=bt709:out_range=tv,format=yuv420p`, with the four `-color*` tags. Don't add only a trailing `out_color_matrix`: the batch 05 check measured that it shifts BT.709 footage.

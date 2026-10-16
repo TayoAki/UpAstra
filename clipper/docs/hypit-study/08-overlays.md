@@ -243,7 +243,7 @@ Timed social "reply to comment" cards. Each Sticker has its own Frame (where), i
 ### Quality notes
 - Good: separate concerns, no fabricated metadata, explicit failure when text can't fit, and a clean, readable motion function.
 - The markup vocabulary lists `enter-easing` values without `out-back` (`manifest.ts:236`), but the decoder accepts it (`author.ts:132`), and so do the style schema in the same manifest (`manifest.ts:94`) and the asserts (`program.ts:121`). Only the author-facing list under-documents the code *(corrected in check)*. The omission also hides a behaviour: with `out-back`, enter opacity is `min(1, 1.35·rawProgress)` instead of following the eased curve (`program.ts:306-308`) *(added in check)*.
-- The avatar `fallback` defaults to `none` (`author.ts:114`), so by default a sticker with no avatar Blob has no avatar column, even when it has an author. The initial disc appears only with `avatar-fallback=initial` *(added in check)*.
+- The avatar `fallback` defaults to `none` (`author.ts:115`), so by default a sticker with no avatar Blob has no avatar column, even when it has an author. The initial disc appears only with `avatar-fallback=initial` *(added in check)*.
 - An unused `duration` schema (`manifest.ts:60-64`).
 - `textElement` uses `wrap:"none"` with `maxLines:1` and an ellipsis for header and meta (`program.ts:384`). Long handles truncate instead of shrinking. That is acceptable.
 - "Too short for its text" is checked only against the box height. The body's real ink height depends on the browser wrap, and the ellipsis hides overflow. So it does not fail closed on *content* overflow, only on geometry.
@@ -351,7 +351,7 @@ A "deck" of cards (stills, videos or surfaces) dealt into one Frame. At each car
 - **Pose** (`program.ts:340-361`), with `m = |depth|`:
   - `x = cur.x + step.x·m` (y likewise);
   - `scale = cur.scale·step.scale^m`, `opacity = cur.opacity·step.opacity^m`, tone likewise;
-  - rotation is `step.rot·m` (linear) or `±step.rot` alternating by parity;
+  - rotation is `cur.rot + step.rot·m` (linear) or `cur.rot ± step.rot` alternating by parity (`program.ts:346`, `:352`) *(corrected in check: the current pose's rotation is added)*;
   - `stacking = cur.stacking + step.stacking·m`.
   - The test fixes depth −2 → scale 0.81, opacity 0.64, rotation +4 (alternate) (`packages/depth-stack/test/depth-stack.test.ts:293-296`).
 - **Render** (`packages/depth-stack/src/lower.ts:249-331`): one *stage* per card, `[activation_i, activation_{i+1}|terminal)`.
@@ -359,7 +359,7 @@ A "deck" of cards (stills, videos or surfaces) dealt into one Frame. At each car
   - The pose animates old→new over `reflow.frames` with easing, then holds (`:64-85`).
   - Entering and leaving cards come from or go to a "hidden pose" one step beyond the visible depth, at opacity 0 (`:57-62`).
   - Present `z = stackingOrder + pose.stacking` (`:314-316`).
-- **Validation:** the reflow must fit **every** stage (`program.ts:296-301`); triggers must be strictly increasing (`:189`); the terminal must come after the last trigger (`:290-291`).
+- **Validation:** the reflow must fit every stage after the first one; the loop starts at card 1 because the first stage has no reflow (`program.ts:296-301`) *(corrected in check)*; triggers must be strictly increasing (`:189`); the terminal must come after the last trigger (`:290-291`).
 
 ### Card media clocks (a genuinely good idea)
 `sourceTimeFor` (`lower.ts:158-196`) gives every card a pure, explicit source-time map per stage. Nothing depends on the player's playback history.
@@ -375,14 +375,15 @@ A "deck" of cards (stills, videos or surfaces) dealt into one Frame. At each car
 |---|---|
 | Visibility | previous 2, next 1, no wrap |
 | Previous step | y +28, scale 0.94, rotation −2.5 alternating, opacity 0.82, tone 0.92/1/0.86 |
-| Next step | y −20, scale 0.92, rotation +2 alternating, opacity 0.72 |
+| Next step | y −20, scale 0.92, rotation +2 alternating, opacity 0.72, tone 0.88/1/0.78 *(tone added in check)* |
 | Reflow | 8 frames, ease-in-out |
 | z | 30 |
 
 The Label surface defaults are 34 px white, centred and bottom-aligned with 20 px padding, word wrap and clip. Synthetic bold is forbidden (`surface.ts:128-174`, `program.ts:104-114`).
 
 ### Tests
-14 tests (`packages/depth-stack/test/depth-stack.test.ts`):
+15 tests (`packages/depth-stack/test/depth-stack.test.ts`) *(corrected in check: was 14)*:
+- the Surface declares every sealed Record it may emit (`:84`) *(added in check)*;
 - state boundaries (`:256-263`);
 - the wrap aliasing refusal (`:265-275`);
 - trigger order errors (`:277-285`);
@@ -518,9 +519,19 @@ If we want it:
 ### Model-level gaps (cheap to fix, no renderer change)
 1. **Windows vs holds.** Hypit gives a ranking item a *reveal window* (introduce → verdict), then a *settled* span. We have "start at cue, fixed hold" (tier: "until CTA"). Fix: derive `window = [cue word start, next sibling cue start)`, capped at the sentence end, and keep `settled = [window end, CTA)`.
 2. **Disjointness and fit checks at plan time.** Hypit refuses overlapping tier windows, rows that don't fit and strips wider than the frame. We draw blindly. Two problems I found in ours:
-   - **7+ items in one tier row draw on top of each other.** Slots are `idx % 3` with a single +26 px drop for `idx ≥ 3` (`clipper/server/overlays.ts:204-207`), so item 7 lands on item 4.
-   - **No width check:** a 22-char name at 38 px in a ~283 px slot overflows into the next slot (1080-wide frame: `(1000−130−20)/3`).
-   - Comments only avoid the *previous* comment (`:158`), so three overlapping comments can run off the band.
+   - **Tier items in one row collide from item 4 onwards, not item 7** *(corrected in check)*. Slots are `x = idx % 3` with a single `+px(26)` drop for every `idx ≥ 3` (`clipper/server/overlays.ts:204-207`). Computed at 1080×1920 (k = 1, `rowH = min(124, ⌊(844−40)/5⌋) = 124`) with `\an4` (vertically centred):
+     - Items 1–3 are centred at `rowCentre`. Items 4–6 are centred at `rowCentre + 26`, in the same three x columns.
+     - The offset of 26 px is smaller than the font size of 48 px (or 38 px for names over 12 chars). Item 4 therefore overlaps item 1 vertically by about 22 px (12 px at 38 px), and likewise 5 on 2 and 6 on 3.
+     - Items 7, 8 and 9 (`idx` 6–8) get exactly the same x and y as items 4, 5 and 6, so they overprint them completely. The original claim that item 7 lands on item 4 is right, but the collision starts three items earlier.
+   - **No width check, but the overflow depends on the font** *(corrected in check)*. `slotW = (1000−130−20)/3 = 283.3 px` (`:205`). Names are cut to 22 chars (`:203`) and drawn at `\fs38` if they are over 12 chars, else `\fs48` (`:208`), with a `px(5)` outline (`:130`). libass maps `\fs` to the font's winAscent+winDescent, not to the em. I measured glyph advances with PIL, scaled by `upm/(winAscent+winDescent)` and added the 10 px of outline. The text was not rendered through libass. The results:
+     - A typical 22-char mixed-case name at 38 px measures about **243–276 px** in Poppins Black/ExtraBold (the default caption styles), about 210 px in Anton and about 225 px in Bebas Neue. All of these **fit** in 283 px.
+     - The same name in **Archivo Black** (the "Boxed" style) measures about **340–415 px**, and **overflows**. In Archivo, even a 12-char name at 48 px measures about 325 px and overflows.
+     - Wide all-caps names overflow in every bundled font, for example 22×"W" at 532 px in Poppins. Brand-uploaded fonts are unbounded.
+     - The overflow does not stop at the next slot. The third slot starts at x ≈ 757, so a 400 px name runs past the board edge (1048) and off the 1080 frame.
+   - **Comment stacking** (`:148-160`) *(corrected in check)*. Each comment compares itself only with the one before it (`lastEnd`/`lastBottom`). The height is `h = 118 + 56·lines`, so a 3-line card is 286 px.
+     - **Three mutually overlapping comments do not collide with each other.** Each one stacks below the last. With 3-line bodies, the third ends at `560 + 40 + 3·286 + 2·16 = 1490`, which is **86 px below the 1404 band bottom** (`clipper/server/media.ts:100-101`), over the caption area. With 2-line bodies, the stack ends at 1322 and fits.
+     - **The real collision is with a comment that is not the previous one.** Suppose comment A has a long `hold` (up to 8 s) and B is short. If C starts after B ends but while A is still visible, C resets to `bandTop + 40` and draws over A.
+     - **While a tier board is up, all comments share one y** (`bandTop − h − 24`). The over-board branch never stacks, so two comments over a board overlap completely.
 
    Hypit throws in these cases. For an automated SaaS we should instead validate in `sanitizeOverlays` (cap per row, cap total), **repair** (shrink font, truncate, move to the next row) and log what was repaired. A render is not the place to fail.
 3. **One event law for picture and sound.** Hypit derives sound events from the same phase frames as the animation. We have no SFX at all (`clipper/server/media.ts:147-153` mixes only game + voice). Adding SFX is cheap:
@@ -537,7 +548,7 @@ If we want it:
 | Rounded cards, rows, rings, rank badges, tier label cells, emoji strip board | `\p1` drawings (we already have `roundedRect`); circles as 4 Béziers | exact |
 | Pop/overshoot scale (0.72→1.14→0.95→1, 0.76→1+0.075 sin, out-back) | chained `\t(t1,t2,\fscx\fscy)` segments, 2–3 per pop; `\t` accel exponent for ease-in/out | close (piecewise) |
 | Tilt and rotation unwind (−2.5° base, −4.5° delta) | `\frz` + `\t(\frz)`, with a **shared `\org`** on every line of a multi-line card so it rotates as a group | exact |
-| Fade and fade-up exit | `\fad` + `\move(..., t1,t2)` | exact (linear move) |
+| Fade and fade-up exit | `\fad` + `\move(..., t1,t2)` | close, not exact *(corrected in check)*. Hypit's fade-up is `ease-in` and `\move` is linear. A line takes only one `\move`, and ours is already used for the slide-in (`clipper/server/overlays.ts:162`), so the exit needs its own split event. A multi-line ASS card also fades each line separately: text over the card shows the card through it mid-fade, whereas CSS `opacity` on the group composites once |
 | Eased or arced glide (tier "drop", column move) | `\move` is linear only and `\pos` can't be `\t`-animated. Use either (a) split into 6–10 consecutive Dialogue events with short `\move`s along the smootherstep/arc samples, or (b) the arc via `\org` far below + `\t(\frz)` rotation | good (a) / exact arc (b) |
 | Float hold (sin 4 px / 0.35°, 84 f) | rotation part: alternating `\t(\frz)` segments with accel; vertical part: split events with tiny `\move`s, or a tiny `\frz` about a far-away `\org` (translation-like) | approximate |
 | Soft drop shadow (CSS blur 46 px) | a second shape line, offset, `\1a&H80&\blur10–20` (libass Gaussian; large blur costs CPU but only for a few events) | approximate |
@@ -582,7 +593,7 @@ The remaining 10% is gradients, CSS filters over groups and video cards. It need
 1. **Reveal-window → settled-span schedule for list overlays** (`packages/ranking/src/schedule.ts:445-519`). Derive windows from speech (cue → next cue), with stage-then-glide for tier items, done in ASS with split `\move` events. This directly improves our existing tier board.
 2. **Motion fitting instead of rejection** (`schedule.ts:699-743`). When a window is short, compress appear+move proportionally and keep the glide ending at the window end. Our fixed 180 ms drop and 2.8 s holds ignore speech pace.
 3. **Sound events from the same phase frames** (`schedule.ts:826-866`, `render.ts:652-697`). Add an SFX plan to `compose()` via `adelay`/`amix`, with per-kind gain, before `loudnorm`. It is cheap and adds noticeable punch.
-4. **Plan-time fit validation with repair**, borrowing hypit's checks (row fit `render.ts:321`, column fit `:472-476`, strip-in-frame `packages/interview-emoji-reveal/src/program.ts:196-199`, card text box `packages/comment-sticker/src/program.ts:460-473`) but repairing and logging instead of throwing. This also fixes our 7+-per-row overlap and long tier names.
+4. **Plan-time fit validation with repair**, borrowing hypit's checks (row fit `render.ts:321`, column fit `:472-476`, strip-in-frame `packages/interview-emoji-reveal/src/program.ts:196-199`, card text box `packages/comment-sticker/src/program.ts:460-473`) but repairing and logging instead of throwing. This also fixes our overlap from the 4th item in a row and long tier names *(corrected in check: was "7+")*.
 5. **Column/Top-N and podium variants** as new overlay kinds (`packages/ranking/src/render.ts:464-650`), reusing the same schedule. They are proven clipper formats.
 6. **Comment card polish:** −2.5° tilt, pop with rotation unwind, float hold, fade-up exit, speech tail, "Reply to @x's comment", optional meta, never fabricated (`packages/comment-sticker/src/author.ts:86-147`). All of it is doable in ASS.
 7. **Measured text wrapping with ellipsis** from the bundled fonts (replacing `clipper/server/overlays.ts:88-104`).

@@ -760,3 +760,44 @@ Every file in the eight package directories, read in full ✅.
 | `packages/producer/src/index.ts` | 151 | ✅ |
 
 **Reading note.** All `src/**`, READMEs, package manifests and the `.ps1` were read top to bottom. The large test files (`local.test.ts`, `config.test.ts`, `programs.test.ts`) were read for their test bodies and every assertion; their long inline fixture setup was read more quickly. Test counts and assertion counts above come from counting `test(` and `assert` occurrences per file, so they are approximate.
+
+---
+
+## Check
+
+Second review against hypit `dc2b7a8f31b1ef1443a79ca448548d69e3ceb6a0` and `clipper/server` at `8ba4657`.
+
+**Totals.** About 150 claims checked (citations, numbers, test counts and our-app comparisons). 140 confirmed, 10 corrected or extended, 0 removed, 0 left unverified.
+
+**Our app (priority 1), confirmed:**
+- Three independent in-memory queues that don't share capacity: `render.ts:36-39`, `caption-jobs.ts:20-21`, `formats.ts:40-41`.
+- Global FIFO (`push`/`shift`). The per-workspace caps (20 / 5 / 3) are the only fairness, and they count only waiting jobs.
+- A resume re-records the voiceover: fresh temp dir, `speak()` always called (`render.ts:135`, `:201-203`).
+- The AI budget isn't re-checked on resume. `checkAIBudget` is reached only through `spendAI` at enqueue (`llm.ts:48`, `app.ts:1190`).
+- There are no cancel endpoints for render, caption or format jobs.
+- `llm.ts` has no 429/5xx retry. Its only retry is the `response_format` 400 fallback (`llm.ts:197-201`).
+
+**Corrected:**
+1. `formats.ts` citations were stale (`:211-212`, `:212`, `:215`, `:234-248`). They are now `:40-41`, `:41`, `:44` and `:64-77`. Other our-app line ranges were nudged too (`render.ts:45-62`, `index.ts:16-28`).
+2. Cancel row: agent runs can also be stopped (`app.ts:578`), not only scheduled posts.
+3. Fairness (table row, turn protocol, idea 4): the round-robin cursor and the "capacity holders first" claim ordering exist, but runtime-local runs one build per scheduler pass and always claims a named build (`worker.ts:415-432`). The production order is oldest-first.
+4. The `CompositeCredentialStore` "wasteful" smell was overstated. Foreign stores return early through `owns()`, so only the owning store spawns a process.
+5. The runtime-local assert count was about 505, not about 530. One `resolve.ts` line cite was off by one (`:98` → `:97`).
+
+**Added:** the boot resume scan ignores format breakdowns (`db.ts:147-155`). Deleting a job doesn't stop running work. A resumed format re-pays its vision call. Whisper and ffmpeg run in all three queues.
+
+**Hypit (priority 2), confirmed as written:**
+- the capacity claim model (`capacity.ts:1-51`);
+- `sqlite-state.ts:803-873` (token refill, `availableAt` formula, `json_each` occupancy sum, all-or-nothing transaction, rate tokens spent but not held);
+- `scheduler.ts:176-196`;
+- `worker.ts:86-117` (`EXECUTION_UNKNOWN` on a `started` receipt or a thrown error) and `:388` (`.catch(() => undefined)`);
+- `executor.ts:388-407` (`SUBMISSION_INTERRUPTED`; `submission: "started"` set before `start`);
+- `supervisor.ts:103-106`;
+- `executor/README.md:18`;
+- `scheduler.test.ts:486-504` (`starts === 1`, `polls === 1`, receipt kept);
+- `run/src/resolve.ts:125-147`;
+- the macOS keychain secret on argv (`os.ts:35-49`, with `-w secret` at `:39-41`).
+
+**Coverage.** Every file in the eight packages is in the table, and all line counts match `wc -l`. The package totals also match (src 10,647, all 17,477). No files were added.
+
+**Verdict: Verified ✅.** Corrections were under 10% of claims, and coverage is complete. The one substantive issue was the fairness description, now fixed: hypit's round-robin and in-flight-first ordering aren't what governs cross-build admission in runtime-local.

@@ -33,15 +33,19 @@ Hypit paths below are relative to the hypit repo (`packages/...`, `skills/hypit/
 ## M0: Safety and correctness fixes (plan: `.claude/plans/m0-safety-correctness.plan.md`)
 
 ### B0.1 Scrub the subprocess environment
-- **Change:** `run()` spawns ffmpeg, ffprobe and whisper with an allowlisted env containing only `PATH`, `HOME`, `LANG`, `TMPDIR` and `FONTCONFIG_*` (`server/media.ts:47`). Kill the whole process group on timeout (`detached` plus `process.kill(-pid)`).
+- **Change:** `run()` spawns ffmpeg, ffprobe and whisper with an allowlisted env containing only `PATH`, `HOME`, `XDG_CACHE_HOME`, `LANG`, `TMPDIR`, `SSL_CERT_FILE` and `FONTCONFIG_*` (fontconfig needs a cache dir; verify captions render on Railway) (`server/media.ts:47`). Kill the whole process group on timeout (`detached` plus `process.kill(-pid)`).
 - **Tests first:** spawn `env` through `run()` and assert that no `OPENROUTER_API_KEY`, `DATABASE_URL` or `*_SECRET` appears; a timed-out child that spawns a grandchild leaves no live grandchild.
-- **Parity:** `packages/media-local/src/process-env.ts:8-21` and the html-video `process.ts:46-55` env allowlist; tree kill in `process-tree.ts` (study 09 #2, study 05 #7). **Beats:** we keep the bounded 8 KB stderr we already have.
+- **Parity:** `packages/media-local/src/process-env.ts:8-21` (hypit scrubs only on its Provider path; its `hypit media` CLI side leaks the full env, study 09 check), and the html-video `process.ts:46-55` env allowlist; tree kill in `process-tree.ts` (study 09 #2, study 05 #7). **Beats:** we keep the bounded 8 KB stderr we already have.
 - **Avoid:** secrets on argv (study 02, "not to copy").
 
 ### B0.2 Real timestamps on the vision proxy
-- **Change:** `buildProxy` (`server/media.ts:81-94`) currently decodes keyframes only and then resamples with `fps=`, so the burned-in `%{pts}` is the resampled time, not the keyframe's own. Decode at 1 fps on a downscaled stream instead, with no `-skip_frame`. Benchmark both options on a 20-minute file and keep the cheaper one that is still correct.
-- **Tests first:** a fixture with a timecode burned into every frame. Extract the proxy frame at t and assert that the OCR-free check (pixel probe of a colour step at a known second) lands within ±0.5 s.
-- **Parity:** `packages/media-local/src/files.ts:375-401` (study 09 #1). **Beats:** the study says hypit's own extraction decodes from frame 0 (`execute.ts:1084-1090`), while we use input seek.
+- **Measured in the batch 09 check:**
+  - `buildProxy` (`server/media.ts:81-94`) decodes keyframes only, then `fps=1` re-stamps every frame with its slot time and repeats the last earlier keyframe;
+  - so the burned `%{pts}` runs **late** by 0 to (GOP − 1 s), never early;
+  - the last GOP is dropped (a 20 s clip with 5 s GOPs gives frames 0–14 only).
+- **Change:** burn the label before the rate change (`drawtext=%{pts}` ahead of `fps`, so each keyframe prints its own time) and use `fps=1:eof_action=pass`. Benchmark this against a full decode at 1 fps on a 20-minute file, and keep full decode if it costs under 2× (it also covers footage between keyframes).
+- **Tests first:** a 20 s fixture with forced 5 s keyframes and a colour change each second. Every proxy frame's label matches its picture's real second, and the 15 s keyframe is present. Re-run: `scratchpad/check09/run.sh` (local only).
+- **Parity:** `packages/media-local/src/files.ts:375-401` (study 09 #1, check). **Beats:** hypit's extraction decodes from frame 0 (`execute.ts:1084-1090`); we seek.
 - **Avoid:** whole-file `-show_frames` probing.
 
 ### B0.3 BT.709 colour on the final encode
