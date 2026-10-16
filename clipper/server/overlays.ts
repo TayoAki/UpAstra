@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { UNSPACED } from "../shared/overlays";
 import { TIERS, type Overlay, type Tier } from "../shared/types";
 import { assColor, type Timed } from "./captions";
 import { FONT_WIDTHS, WIDE_EM } from "./font-metrics";
@@ -44,6 +45,16 @@ export function placeOverlays(overlays: Overlay[], words: Timed[], duration: num
           start = words[i].start;
           usedAt.set(key, i + 1);
           break;
+        }
+      }      // Unspaced scripts: the cue can start and end inside segmenter words; match on the joined text.
+      if (start === undefined && UNSPACED.test(key)) {
+        const stream = toks.map((t) => t.replace(/ /g, ""));
+        const owner = stream.flatMap((t, i) => Array.from(t, () => i));
+        const from = stream.slice(0, usedAt.get(key) ?? 0).join("").length;
+        const at = stream.join("").indexOf(key.replace(/ /g, ""), from);
+        if (at >= 0) {
+          start = words[owner[at]].start;
+          usedAt.set(key, owner[at] + 1);
         }
       }
     }

@@ -7,6 +7,9 @@ export const MAX_OVERLAYS = 12;
 
 const norm = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
+/** Characters of scripts written without spaces between words. */
+export const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}]/u;
+
 /** Whether a cue's words are in the narration, in order, as shown in the captions. */
 export const cueInScript = (cue: string, script: string) => {
   // "@name" cues a moment marked in the narration with @{name}.
@@ -14,7 +17,11 @@ export const cueInScript = (cue: string, script: string) => {
   const c = norm(cue);
   // Cues and phrases are found in the shown words (what render matches them
   // against): with <$5|five dollars>, cue "$5", not "five dollars".
-  return !!c && ` ${norm(displayText(script))} `.includes(` ${c} `);
+  if (!c) return false;
+  const shown = norm(displayText(script));
+  // Unspaced scripts (Chinese, Japanese, Thai) have no word gaps to match on.
+  if (UNSPACED.test(c)) return shown.replace(/ /g, "").includes(c.replace(/ /g, ""));
+  return ` ${shown} `.includes(` ${c} `);
 };
 
 const EMOJI = /\p{Extended_Pictographic}/u;

@@ -41,61 +41,70 @@ interface Timed {
 }
 
 /**
- * The shown words, timed from the spoken words they stand for: a marked-up
- * display word takes the span of its spoken words; plain words take their
- * own. `said` are the spoken words in order (as aligned). Moments land at
- * the start of the next spoken word. `split` must split the same way the
- * aligner did (its word segmenter for unspaced languages).
+ * The shown words, timed from the spoken words they stand for, by character:
+ * plain text is the same characters on both sides; a marked-up piece spreads
+ * its shown characters over its spoken ones. Each shown word takes the time
+ * of the spoken characters it covers. `said` are the spoken words (or
+ * phrases, when estimated) in order, with times; `split` splits the shown
+ * text into words the way the captions do (a word segmenter for unspaced
+ * languages). Moments land at the start of the next spoken character.
  */
 export function displayTimed(pieces: Piece[], said: Timed[], split: Splitter = bySpaces): { words: Timed[]; moments: Record<string, number> } {
-  const count = (s: string) => split(s).length;
-  const shown = split(pieces.map((p) => p.display).join(""));
-  const spokenCount = count(pieces.map((p) => p.spoken).join(""));
+  const ink = (t: string) => t.replace(/\s+/g, "");
+  // Spoken character positions (whitespace ignored) → time, through `said`.
+  const at: number[] = [];
+  let pos = 0;
+  for (const w of said) {
+    at.push(pos);
+    pos += Math.max(1, ink(w.text).length);
+  }
+  const saidChars = pos;
+  const spokenChars = ink(pieces.map((p) => p.spoken).join("")).length;
+  // If the aligned words don't spell the spoken text exactly, scale positions.
+  const scale = spokenChars ? saidChars / spokenChars : 0;
+  const time = (p: number, end: boolean): number => {
+    if (!said.length) return 0;
+    const q = Math.min(Math.max(0, p * scale), saidChars);
+    let i = 0;
+    while (i + 1 < said.length && (end ? at[i + 1] < q : at[i + 1] <= q)) i++;
+    const w = said[i];
+    const len = (i + 1 < said.length ? at[i + 1] : saidChars) - at[i];
+    return w.start + ((w.end - w.start) * Math.min(len, Math.max(0, q - at[i]))) / len;
+  };
+  // Each shown character's spoken span [from, to), in spoken character positions.
+  const from: number[] = [];
+  const to: number[] = [];
   const moments: Record<string, number> = {};
-  // If the aligned words don't line up with the spoken tokens (a segmenter
-  // split them differently), map by position instead.
-  if (said.length !== spokenCount || !said.length) {
-    const words = shown.map((text, i) => {
-      const a = said[Math.floor((i / shown.length) * said.length)] ?? { start: 0, end: 0 };
-      const b = said[Math.max(0, Math.ceil(((i + 1) / shown.length) * said.length) - 1)] ?? a;
-      return { text, start: a.start, end: Math.max(a.start, b.end) };
-    });
-    let d = "";
-    for (const p of pieces) {
-      if (p.moment) moments[p.moment] = words[Math.min(count(d), words.length - 1)]?.start ?? 0;
-      d += p.display;
-    }
-    return { words, moments };
-  }
-  // Walk the pieces, counting tokens on both sides so far: each marked-up
-  // piece is one group (display tokens ↔ spoken tokens); plain text pairs 1:1.
-  const words: Timed[] = [];
-  let d = "";
-  let s = "";
+  let sp = 0;
   for (const p of pieces) {
-    const [d0, s0] = [count(d), count(s)];
-    if (p.moment) moments[p.moment] = said[Math.min(s0, said.length - 1)].start;
-    d += p.display;
-    s += p.spoken;
-    const [d1, s1] = [count(d), count(s)];
-    // Punctuation glued onto the previous token doesn't add tokens.
-    if (d1 === d0 && s1 === s0) continue;
-    const plain = p.display === p.spoken && d1 - d0 === s1 - s0;
-    const groups = plain ? Array.from({ length: d1 - d0 }, (_, k) => [d0 + k, d0 + k + 1, s0 + k, s0 + k + 1]) : [[d0, d1, s0, s1]];
-    for (const [a0, a1, b0, b1] of groups) {
-      const from = said[Math.min(b0, said.length - 1)].start;
-      const to = b1 > b0 ? said[b1 - 1].end : from + 0.05;
-      const texts = shown.slice(a0, a1);
-      const total = texts.reduce((n, t) => n + t.length, 0) || 1;
-      let t = from;
-      texts.forEach((text, k) => {
-        const dur = ((to - from) * text.length) / total;
-        words[a0 + k] = { text, start: t, end: t + dur };
-        t += dur;
-      });
+    if (p.moment) {
+      moments[p.moment] = time(Math.min(sp, Math.max(0, spokenChars - 1)), false);
+      continue;
     }
+    const d = ink(p.display).length;
+    const n = ink(p.spoken).length;
+    const plain = p.display === p.spoken;
+    for (let k = 0; k < d; k++) {
+      from.push(plain ? sp + k : sp + (n * k) / d);
+      to.push(plain ? sp + k + 1 : sp + (n * (k + 1)) / d);
+    }
+    sp += n;
   }
-  // A token glued across a piece boundary keeps its last-known time; fill any gap in order.
-  for (let i = 0; i < shown.length; i++) words[i] = { ...(words[i] ?? words[i - 1] ?? { start: 0, end: 0 }), text: shown[i] };
+  const words: Timed[] = [];
+  let c = 0;
+  for (const text of split(pieces.map((p) => p.display).join(""))) {
+    const len = ink(text).length;
+    if (!len || c >= from.length) {
+      const prev = words[words.length - 1];
+      words.push({ text, start: prev?.end ?? 0, end: prev?.end ?? 0 });
+      continue;
+    }
+    const last = Math.min(c + len, from.length) - 1;
+    const start = time(from[c], false);
+    // A shown word with no spoken characters (<🔥|>) still shows briefly.
+    const end = to[last] > from[c] ? time(to[last], true) : start + 0.05;
+    words.push({ text, start, end: Math.max(start, end) });
+    c += len;
+  }
   return { words, moments };
 }
