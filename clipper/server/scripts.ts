@@ -2,7 +2,7 @@ import { checkClip, words, WORDS_PER_SECOND } from "../shared/rules";
 import { classifyHook, formatOf } from "../shared/learning";
 import type { Campaign, Clip, FootageFile, HookStyle, Playbook } from "../shared/types";
 import { HOOK_STYLES } from "../shared/types";
-import { sanitizeOverlays } from "../shared/overlays";
+import { cueInScript, sanitizeOverlays } from "../shared/overlays";
 import { newId, now } from "./db";
 import { aiLive, chatJSON } from "./llm";
 
@@ -44,7 +44,9 @@ function toDraft(raw: Record<string, unknown>, c: Campaign): Draft {
   const video = c.footage.filter((f) => f.kind === "video");
   const shots = (Array.isArray(raw.shots) ? raw.shots : []).map((s: Record<string, unknown>) => {
     const f = matchFootage(toStr(s.footageName), video);
-    return { footageId: f?.id, footageName: f?.name ?? (toStr(s.footageName) || undefined), moment: toStr(s.moment), seconds: Math.max(1, Math.round(Number(s.seconds) || 4)) };
+    // A phrase is kept only if the narration really says it.
+    const phrase = toStr(s.phrase).slice(0, 80);
+    return { footageId: f?.id, footageName: f?.name ?? (toStr(s.footageName) || undefined), moment: toStr(s.moment), seconds: Math.max(1, Math.round(Number(s.seconds) || 4)), ...(phrase && cueInScript(phrase, toStr(raw.narration)) ? { phrase } : {}) };
   });
   const narration = toStr(raw.narration);
   const lengthSec = Math.round(Number(raw.lengthSec) || Math.max(c.brief.lengthSec.min, Math.ceil(words(narration) / WORDS_PER_SECOND) + 2));

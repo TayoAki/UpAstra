@@ -10,6 +10,7 @@ import { mediaLive, modelFor, speak } from "./llm";
 import { blackSpans, concat, compose, cutSegment, cutSignature, ffmpegAvailable, H, run, sceneCutNear, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
 import { cacheKey, footageSource, isCached } from "./footage-cache";
 import { cancelJob, cancelWaiting, checkCancelled, currentSignal, errorText, isPending, pendingCount, submitJob, waitingCount } from "./jobs";
+import { shotTimes } from "./shots";
 import { cachedStep } from "./steps";
 import { alignScript, type Alignment } from "./align";
 import { transcribe, transcriptionAvailable, whisperModel, type Word } from "./transcribe";
@@ -267,20 +268,24 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     } else r.captionTiming = "estimated";
     duration = Math.round(Math.min(Math.max(duration, 5), 180) * 100) / 100;
 
-    // 3. Cut the shots, scaled to fill the clip.
+    // When each word is said: from the voiceover's alignment, else estimated.
+    const speechEnd = timed?.length ? timed[timed.length - 1].end : spans?.length ? spans[spans.length - 1].end : duration - 3.2;
+    const words = timed ?? timeWords(clip.narration, voicePath ? speechEnd : Math.max(3, duration - 3.2), voicePath ? spans : undefined);
+
+    // 3. Cut the shots: each starts when its phrase is said (else shares the time by planned seconds).
     step(r, "rendering", "Cutting shots from the footage");
-    const planned = shots.reduce((s, x) => s + Math.max(1, x.seconds), 0) || 1;
+    const timing = shotTimes(shots, words, duration);
+    const unbound = shots.filter((s, i) => i > 0 && s.phrase && !timing[i].bound).length;
+    if (unbound) log({ campaignId: c.id, kind: "clip", message: `${unbound} shot(s) in "${clip.title}" couldn't be lined up with their words, so they were timed by their planned length.` });
     const used = new Set<string>();
     let opening: string | undefined;
     const segments: NonNullable<RenderInfo["segments"]> = [];
     const shotLens: number[] = [];
     const parts: string[] = [];
-    let left = duration;
     for (let i = 0; i < shots.length; i++) {
       const s = shots[i];
       const f = files[i];
-      const len = i === shots.length - 1 ? left : Math.max(1.5, Math.round(((Math.max(1, s.seconds) * duration) / planned) * 100) / 100);
-      left = Math.max(1.5, left - len);
+      const len = Math.round(timing[i].len * 1000) / 1000;
       const total = f.durationSec ?? 0;
       const m = pickMoment(s.moment, f.moments ?? [], used);
       let start: number;
@@ -339,8 +344,6 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
 
     // 4. Captions, CTA, audio mix.
     step(r, "rendering", "Adding captions and the call to action");
-    const speechEnd = timed?.length ? timed[timed.length - 1].end : spans?.length ? spans[spans.length - 1].end : duration - 3.2;
-    const words = timed ?? timeWords(clip.narration, voicePath ? speechEnd : Math.max(3, duration - 3.2), voicePath ? spans : undefined);
     const sents = sentences(clip.narration);
     const lastStart = (timed && lastSentenceStart(clip.narration, timed, r.language))
       ?? (voicePath && spans && spans.length === sents.length ? spans[spans.length - 1].start : duration - 3);

@@ -136,7 +136,14 @@ export interface Clip {
   onScreenText: string[];
   cta: string;
   /** Which footage to cut from, with what to look for. */
-  shots: { footageId?: string; footageName?: string; moment: string; seconds: number }[];
+  shots: {
+    footageId?: string;
+    footageName?: string;
+    moment: string;
+    seconds: number;
+    /** Words of the narration this shot illustrates: it starts when they're said. */
+    phrase?: string;
+  }[];
   lengthSec: number;
   caption: string;
   hashtags: string[];
