@@ -61,13 +61,15 @@ export function AppProvider({ me, setMe, children }: { me: Me; setMe: (m: Me | n
         return r;
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) setMe(null);
+        // Someone (or the agent) changed it meanwhile: show what's there now.
+        if (e instanceof ApiError && e.status === 409) void refresh();
         toast((e as Error).message, true);
         return undefined;
       } finally {
         setBusy(false);
       }
     },
-    [toast, setMe],
+    [toast, setMe, refresh],
   );
 
   return (

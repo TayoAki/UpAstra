@@ -130,6 +130,8 @@ export const CLIP_STATUSES: ClipStatus[] = ["draft", "approved", "rendering", "r
 export interface Clip {
   id: string;
   campaignId: string;
+  /** Bumped on every change; edits sent with a stale baseRevision are refused. */
+  revision?: number;
   title: string;
   angle: string;
   hook: string;

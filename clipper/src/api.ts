@@ -91,6 +91,16 @@ export const api = {
   deleteFormat: (id: string) => req<State>(`/formats/${id}`, "DELETE"),
   makeVariants: (id: string, count: number, newCta: boolean) => req<State>(`/clips/${id}/variants`, "POST", { count, newCta }),
   updateClip: (id: string, b: Partial<Clip> & { override?: boolean }) => req<State>(`/clips/${id}`, "PUT", b),
+  /** Edit a plan from the revision on screen; if the edit breaks a brief rule, ask before saving it anyway. */
+  editClip: async (clip: Clip, b: Partial<Clip> & { override?: boolean }) => {
+    const body = { ...b, baseRevision: clip.revision ?? 0 };
+    try {
+      return await req<State>(`/clips/${clip.id}`, "PUT", body);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 422 && /breaks a brief rule/.test(e.message) && confirm(`${e.message}\n\nSave anyway?`)) return req<State>(`/clips/${clip.id}`, "PUT", { ...body, allowFailing: true });
+      throw e;
+    }
+  },
   deleteClip: (id: string) => req<State>(`/clips/${id}`, "DELETE"),
   renderClip: (id: string, voice: string, override?: boolean) => req<State>(`/clips/${id}/render`, "POST", { voice, override }),
   cancelRender: (id: string) => req<State>(`/clips/${id}/render/cancel`, "POST", {}),

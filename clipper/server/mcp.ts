@@ -87,6 +87,7 @@ function clipLine(c: Clip) {
   return {
     id: c.id,
     campaignId: c.campaignId,
+    revision: c.revision ?? 0,
     title: c.title,
     status: c.status,
     hook: c.hook,
@@ -440,9 +441,11 @@ export function createMcpServer(api: ApiCall): McpServer {
 
   tool(
     "edit_clip",
-    "Change a clip plan. The QA check re-runs against the brief and the result is returned.",
+    "Change a clip plan. The QA check re-runs against the brief and the result is returned. Pass baseRevision (the revision you read) so an edit made meanwhile by someone else isn't overwritten (CONFLICT: read it again). An edit that would make a plan that follows the brief break a rule is refused (FAILED_PRECONDITION) unless allowFailing.",
     {
       clipId: z.string(),
+      baseRevision: z.number().int().min(0).optional(),
+      allowFailing: z.boolean().optional().describe("Save even if the edit breaks a brief rule (only when the user accepts it)"),
       hook: z.string().optional(),
       narration: z.string().optional().describe("Full voiceover script"),
       onScreenText: z.array(z.string()).optional(),

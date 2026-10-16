@@ -22,12 +22,12 @@ export function ClipCard({ clip, campaign, showCampaign }: { clip: Clip; campaig
 
   const save = () =>
     run(
-      () => api.updateClip(clip.id, { hook: d.hook, narration: d.narration, onScreenText: d.onScreenText.split("\n").map((s) => s.trim()).filter(Boolean), caption: d.caption, lengthSec: Number(d.lengthSec) }),
+      () => api.editClip(clip, { hook: d.hook, narration: d.narration, onScreenText: d.onScreenText.split("\n").map((s) => s.trim()).filter(Boolean), caption: d.caption, lengthSec: Number(d.lengthSec) }),
       "Saved — rules re-checked",
     ).then((r) => r && setEdit(false));
   const approve = () => {
     if (!clip.qa.pass && !confirm(`This plan fails ${failing} rule(s). Approve anyway?`)) return;
-    void run(() => api.updateClip(clip.id, { status: "approved", override: !clip.qa.pass }), "Approved");
+    void run(() => api.editClip(clip, { status: "approved", override: !clip.qa.pass }), "Approved");
   };
   const copyScript = () => {
     const text = [`HOOK: ${clip.hook}`, "", "VOICEOVER:", clip.narration, "", "ON SCREEN:", ...clip.onScreenText, "", "SHOTS:", ...clip.shots.map((s, i) => `${i + 1}. ${s.footageName ?? "?"} — ${s.moment} (${s.seconds}s)`), "", "CAPTION:", `${clip.caption} ${clip.hashtags.join(" ")}`].join("\n");
@@ -194,12 +194,12 @@ export function ClipCard({ clip, campaign, showCampaign }: { clip: Clip; campaig
           </button>
         )}
         {clip.status === "draft" && (
-          <button className="btn sm ghost" onClick={() => run(() => api.updateClip(clip.id, { status: "rejected" }), "Rejected")}>
+          <button className="btn sm ghost" onClick={() => run(() => api.editClip(clip, { status: "rejected" }), "Rejected")}>
             <X size={14} /> Reject
           </button>
         )}
         {clip.status === "rejected" && (
-          <button className="btn sm" onClick={() => run(() => api.updateClip(clip.id, { status: "draft" }))}>
+          <button className="btn sm" onClick={() => run(() => api.editClip(clip, { status: "draft" }))}>
             Restore
           </button>
         )}

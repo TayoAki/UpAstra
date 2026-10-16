@@ -1201,21 +1201,32 @@ export function createApp() {
     }),
   );
 
+  // Edits are made on a copy and only kept if they pass the checks: a stale
+  // baseRevision (someone else changed it since) is a 409, and an edit that
+  // breaks a rule on a plan that followed the brief is a 422 unless allowFailing.
   api.put("/clips/:id", (req, res) => {
     const clip = findClip(String(req.params.id));
     const c = findCampaign(clip.campaignId);
     const b = req.body ?? {};
-    for (const k of ["title", "angle", "hook", "narration", "cta", "caption"] as const) if (typeof b[k] === "string") clip[k] = b[k].slice(0, 4000);
-    if (Array.isArray(b.onScreenText)) clip.onScreenText = b.onScreenText.map(String).slice(0, 20);
-    if (Array.isArray(b.hashtags)) clip.hashtags = b.hashtags.map(String).slice(0, 30);
-    if (Number(b.lengthSec) > 0) clip.lengthSec = Math.min(600, Math.round(Number(b.lengthSec)));
-    if (Array.isArray(b.overlays)) clip.overlays = sanitizeOverlays(b.overlays, undefined, () => newId("ov"));
-    if (CLIP_STATUSES.includes(b.status)) {
-      if (b.status === "approved" && !clip.qa.pass && !b.override) throw new HttpError(400, "This plan fails a rule. Fix it, or approve anyway.");
-      clip.status = b.status as ClipStatus;
+    const rev = clip.revision ?? 0;
+    if (b.baseRevision !== undefined && Number(b.baseRevision) !== rev)
+      throw new HttpError(409, `This plan was changed since you opened it (now revision ${rev}, yours ${Number(b.baseRevision)}). Reload it and make your edit again.`);
+    const next: Clip = { ...clip };
+    for (const k of ["title", "angle", "hook", "narration", "cta", "caption"] as const) if (typeof b[k] === "string") next[k] = b[k].slice(0, 4000);
+    if (Array.isArray(b.onScreenText)) next.onScreenText = b.onScreenText.map(String).slice(0, 20);
+    if (Array.isArray(b.hashtags)) next.hashtags = b.hashtags.map(String).slice(0, 30);
+    if (Number(b.lengthSec) > 0) next.lengthSec = Math.min(600, Math.round(Number(b.lengthSec)));
+    if (Array.isArray(b.overlays)) next.overlays = sanitizeOverlays(b.overlays, undefined, () => newId("ov"));
+    next.qa = checkClip(next, c.brief);
+    if (clip.qa.pass && !next.qa.pass && !b.allowFailing && !b.override) {
+      const broken = next.qa.checks.filter((x) => !x.pass).map((x) => x.rule);
+      throw new HttpError(422, `This edit breaks a brief rule (${broken.join("; ")}), so nothing was saved. Fix it, or save anyway.`);
     }
-    clip.qa = checkClip(clip, c.brief);
-    clip.updatedAt = now();
+    if (CLIP_STATUSES.includes(b.status)) {
+      if (b.status === "approved" && !next.qa.pass && !b.override) throw new HttpError(400, "This plan fails a rule. Fix it, or approve anyway.");
+      next.status = b.status as ClipStatus;
+    }
+    Object.assign(clip, next, { revision: rev + 1, updatedAt: now() });
     save();
     res.json(stateFor());
   });

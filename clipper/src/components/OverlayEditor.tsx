@@ -21,7 +21,7 @@ export function OverlayEditor({ clip }: { clip: Clip }) {
   const overlays = clip.overlays ?? [];
   const [adding, setAdding] = useState(false);
   const [f, setF] = useState<{ kind: OverlayKind; cue: string; text: string; user: string; emoji: string; tier: string }>({ kind: "emoji", cue: "", text: "", user: "", emoji: "🔥", tier: "S" });
-  const save = (next: Overlay[], msg: string) => run(() => api.updateClip(clip.id, { overlays: next }), `${msg}${clip.render?.status === "done" ? " — render again to see it" : ""}`);
+  const save = (next: Overlay[], msg: string) => run(() => api.editClip(clip, { overlays: next }), `${msg}${clip.render?.status === "done" ? " — render again to see it" : ""}`);
   const cueOk = !f.cue.trim() || cueInScript(f.cue, clip.narration);
   const ready = f.cue.trim() && cueOk && (f.kind === "emoji" ? !!f.emoji : !!f.text.trim());
 
