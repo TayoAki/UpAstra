@@ -9,6 +9,7 @@ import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, tenantLo
 import { mediaLive, modelFor, speak } from "./llm";
 import { blackSpans, concat, compose, cutSegment, ffmpegAvailable, FPS, H, run, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
 import { cacheKey, footageSource, isCached } from "./footage-cache";
+import { isPending, pendingCount, submitJob, waitingCount } from "./jobs";
 import { cachedStep } from "./steps";
 import { alignScript, type Alignment } from "./align";
 import { NO_SPACES, transcribe, transcriptionAvailable, type Word } from "./transcribe";
@@ -25,7 +26,7 @@ import { emojiStickers, hiddenComments, placeOverlays } from "./overlays";
 //   2. voice the narration (optional)
 //   3. cut each shot from its source link, framed for 9:16
 //   4. burn hook, captions and CTA, mix audio, upload
-// Jobs run one at a time in the background; each step is written to the clip
+// Jobs run in the background through the shared job controller (jobs.ts); each step is written to the clip
 // so the dashboard can show progress.
 
 interface Job {
@@ -34,10 +35,6 @@ interface Job {
   /** Who asked for it, so its Activity entries are attributed the same way. */
   actor?: "human" | "agent";
 }
-const queue: Job[] = [];
-const active = new Set<string>();
-let running = 0;
-const concurrency = () => Math.max(1, Number(process.env.RENDER_CONCURRENCY ?? 1));
 
 export const renderAvailable = () => ffmpegAvailable();
 
@@ -47,7 +44,7 @@ export const MAX_RESUMES = 2;
 tenantLoadHooks.push((ws, doc) => {
   for (const c of doc.clips) {
     const r = c.render;
-    if (!r || ["done", "failed"].includes(r.status) || active.has(c.id) || queue.some((j) => j.clipId === c.id)) continue;
+    if (!r || ["done", "failed"].includes(r.status) || isPending(c.id)) continue;
     if (!ffmpegAvailable() || (r.resumes ?? 0) >= MAX_RESUMES) {
       c.render = { ...r, status: "failed", step: "Interrupted by a restart", error: "Interrupted by a server restart — render it again." };
       if (c.status === "rendering") c.status = "approved";
@@ -55,36 +52,23 @@ tenantLoadHooks.push((ws, doc) => {
     }
     c.render = { ...r, status: "queued", step: "Resuming after a server restart", resumes: (r.resumes ?? 0) + 1 };
     c.status = "rendering";
-    queue.push({ workspaceId: ws, clipId: c.id });
+    // The controller starts it after this hook, once the workspace has finished loading.
+    submit({ workspaceId: ws, clipId: c.id });
   }
-  // Runs once the workspace has finished loading.
-  setImmediate(pump);
 });
 
 export function enqueueRender(workspaceId: string, clip: Clip, voice: VoiceOption, actor?: "human" | "agent") {
   if (!ffmpegAvailable()) throw new HttpError(503, "Rendering isn't available on this server (ffmpeg missing)");
-  if (active.has(clip.id) || queue.some((j) => j.clipId === clip.id)) throw new HttpError(409, "This clip is already rendering");
+  if (isPending(clip.id)) throw new HttpError(409, "This clip is already rendering");
   // One workspace can't fill the shared queue.
   const max = Number(process.env.MAX_QUEUED_RENDERS ?? 20);
-  if (queue.filter((j) => j.workspaceId === workspaceId).length >= max) throw new HttpError(429, `You already have ${max} clips waiting to render. Try again when some finish.`);
+  if (waitingCount(workspaceId, "render") >= max) throw new HttpError(429, `You already have ${max} clips waiting to render. Try again when some finish.`);
   clip.render = { status: "queued", step: "Waiting in the render queue", voice, requestedAt: now(), cost: 0 };
   clip.status = "rendering";
-  queue.push({ workspaceId, clipId: clip.id, actor });
-  setImmediate(pump);
+  submit({ workspaceId, clipId: clip.id, actor });
 }
 
-function pump() {
-  while (running < concurrency() && queue.length) {
-    const job = queue.shift()!;
-    running++;
-    active.add(job.clipId);
-    void process_(job).finally(() => {
-      running--;
-      active.delete(job.clipId);
-      pump();
-    });
-  }
-}
+const submit = (job: Job) => submitJob({ id: job.clipId, workspaceId: job.workspaceId, kind: "render", run: () => process_(job) });
 
 async function process_(job: Job) {
   try {
@@ -421,4 +405,4 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
   }
 }
 
-export const queueLength = () => queue.length + running;
+export const queueLength = () => pendingCount("render");

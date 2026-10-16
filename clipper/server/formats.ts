@@ -8,6 +8,7 @@ import { alert, isUserError } from "./alerts";
 import { getDoc, HttpError, loadTenant, log, now, runInWorkspace, save, tenantLoadHooks } from "./db";
 import { chatJSON, mediaLive, modelFor } from "./llm";
 import { netArgs, probe, run } from "./media";
+import { isPending, submitJob, waitingCount } from "./jobs";
 import { cachedStep } from "./steps";
 import { videoStore } from "./storage";
 import { transcribe, transcriptionAvailable } from "./transcribe";
@@ -39,43 +40,34 @@ Times are seconds from the start. Describe only what is actually in the video.`;
 // ---- Queue ------------------------------------------------------------------------
 
 type Task = { workspaceId: string; formatId: string };
-const queue: Task[] = [];
-let busy = false;
 
 export function enqueueFormat(t: Task) {
-  if (queue.filter((x) => x.workspaceId === t.workspaceId).length >= 3) throw new HttpError(429, "You already have 3 videos waiting to be broken down. Try again when they finish.");
-  queue.push(t);
-  void pump();
+  if (waitingCount(t.workspaceId, "format") >= 3) throw new HttpError(429, "You already have 3 videos waiting to be broken down. Try again when they finish.");
+  submit(t);
 }
 
-async function pump() {
-  if (busy) return;
-  const t = queue.shift();
-  if (!t) return;
-  busy = true;
-  try {
-    await loadTenant(t.workspaceId).catch(() => undefined);
-    await runInWorkspace(t.workspaceId, undefined, () => analyze(t));
-  } finally {
-    busy = false;
-    void pump();
-  }
-}
+const submit = (t: Task) =>
+  submitJob({
+    id: t.formatId,
+    workspaceId: t.workspaceId,
+    kind: "format",
+    run: async () => {
+      await loadTenant(t.workspaceId).catch(() => undefined);
+      await runInWorkspace(t.workspaceId, undefined, () => analyze(t));
+    },
+  });
 
 // A breakdown cut off by a restart starts again (once).
 tenantLoadHooks.push((ws, doc) => {
-  let resumed = false;
   for (const f of doc.formats ?? []) {
-    if (f.status !== "analyzing" || queue.some((t) => t.formatId === f.id)) continue;
+    if (f.status !== "analyzing" || isPending(f.id)) continue;
     if (f.resumes) {
       Object.assign(f, { status: "failed", step: undefined, error: "Interrupted by a server restart — try again." });
       continue;
     }
     Object.assign(f, { resumes: 1, step: "Resuming after a server restart" });
-    queue.push({ workspaceId: ws, formatId: f.id });
-    resumed = true;
+    submit({ workspaceId: ws, formatId: f.id });
   }
-  if (resumed) setImmediate(() => void pump());
 });
 
 const findFormat = (id: string) => getDoc().formats?.find((f) => f.id === id);

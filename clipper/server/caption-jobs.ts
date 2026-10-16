@@ -9,54 +9,45 @@ import { prepareFonts } from "./fonts";
 import { BT709, burnFilter, probe, run, yuvMatrix } from "./media";
 import { videoStore } from "./storage";
 import { NO_SPACES, transcribe } from "./transcribe";
+import { isPending, submitJob, waitingCount } from "./jobs";
 import { recordUsage } from "./usage";
 import { alert, isUserError } from "./alerts";
 
 // Captions page jobs: transcribe an uploaded video (any of Whisper's ~99
-// languages), let the user fix words, then burn styled captions in. One job at
-// a time per server: transcription and encoding are CPU-heavy.
+// languages), let the user fix words, then burn styled captions in. Jobs share
+// the server's CPU with renders through the job controller (jobs.ts).
 
 type Task = { workspaceId: string; jobId: string; kind: "transcribe" | "render"; actor?: "human" | "agent" };
-const queue: Task[] = [];
-let busy = false;
-
 export function enqueueCaptionJob(task: Task) {
   const max = Number(process.env.MAX_QUEUED_CAPTION_JOBS ?? 5);
-  if (queue.filter((t) => t.workspaceId === task.workspaceId).length >= max) throw new HttpError(429, `You already have ${max} videos waiting for captions. Try again when some finish.`);
-  queue.push(task);
-  void pump();
+  if (waitingCount(task.workspaceId, "caption") >= max) throw new HttpError(429, `You already have ${max} videos waiting for captions. Try again when some finish.`);
+  submit(task);
 }
 
-async function pump() {
-  if (busy) return;
-  const t = queue.shift();
-  if (!t) return;
-  busy = true;
-  try {
-    await loadTenant(t.workspaceId).catch(() => undefined);
-    await runInWorkspace(t.workspaceId, undefined, () => runTask(t), t.actor);
-  } finally {
-    busy = false;
-    void pump();
-  }
-}
+const submit = (t: Task) =>
+  submitJob({
+    id: t.jobId,
+    workspaceId: t.workspaceId,
+    kind: "caption",
+    run: async () => {
+      await loadTenant(t.workspaceId).catch(() => undefined);
+      await runInWorkspace(t.workspaceId, undefined, () => runTask(t), t.actor);
+    },
+  });
 
 // Work cut off by a restart (deploys included) starts again, at most twice.
 tenantLoadHooks.push((ws, doc) => {
-  let resumed = false;
   for (const j of doc.captionJobs ?? []) {
-    if ((j.status !== "transcribing" && j.status !== "rendering") || queue.some((t) => t.jobId === j.id)) continue;
+    if ((j.status !== "transcribing" && j.status !== "rendering") || isPending(j.id)) continue;
     if ((j.resumes ?? 0) >= 2) {
       Object.assign(j, { status: j.status === "rendering" ? "ready" : "failed", error: "Interrupted by a server restart — try again.", step: undefined });
       continue;
     }
     j.resumes = (j.resumes ?? 0) + 1;
     j.step = "Resuming after a server restart";
-    queue.push({ workspaceId: ws, jobId: j.id, kind: j.status === "rendering" ? "render" : "transcribe" });
-    resumed = true;
+    // The controller starts it after this hook, once the workspace has finished loading.
+    submit({ workspaceId: ws, jobId: j.id, kind: j.status === "rendering" ? "render" : "transcribe" });
   }
-  // Runs once the workspace has finished loading.
-  if (resumed) setImmediate(() => void pump());
 });
 
 const findJob = (id: string) => getDoc().captionJobs?.find((j) => j.id === id);

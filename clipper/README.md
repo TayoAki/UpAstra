@@ -201,7 +201,7 @@ Without `DATABASE_URL`, data lives in `./data` as JSON files. Without `OPENROUTE
 This is a separate service from Studio Operator, built from this folder:
 
 - Root directory `clipper`, which uses `railway.json` and the `Dockerfile`.
-- Variables: `DATABASE_URL`, `SESSION_SECRET`, `OPENROUTER_API_KEY`, `APP_URL`, and the `S3_*` bucket settings. Optional: the model variables, `AI_DAILY_LIMIT` and `RENDER_CONCURRENCY`.
+- Variables: `DATABASE_URL`, `SESSION_SECRET`, `OPENROUTER_API_KEY`, `APP_URL`, and the `S3_*` bucket settings. Optional: the model variables, `AI_DAILY_LIMIT` and `JOB_CAPACITY`.
 - The image includes ffmpeg. Give the service at least 2 GB of memory; footage is staged on local disk while it's copied to the bucket.
 - Tables are prefixed `co_`, so it can share a Postgres instance without touching other apps' tables.
 - Run 1 replica: workspace documents are cached in memory.
@@ -225,7 +225,7 @@ This is a separate service from Studio Operator, built from this folder:
 **Restarts and deploys**
 - Renders and caption jobs cut off by a restart resume on their own, at most twice each.
 - On startup, after `RESUME_DELAY_SEC` (default 45), the server finds workspaces with interrupted work and picks it up.
-- `RENDER_CONCURRENCY` sets how many renders run at once (about 1.6 vCPU and 2 GB each).
+- `JOB_CAPACITY` (default 2) is how much CPU-heavy work runs at once, shared by renders (weight 2, about 1.6 vCPU and 2 GB each), caption jobs and format breakdowns (weight 1). Workspaces take turns.
 
 **Footage**
 - Drive footage is downloaded once and cached in the bucket.
