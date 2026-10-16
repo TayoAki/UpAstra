@@ -35,7 +35,7 @@ describe("captions", () => {
   it("writes a valid ASS file with hook, captions and CTA", () => {
     const ass = buildAss({ hook: "Soccer {but} with cars", captions: chunk(timeWords(script, 9)), cta: "Play Car League on Roblox", ctaFrom: 7, duration: 10 });
     expect(ass).toMatch(/Style: Hook/);
-    expect(ass).toMatch(/Dialogue: 2,0:00:07.00,0:00:10.00,Cta,,0,0,0,,.*Play Car League on Roblox/);
+    expect(ass).toMatch(/Dialogue: 9,0:00:07.00,0:00:10.00,Cta,,0,0,0,,.*Play Car League on Roblox/);
     expect(ass).not.toMatch(/\{but\}/);
   });
 });

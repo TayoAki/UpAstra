@@ -7,7 +7,7 @@ import type { Campaign, Clip, EditParts, FootageFile, RenderInfo, VoiceOption } 
 import { buildAss, groups, HOOK_SECONDS, sentences, timeWords } from "./captions";
 import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, tenantLoadHooks } from "./db";
 import { mediaLive, speak } from "./llm";
-import { blackSpans, concat, compose, cutSegment, ffmpegAvailable, run, speechSpans } from "./media";
+import { blackSpans, concat, compose, cutSegment, ffmpegAvailable, H, run, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
 import { footageSource, isCached } from "./footage-cache";
 import { alignScript, type Alignment } from "./align";
 import { NO_SPACES, transcribe, transcriptionAvailable, type Word } from "./transcribe";
@@ -17,6 +17,7 @@ import { analyzeFootage, pickMoment } from "./moments";
 import { videoStore } from "./storage";
 import { recordUsage } from "./usage";
 import { alert, isUserError } from "./alerts";
+import { emojiStickers, placeOverlays } from "./overlays";
 
 // The render queue: approved clip plans → finished 9:16 MP4s.
 //   1. find moments in each footage file the plan uses (cached)
@@ -311,10 +312,16 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     const brand = getDoc().brand;
     const style = resolveCaptionStyle(brand, c.captions);
     const captionGroups = groups(words, style.wordsPerCaption);
+    // Overlays land on the words they're cued to (tier items stay until the call to action).
+    const layout = { width: W, height: H, bandTop: VIDEO_TOP, bandHeight: VIDEO_H, font: style.font, accent: accentOf(brand), uppercase: style.uppercase };
+    const { placed, missed } = placeOverlays(clip.overlays ?? [], words, duration, ctaFrom);
+    const { stickers, missing } = await emojiStickers(placed, layout, tmp);
+    if (missed.length || missing.length)
+      log({ campaignId: c.id, kind: "clip", message: `Left out ${missed.length + missing.length} overlay(s) on "${clip.title}"${missed.length ? ` — cue words not in the voiceover: ${missed.map((o) => `"${o.cue ?? o.text}"`).join(", ")}` : ""}${missing.length ? ` — no image for ${missing.join(" ")}` : ""}.` });
     const ass = path.join(tmp, "subs.ass");
-    fs.writeFileSync(ass, buildAss({ hook: clip.hook, captions: captionGroups, cta: ctaText, ctaFrom, duration, style, accent: accentOf(brand), joiner: r.language && NO_SPACES.has(r.language) ? "" : " ", language: r.language }));
+    fs.writeFileSync(ass, buildAss({ hook: clip.hook, captions: captionGroups, cta: ctaText, ctaFrom, duration, style, accent: accentOf(brand), joiner: r.language && NO_SPACES.has(r.language) ? "" : " ", language: r.language, overlays: { placed, layout } }));
     const final = path.join(tmp, "final.mp4");
-    await compose({ video: joined, ass, voice: voicePath, duration, out: final, fontsDir: await prepareFonts(tmp, brand), workDir: tmp });
+    await compose({ video: joined, ass, voice: voicePath, duration, out: final, fontsDir: await prepareFonts(tmp, brand), workDir: tmp, stickers });
 
     step(r, "rendering", "Uploading the video");
     const key = `${workspaceId}/clips/${clip.id}-${Date.now()}.mp4`;
@@ -336,6 +343,13 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
       editParts.voiceKey = `${stamp}/voice.wav`;
       await videoStore().put(editParts.voiceKey, voicePath, "audio/wav");
     }
+    editParts.overlays = placed.map((p) => ({
+      kind: p.o.kind,
+      text: p.o.kind === "emoji" ? p.o.emoji ?? "" : p.o.kind === "comment" ? `@${p.o.user ?? "viewer"}: ${p.o.text ?? ""}` : (p.o.text ?? ""),
+      start: round(p.start),
+      end: round(p.end),
+      tier: p.o.tier,
+    }));
     editParts.captions = captionGroups.map((g) => ({ text: g.text, start: round(g.start), end: round(g.end), words: g.words.map((w) => ({ text: w.text, start: round(w.start), end: round(w.end) })) }));
 
     const fresh = getDoc().clips.find((x) => x.id === clip.id);

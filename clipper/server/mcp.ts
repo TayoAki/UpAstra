@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CAPTION_STYLES } from "../shared/caption-styles";
-import type { Campaign, CampaignStats, CaptionJob, Clip, Insights, LearningReport, Post, ServiceStatus, SocialAccount } from "../shared/types";
+import type { Campaign, CampaignStats, CaptionJob, Clip, Insights, LearningReport, Post, ReferenceFormat, ServiceStatus, SocialAccount } from "../shared/types";
 import { HOOK_STYLES, PLATFORMS, VOICES } from "../shared/types";
 
 // MCP server for UGCMediaClips: run the whole thing headless from Claude
@@ -35,6 +35,7 @@ interface State {
   posts: Post[];
   insights: Record<string, Insights>;
   accounts: SocialAccount[];
+  formats?: Omit<ReferenceFormat, "transcript" | "cuts">[];
   status: ServiceStatus;
 }
 
@@ -70,6 +71,9 @@ function clipFull(c: Clip, videoUrl?: string) {
     caption: c.caption,
     hashtags: c.hashtags,
     renderedFrom: c.render?.segments,
+    overlays: c.overlays,
+    variant: c.variantGroup ? { group: c.variantGroup, label: c.variantLabel } : undefined,
+    formatId: c.formatId,
     videoUrl,
   };
 }
@@ -158,9 +162,9 @@ export function createMcpServer(api: ApiCall): McpServer {
   const linkFor = (c: Clip) => linksFor(c).then((l) => l?.url);
 
   /** Write plans, approve the ones that follow the brief, queue renders. */
-  async function planAndRender(campaignId: string, count: number, voice: string, render: boolean) {
+  async function planAndRender(campaignId: string, count: number, voice: string, render: boolean, formatId?: string) {
     const before = new Set((await state()).clips.map((c) => c.id));
-    const s = await api<State>("POST", `/campaigns/${encodeURIComponent(campaignId)}/clips`, { count });
+    const s = await api<State>("POST", `/campaigns/${encodeURIComponent(campaignId)}/clips`, { count, formatId });
     const fresh = s.clips.filter((c) => !before.has(c.id));
     const queued: string[] = [];
     if (render) {
@@ -252,8 +256,64 @@ export function createMcpServer(api: ApiCall): McpServer {
   tool(
     "plan_clips",
     "Write new clip plans for a campaign: hook, voiceover script, on-screen text, shots from the campaign's footage, caption and hashtags. Each is checked against the brief, and guided by what has worked in past posts (some plans are tagged as tests). Set autoRender to approve passing plans and queue their renders.",
-    { campaignId: z.string(), count: z.number().int().min(1).max(10).default(3), autoRender: z.boolean().default(false), voice: VOICE.default("ash") },
-    async ({ campaignId, count, autoRender, voice }) => planAndRender(campaignId, count, voice, autoRender),
+    {
+      campaignId: z.string(),
+      count: z.number().int().min(1).max(10).default(3),
+      autoRender: z.boolean().default(false),
+      voice: VOICE.default("ash"),
+      formatId: z.string().optional().describe("Write the plans in a format cloned from a reference video (see list_formats)"),
+    },
+    async ({ campaignId, count, autoRender, voice, formatId }) => planAndRender(campaignId, count, voice, autoRender, formatId),
+  );
+
+  const OVERLAY = z.object({
+    kind: z.enum(["comment", "emoji", "text", "tier"]),
+    cue: z.string().describe("Exact words from the voiceover the overlay appears with"),
+    text: z.string().optional().describe("Comment text, pop-up word, or tier-list item"),
+    user: z.string().optional().describe("Comment author handle"),
+    emoji: z.string().optional(),
+    tier: z.enum(["S", "A", "B", "C", "D"]).optional(),
+    hold: z.number().optional().describe("Seconds on screen"),
+  });
+
+  tool(
+    "make_variants",
+    "A/B test a clip: write 1-6 variants with different hooks (and optionally new call-to-action lines). Shots and the rest of the script stay the same; variants are labelled A, B, C… and each is checked against the brief. Post them side by side to see which opening wins.",
+    { clipId: z.string(), count: z.number().int().min(1).max(6).default(3), newCta: z.boolean().default(false) },
+    async ({ clipId, count, newCta }) => {
+      const s = await api<State>("POST", `/clips/${encodeURIComponent(clipId)}/variants`, { count, newCta });
+      const base = clipIn(s, clipId);
+      return s.clips.filter((c) => c.variantGroup && c.variantGroup === base.variantGroup).map((c) => ({ ...clipLine(c), variant: c.variantLabel }));
+    },
+  );
+
+  tool(
+    "clone_format",
+    "Break a viral reference video down into a reusable format (hook, beats with timings, pacing, caption look, overlays, a recipe). Give a direct link to a video file (not a TikTok/Instagram/YouTube page). Takes a minute or two; check with get_format, then plan_clips with formatId.",
+    { url: z.string().url(), name: z.string().optional() },
+    async ({ url, name }) => {
+      const r = await api<{ format: ReferenceFormat }>("POST", "/formats/from-url", { url, name });
+      return { id: r.format.id, name: r.format.name, status: r.format.status, next: "Call get_format until status is ready, then plan_clips with formatId." };
+    },
+  );
+
+  tool(
+    "list_formats",
+    "Formats cloned from reference videos, with their status and one-line summary.",
+    {},
+    async () => ((await state()).formats ?? []).map((f) => ({ id: f.id, name: f.name, status: f.status, summary: f.breakdown?.summary, error: f.error })),
+    true,
+  );
+
+  tool(
+    "get_format",
+    "A format in full: summary, why it works, hook, beats, pacing, captions, overlays and the recipe plans follow.",
+    { formatId: z.string() },
+    async ({ formatId }) => {
+      const f = await api<ReferenceFormat>("GET", `/formats/${encodeURIComponent(formatId)}`);
+      return { id: f.id, name: f.name, status: f.status, step: f.step, error: f.error, durationSec: f.durationSec, breakdown: f.breakdown };
+    },
+    true,
   );
 
   tool(
@@ -280,6 +340,7 @@ export function createMcpServer(api: ApiCall): McpServer {
       caption: z.string().optional(),
       hashtags: z.array(z.string()).optional(),
       lengthSec: z.number().int().positive().optional(),
+      overlays: z.array(OVERLAY).max(12).optional().describe("Replaces the clip's overlays: comment bubbles, emoji, pop-up words or tier-list items, each on words of the voiceover"),
     },
     async ({ clipId, ...patch }) => {
       const s = await api<State>("PUT", `/clips/${encodeURIComponent(clipId)}`, patch);

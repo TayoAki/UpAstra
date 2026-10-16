@@ -147,6 +147,86 @@ export interface Clip {
   render?: RenderInfo;
   /** What the learning system compares across posts. */
   traits?: ClipTraits;
+  /** A/B variants: clips sharing a group are the same clip with a different hook (and CTA). */
+  variantGroup?: string;
+  /** "A" for the original, then "B", "C"… */
+  variantLabel?: string;
+  /** Animated overlays timed to words in the voiceover. */
+  overlays?: Overlay[];
+  /** The reference format this plan was written from (Formats page). */
+  formatId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---- Overlays ------------------------------------------------------------------
+
+export type OverlayKind = "comment" | "emoji" | "text" | "tier";
+export const OVERLAY_KINDS: { id: OverlayKind; label: string; hint: string }[] = [
+  { id: "comment", label: "Comment bubble", hint: "A viewer comment pops up, like a reply-to-comment video." },
+  { id: "emoji", label: "Emoji pop", hint: "An emoji bounces in on a word." },
+  { id: "text", label: "Pop-up text", hint: "A big word or number pops on screen." },
+  { id: "tier", label: "Tier list item", hint: "Drops the item into a tier (S–D) as it's said; the board stays." },
+];
+export const TIERS = ["S", "A", "B", "C", "D"] as const;
+export type Tier = (typeof TIERS)[number];
+
+export interface Overlay {
+  id: string;
+  kind: OverlayKind;
+  /** Words from the voiceover it appears with; when they're missing, `at` seconds is used. */
+  cue?: string;
+  at?: number;
+  /** Seconds on screen (tier items stay until the call to action). */
+  hold?: number;
+  /** Comment text, pop-up text or tier item name. */
+  text?: string;
+  /** Comment author handle (no @). */
+  user?: string;
+  emoji?: string;
+  tier?: Tier;
+}
+
+// ---- Reference formats ("clone a viral video") ------------------------------------
+
+export type FormatStatus = "uploaded" | "analyzing" | "ready" | "failed";
+
+export interface FormatBreakdown {
+  /** One-paragraph description of the format. */
+  summary: string;
+  whyItWorks: string[];
+  hook: { text: string; style: HookStyle; seconds: number; visual: string };
+  beats: { start: number; end: number; purpose: string; visual: string; onScreenText?: string; narration?: string }[];
+  pacing: { cuts: number; avgShotSec: number; notes: string };
+  captions: { style: string; wordsPerCaption: number; notes: string };
+  overlays: { kind: OverlayKind; atSec: number; description: string; example?: string }[];
+  voice: { type: "voiceover" | "on-camera" | "text-only" | "none"; tone: string };
+  cta: { text?: string; atSec?: number };
+  lengthSec: number;
+  /** Instructions a planner follows to make a new clip in this format. */
+  recipe: string;
+}
+
+export interface ReferenceFormat {
+  id: string;
+  name: string;
+  status: FormatStatus;
+  step?: string;
+  error?: string;
+  source: { kind: "upload" | "url"; url?: string; fileName?: string };
+  sourceKey: string;
+  durationSec?: number;
+  width?: number;
+  height?: number;
+  language?: string;
+  transcript?: string;
+  /** Scene cuts found in the reference (seconds). */
+  cuts?: number[];
+  breakdown?: FormatBreakdown;
+  /** Times the breakdown restarted after a server restart cut it off. */
+  resumes?: number;
+  cost: number;
+  model?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -226,6 +306,8 @@ export interface EditParts {
   captions: { text: string; start: number; end: number; words: { text: string; start: number; end: number }[] }[];
   hook: { text: string; end: number };
   cta: { text: string; from: number };
+  /** Overlays as they were placed in the render (the editor shows them as text). */
+  overlays?: { kind: OverlayKind; text: string; start: number; end: number; tier?: Tier }[];
   duration: number;
 }
 
@@ -299,6 +381,8 @@ export interface WorkspaceDoc {
   captionJobs?: CaptionJob[];
   /** Fonts, colours and default caption style for everything this workspace renders. */
   brand?: BrandKit;
+  /** Reference videos turned into reusable formats. */
+  formats?: ReferenceFormat[];
   /** Outstand page-picking sessions this workspace started (Facebook/LinkedIn), valid for an hour. */
   pendingSocial?: { session: string; at: string }[];
   /** What this workspace has used: AI spend, renders, captions, posts. */
@@ -306,7 +390,7 @@ export interface WorkspaceDoc {
 }
 
 /** Where AI money goes. */
-export type AIKind = "extract" | "script" | "moments" | "voice" | "agent" | "editor";
+export type AIKind = "extract" | "script" | "moments" | "voice" | "agent" | "editor" | "format";
 
 export interface MonthUsage {
   /** Dollars and calls per kind of AI work, as billed by the provider. */

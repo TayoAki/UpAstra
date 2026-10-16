@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { stickerGraph, type Sticker } from "./overlays";
 
 // ffmpeg plumbing. Footage is read straight from its public link: ffmpeg
 // seeks with HTTP range requests, so a 1.5 GB source never lands on disk —
@@ -25,7 +26,7 @@ export function netArgs(url: string): string[] {
 // open further files or URLs. So every input may only be a real audio/video
 // container, read from a local file or (for our own storage's signed links)
 // over HTTP(S), and never anything it points to.
-const FORMATS = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,flv,mpegts,wav,mp3,aac,ogg,flac,s16le,concat";
+const FORMATS = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,flv,mpegts,wav,mp3,aac,ogg,flac,s16le,concat,image2,png_pipe";
 const protocolsFor = (input: string) => (/^https?:/.test(input) ? "https,http,tls,tcp,crypto" : "file");
 
 /** Add input restrictions in front of every ffmpeg `-i` (and ffprobe's input). */
@@ -136,7 +137,7 @@ export async function concat(listFile: string, out: string) {
  * the final encode never sees mismatched audio formats (older ffmpeg builds
  * refuse to change filter inputs mid-stream).
  */
-export async function compose(opts: { video: string; ass: string; voice?: string; duration: number; out: string; fontsDir?: string; workDir: string }) {
+export async function compose(opts: { video: string; ass: string; voice?: string; duration: number; out: string; fontsDir?: string; workDir: string; stickers?: Sticker[] }) {
   const wav = (name: string) => `${opts.workDir}/${name}.wav`;
   const pcm = ["-vn", "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le"];
   await run("ffmpeg", ["-v", "error", "-y", "-i", opts.video, ...pcm, "-t", opts.duration.toFixed(2), wav("game")]);
@@ -153,11 +154,14 @@ export async function compose(opts: { video: string; ass: string; voice?: string
   }
   const assEsc = opts.ass.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
   const fonts = opts.fontsDir ? `:fontsdir=${opts.fontsDir.replace(/:/g, "\\:")}` : "";
+  // Emoji stickers are images laid over the subtitled video, each with its own pop.
+  const st = stickerGraph(opts.stickers ?? [], 2, "sub", "v");
   await run("ffmpeg", [
     "-v", "error", "-y",
     "-i", opts.video,
     "-i", wav("mix"),
-    "-filter_complex", `[0:v]ass='${assEsc}'${fonts}[v]`,
+    ...st.inputs,
+    "-filter_complex", `[0:v]ass='${assEsc}'${fonts}[sub];${st.graph}`,
     "-map", "[v]", "-map", "1:a",
     "-t", opts.duration.toFixed(2),
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",

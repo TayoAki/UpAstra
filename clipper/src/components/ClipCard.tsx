@@ -1,15 +1,18 @@
 import { useState } from "react";
-import { Check, Copy, Pencil, Send, Trash2, X } from "lucide-react";
+import { Check, Copy, GitBranch, Pencil, Send, Trash2, Trophy, X } from "lucide-react";
+import { fmtNum } from "../../shared/rules";
 import { words, WORDS_PER_SECOND } from "../../shared/rules";
 import type { Campaign, Clip } from "../../shared/types";
 import { api } from "../api";
-import { useApp } from "../store";
+import { go, useApp } from "../store";
 import { Checks, ClipBadge } from "./ui";
 import { PostForm } from "./PostForm";
+import { OverlayEditor } from "./OverlayEditor";
 import { RenderPanel } from "./RenderPanel";
 
 export function ClipCard({ clip, campaign, showCampaign }: { clip: Clip; campaign: Campaign; showCampaign?: boolean }) {
-  const { run, busy, toast } = useApp();
+  const { state, run, busy, toast } = useApp();
+  const [variants, setVariants] = useState<{ n: number; cta: boolean } | null>(null);
   const [edit, setEdit] = useState(false);
   const [posting, setPosting] = useState(false);
   const [d, setD] = useState({ hook: clip.hook, narration: clip.narration, onScreenText: clip.onScreenText.join("\n"), caption: clip.caption, lengthSec: clip.lengthSec });
@@ -41,11 +44,24 @@ export function ClipCard({ clip, campaign, showCampaign }: { clip: Clip; campaig
               {clip.traits.strategy === "test" ? "Test" : "Proven pattern"}
             </span>
           )}
+          {clip.formatId && (
+            <button className="badge info clickable-text" title="Written in a format cloned from a reference video" onClick={() => go(`/formats/${clip.formatId}`)}>
+              Format: {state?.formats?.find((f) => f.id === clip.formatId)?.name ?? "deleted"}
+            </button>
+          )}
+          {clip.variantLabel && (
+            <span className="badge info" title="A/B variant: same clip, different opening">
+              Variant {clip.variantLabel}
+            </span>
+          )}
           <span className="small muted">
             {clip.angle} · {clip.lengthSec}s{showCampaign ? ` · ${campaign.name}` : ""}
           </span>
         </div>
         <div className="row">
+          <button className="btn sm ghost" title="A/B variants: same clip, new hooks" onClick={() => setVariants(variants ? null : { n: 3, cta: false })}>
+            <GitBranch size={14} />
+          </button>
           <button className="btn sm ghost" title="Copy script" onClick={copyScript}>
             <Copy size={14} />
           </button>
@@ -59,6 +75,27 @@ export function ClipCard({ clip, campaign, showCampaign }: { clip: Clip; campaig
           </button>
         </div>
       </div>
+
+      {variants && (
+        <div className="variant-form mt">
+          <span className="small">Write</span>
+          <select className="select sm" value={variants.n} onChange={(e) => setVariants({ ...variants, n: Number(e.target.value) })}>
+            {[2, 3, 4, 5].map((x) => (
+              <option key={x} value={x}>
+                {x} variants
+              </option>
+            ))}
+          </select>
+          <span className="small">with new hooks</span>
+          <label className="row small">
+            <input type="checkbox" checked={variants.cta} onChange={(e) => setVariants({ ...variants, cta: e.target.checked })} /> and new call-to-action lines
+          </label>
+          <button className="btn sm primary" disabled={busy} onClick={() => run(() => api.makeVariants(clip.id, variants.n, variants.cta), `${variants.n} variants written — post them side by side`).then((r) => r && setVariants(null))}>
+            <GitBranch size={14} /> {busy ? "Writing…" : "Write variants"}
+          </button>
+        </div>
+      )}
+      <VariantResults clip={clip} />
 
       {edit ? (
         <div className="col mt">
@@ -129,6 +166,8 @@ export function ClipCard({ clip, campaign, showCampaign }: { clip: Clip; campaig
         </>
       )}
 
+      {clip.status !== "rejected" && <OverlayEditor clip={clip} />}
+
       <p className="small" style={{ marginBottom: 6 }}>
         <span className="muted">Caption:</span> {clip.caption} <span className="info">{clip.hashtags.join(" ")}</span>
       </p>
@@ -166,6 +205,30 @@ export function ClipCard({ clip, campaign, showCampaign }: { clip: Clip; campaig
         {clip.cost > 0 && <span className="small faint">${clip.cost.toFixed(3)} to write</span>}
       </div>
       {posting && <PostForm campaign={campaign} clip={clip} onClose={() => setPosting(false)} />}
+    </div>
+  );
+}
+
+/** How each variant of this clip's group is doing (views from logged or synced posts). */
+function VariantResults({ clip }: { clip: Clip }) {
+  const { state } = useApp();
+  if (!clip.variantGroup || !state) return null;
+  const group = state.clips.filter((x) => x.variantGroup === clip.variantGroup).sort((a, b) => (a.variantLabel ?? "").localeCompare(b.variantLabel ?? ""));
+  if (group.length < 2 || group[0].id !== clip.id) return null; // shown once, on the first variant
+  const views = (id: string) => state.posts.filter((p) => p.clipId === id && p.status !== "rejected" && p.status !== "scheduled" && p.status !== "failed").reduce((s, p) => s + p.metrics.views, 0);
+  const rows = group.map((x) => ({ x, v: views(x.id), posted: state.posts.some((p) => p.clipId === x.id) }));
+  const best = Math.max(...rows.map((r) => r.v));
+  return (
+    <div className="variant-results mt">
+      <div className="small muted">A/B test · {group.length} variants</div>
+      {rows.map(({ x, v, posted }) => (
+        <div key={x.id} className="variant-row">
+          <strong>{x.variantLabel}</strong>
+          <span className="grow ellipsis small">“{x.hook}”</span>
+          <span className="small">{posted ? `${fmtNum(v)} views` : <span className="faint">not posted</span>}</span>
+          {best > 0 && v === best && <Trophy size={14} className="pos" aria-label="Most views" />}
+        </div>
+      ))}
     </div>
   );
 }

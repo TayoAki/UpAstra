@@ -1,5 +1,6 @@
 import { groupWords, resolveCaptionStyle, type CaptionStyle } from "../shared/caption-styles";
 import { H, VIDEO_TOP, W } from "./media";
+import { overlayEvents, overlayStyles, type OverlayLayout, type Placed } from "./overlays";
 
 // Captions as an ASS subtitle file burned in by ffmpeg: the hook across the
 // top, the voiceover in 2–3 word punches under the footage, and a call to
@@ -101,6 +102,8 @@ export function buildAss(o: {
   language?: string;
   /** Frame size; defaults to UGCMediaClips's 1080×1920. Style sizes scale with the short side. */
   frame?: { width: number; height: number };
+  /** Comments, pop-up text and tier boards timed to the voiceover. */
+  overlays?: { placed: Placed[]; layout: OverlayLayout };
 }): string {
   const FW = o.frame?.width ?? W;
   const FH = o.frame?.height ?? H;
@@ -129,6 +132,7 @@ export function buildAss(o: {
     `Style: Hook,${font},${px(76)},${white},${white},&H00000000,&H64000000,${bold},0,0,0,100,100,0,0,1,${px(7)},${px(2)},8,${px(70)},${px(70)},${Math.round(((VIDEO_TOP - 330) / H) * FH)},1`,
     `Style: Cap,${font},${px(st.size)},${white},${white},${boxed ? back : assColor(st.outline)},${back},${bold},0,0,0,100,100,0,0,${boxed ? 3 : 1},${px(st.outlineWidth)},${px(st.shadow)},5,${px(70)},${px(70)},0,1`,
     `Style: Cta,${font},${px(72)},&H00FFFFFF,&H00FFFFFF,${accent},${accent},${bold},0,0,0,100,100,0,0,3,${px(26)},0,5,${px(90)},${px(90)},0,1`,
+    ...(o.overlays?.placed.length ? overlayStyles(o.overlays.layout) : []),
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -157,6 +161,7 @@ export function buildAss(o: {
     const text = words.map((x) => esc(cased(x.text))).join(joiner);
     lines.push(`Dialogue: 0,${ts(g.start)},${ts(end)},Cap,,0,0,0,,{${place}${anim}}${text}`);
   }
-  if (o.cta) lines.push(`Dialogue: 2,${ts(o.ctaFrom)},${ts(o.duration)},Cta,,0,0,0,,{\\fad(150,0)}${esc(o.cta)}`);
+  if (o.overlays?.placed.length) lines.push(...overlayEvents(o.overlays.placed, o.overlays.layout));
+  if (o.cta) lines.push(`Dialogue: 9,${ts(o.ctaFrom)},${ts(o.duration)},Cta,,0,0,0,,{\\fad(150,0)}${esc(o.cta)}`);
   return lines.join("\n") + "\n";
 }

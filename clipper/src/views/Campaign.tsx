@@ -297,7 +297,9 @@ function BriefTab({ c }: { c: CampaignWithStats }) {
 function ClipsTab({ c }: { c: CampaignWithStats }) {
   const { state, run, busy } = useApp();
   const [n, setN] = useState(3);
+  const [formatId, setFormatId] = useState("");
   const [filter, setFilter] = useState("open");
+  const formats = (state!.formats ?? []).filter((f) => f.status === "ready");
   const all = state!.clips.filter((x) => x.campaignId === c.id);
   const clips = all.filter((x) => (filter === "open" ? !["posted", "rejected"].includes(x.status) : filter === "all" ? true : x.status === filter));
   return (
@@ -317,7 +319,17 @@ function ClipsTab({ c }: { c: CampaignWithStats }) {
               </option>
             ))}
           </select>
-          <button className="btn primary" disabled={busy} onClick={() => run(() => api.planClips(c.id, n), `${n} clip plan(s) written`)}>
+          {formats.length > 0 && (
+            <select className="select" style={{ width: "auto", maxWidth: 220 }} value={formatId} onChange={(e) => setFormatId(e.target.value)} title="Write the plans in a format cloned from a reference video">
+              <option value="">Any format</option>
+              {formats.map((f) => (
+                <option key={f.id} value={f.id}>
+                  Format: {f.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <button className="btn primary" disabled={busy} onClick={() => run(() => api.planClips(c.id, n, formatId || undefined), `${n} clip plan(s) written`)}>
             <Sparkles size={15} /> {busy ? "Writing…" : "Write clip plans"}
           </button>
         </div>

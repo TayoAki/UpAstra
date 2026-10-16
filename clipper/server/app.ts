@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { campaignStats } from "../shared/rules";
-import type { AdminUsage, AgentRun, CaptionJob, Campaign, CampaignBrief, Clip, ClipStatus, Me, Platform, Post, PostStatus, ServiceStatus, SocialAccount, VoiceOption } from "../shared/types";
+import type { AdminUsage, AgentRun, ReferenceFormat, CaptionJob, Campaign, CampaignBrief, Clip, ClipStatus, Me, Platform, Post, PostStatus, ServiceStatus, SocialAccount, VoiceOption } from "../shared/types";
 import { CLIP_STATUSES, PLATFORMS, POST_STATUSES, VOICES } from "../shared/types";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { bearerAgentKey, clearSession, clientKey, clearThrottle, hashAgentKey, hashPassword, humansOnly, issueSession, newAgentKey, passwordFingerprint, readToken, requireWorkspace, signToken, signVideoLink, throttle, verifyPassword, verifyVideoLink } from "./auth";
@@ -30,6 +30,9 @@ import { probe, run } from "./media";
 import { storageKind, videoStore } from "./storage";
 import { checkClip } from "../shared/rules";
 import { planClips, type PlanGuide } from "./scripts";
+import { makeVariants } from "./variants";
+import { enqueueFormat, formatForPlanner } from "./formats";
+import { sanitizeOverlays } from "../shared/overlays";
 import { analyze, testShare } from "../shared/learning";
 import { writeInsights } from "./insights";
 import { driveThumb, readBriefUrl, resolveFootage } from "./sources";
@@ -100,6 +103,7 @@ function stateFor(): unknown {
     insights: doc.insights ?? {},
     brand: doc.brand ?? {},
     captionJobs: (doc.captionJobs ?? []).map(({ words, ...j }) => ({ ...j, wordCount: words.length })),
+    formats: (doc.formats ?? []).map(({ transcript, cuts, ...f }) => ({ ...f, hasTranscript: !!transcript, cutCount: cuts?.length ?? 0 })),
     agentRuns: (doc.agentRuns ?? []).map((r) => ({ id: r.id, title: r.title, status: r.status, updatedAt: r.updatedAt, pending: !!r.pending })),
     activity: doc.activity.slice(0, 100),
     status: serviceStatus(),
@@ -762,6 +766,108 @@ export function createApp() {
     }),
   );
 
+  // ---- Formats: clone a viral video's structure ------------------------------
+  const findFormat = (id: string) => {
+    const f = getDoc().formats?.find((x) => x.id === id);
+    if (!f) throw new HttpError(404, "Format not found");
+    return f;
+  };
+  const addFormat = (req: Request, name: string, sourceKey: string, source: ReferenceFormat["source"]) => {
+    const at = now();
+    const f: ReferenceFormat = { id: newId("fmt"), name: name.slice(0, 80) || "Reference video", status: "analyzing", step: "Queued", source, sourceKey, cost: 0, createdAt: at, updatedAt: at };
+    try {
+      enqueueFormat({ workspaceId: req.workspaceId!, formatId: f.id });
+    } catch (err) {
+      void videoStore().deletePrefix(sourceKey).catch(() => undefined);
+      throw err;
+    }
+    const doc = getDoc();
+    doc.formats = [f, ...(doc.formats ?? [])].slice(0, 100);
+    log({ kind: "clip", message: `Breaking down "${f.name}" into a reusable format.` });
+    save();
+    return f;
+  };
+
+  api.post(
+    "/formats",
+    wrap(async (req, res) => {
+      const type = String(req.headers["content-type"] ?? "").split(";")[0];
+      if (!/^(video\/(mp4|quicktime|webm|x-matroska|x-m4v)|application\/octet-stream)$/.test(type)) throw new HttpError(415, "Upload a video file (MP4, MOV, WebM or MKV)");
+      spendAI(req.workspaceId!, 1);
+      const name = decodeURIComponent(String(req.headers["x-file-name"] ?? "reference.mp4")).slice(0, 120);
+      const key = `${req.workspaceId}/formats/${newId("src")}/reference${path.extname(name).toLowerCase().replace(/[^.\w]/g, "") || ".mp4"}`;
+      try {
+        await saveStream(key, req, type);
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+      const f = addFormat(req, String(req.query.name ?? "") || name.replace(/\.\w{2,4}$/, ""), key, { kind: "upload", fileName: name });
+      res.status(201).json({ format: f, state: stateFor() });
+    }),
+  );
+
+  api.post(
+    "/formats/from-url",
+    wrap(async (req, res) => {
+      const url = String(req.body?.url ?? "").trim();
+      if (!/^https?:\/\//.test(url)) throw new HttpError(400, "Give a public http(s) link to a video file");
+      spendAI(req.workspaceId!, 1);
+      const r = await safeFetch(url, { signal: AbortSignal.timeout(10 * 60_000) });
+      if (!r.ok || !r.body) throw new HttpError(422, `That link returned ${r.status}`);
+      if (/text\/html/.test(r.headers.get("content-type") ?? ""))
+        throw new HttpError(422, "That link is a web page, not a video file. For TikTok, Instagram or YouTube, download the video and upload it here.");
+      const key = `${req.workspaceId}/formats/${newId("src")}/reference.mp4`;
+      try {
+        await saveStream(key, Readable.fromWeb(r.body as never), "video/mp4");
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+      const f = addFormat(req, String(req.body?.name ?? "") || decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "").replace(/\.\w{2,4}$/, ""), key, { kind: "url", url });
+      res.status(201).json({ format: f, state: stateFor() });
+    }),
+  );
+
+  api.get("/formats/:id", (req, res) => res.json(findFormat(String(req.params.id))));
+
+  api.put("/formats/:id", (req, res) => {
+    const f = findFormat(String(req.params.id));
+    if (typeof req.body?.name === "string" && req.body.name.trim()) f.name = req.body.name.trim().slice(0, 80);
+    if (typeof req.body?.recipe === "string" && f.breakdown) f.breakdown.recipe = req.body.recipe.slice(0, 2000);
+    f.updatedAt = now();
+    save();
+    res.json(stateFor());
+  });
+
+  api.post("/formats/:id/analyze", (req, res) => {
+    const f = findFormat(String(req.params.id));
+    if (f.status === "analyzing") throw new HttpError(409, "Already working on it");
+    spendAI(req.workspaceId!, 1);
+    enqueueFormat({ workspaceId: req.workspaceId!, formatId: f.id });
+    Object.assign(f, { status: "analyzing", step: "Queued", error: undefined, resumes: undefined, updatedAt: now() });
+    save();
+    res.status(202).json(stateFor());
+  });
+
+  api.get(
+    "/formats/:id/video",
+    wrap(async (req, res) => {
+      const f = findFormat(String(req.params.id));
+      await streamKey(req, res, f.sourceKey, "video/mp4", f.name);
+    }),
+  );
+
+  api.delete(
+    "/formats/:id",
+    wrap(async (req, res) => {
+      const f = findFormat(String(req.params.id));
+      const doc = getDoc();
+      doc.formats = (doc.formats ?? []).filter((x) => x.id !== f.id);
+      await videoStore().deletePrefix(f.sourceKey.replace(/[^/]+$/, "")).catch(() => undefined);
+      save();
+      res.json(stateFor());
+    }),
+  );
+
   api.get("/captions/:id", (req, res) => res.json(findJob(String(req.params.id))));
 
   api.put("/captions/:id", (req, res) => {
@@ -1021,11 +1127,13 @@ export function createApp() {
       const doc = getDoc();
       const existing = doc.clips.filter((x) => x.campaignId === c.id);
       const guide = guideFor(c.id, n);
-      const r = await planClips(c, n, existing, guide);
+      const fmt = req.body?.formatId ? getDoc().formats?.find((f) => f.id === String(req.body.formatId)) : undefined;
+      if (req.body?.formatId && fmt?.status !== "ready") throw new HttpError(400, "That format isn't ready yet");
+      const r = await planClips(c, n, existing, guide, fmt ? { id: fmt.id, plan: formatForPlanner(fmt) } : undefined);
       doc.clips.unshift(...r.clips);
       const ok = r.clips.filter((x) => x.qa.pass).length;
       const learned = guide.basedOnPosts ? ` Guided by ${count(guide.basedOnPosts, "post")}: ${count(r.clips.filter((x) => x.traits?.strategy === "test").length, "test")}.` : "";
-      log({ campaignId: c.id, kind: "clip", message: `${r.clips.length} clip plan(s) written by ${r.model} — ${ok} pass every rule.${learned}`, cost: r.cost });
+      log({ campaignId: c.id, kind: "clip", message: `${r.clips.length} clip plan(s) written by ${r.model}${fmt ? ` in the "${fmt.name}" format` : ""} — ${ok} pass every rule.${learned}`, cost: r.cost });
       save();
       res.status(201).json(stateFor());
     }),
@@ -1039,6 +1147,7 @@ export function createApp() {
     if (Array.isArray(b.onScreenText)) clip.onScreenText = b.onScreenText.map(String).slice(0, 20);
     if (Array.isArray(b.hashtags)) clip.hashtags = b.hashtags.map(String).slice(0, 30);
     if (Number(b.lengthSec) > 0) clip.lengthSec = Math.min(600, Math.round(Number(b.lengthSec)));
+    if (Array.isArray(b.overlays)) clip.overlays = sanitizeOverlays(b.overlays, undefined, () => newId("ov"));
     if (CLIP_STATUSES.includes(b.status)) {
       if (b.status === "approved" && !clip.qa.pass && !b.override) throw new HttpError(400, "This plan fails a rule. Fix it, or approve anyway.");
       clip.status = b.status as ClipStatus;
@@ -1048,6 +1157,29 @@ export function createApp() {
     save();
     res.json(stateFor());
   });
+
+  // A/B variants: the same clip with different hooks (and optionally CTAs).
+  api.post(
+    "/clips/:id/variants",
+    wrap(async (req, res) => {
+      const base = findClip(String(req.params.id));
+      const c = findCampaign(base.campaignId);
+      const n = Math.max(1, Math.min(6, Number(req.body?.count) || 3));
+      spendAI(req.workspaceId!, 1);
+      const doc = getDoc();
+      const group = base.variantGroup ?? base.id;
+      const siblings = doc.clips.filter((x) => x.id !== base.id && x.variantGroup === group);
+      const r = await makeVariants(c, base, siblings, n, !!req.body?.newCta);
+      if (!r.clips.length) throw new HttpError(422, "Couldn't come up with new openings for this clip. Edit the hook and try again.");
+      if (!base.variantGroup) Object.assign(base, { variantGroup: group, variantLabel: "A", updatedAt: now() });
+      // Variants sit right after their group in the list.
+      const at = doc.clips.indexOf(base);
+      doc.clips.splice(at + 1, 0, ...r.clips);
+      log({ campaignId: c.id, kind: "clip", message: `${r.clips.length} variant(s) of "${base.title}" written (${r.clips.map((x) => `${x.variantLabel}: “${x.hook}”`).join("; ")}).`, cost: r.cost });
+      save();
+      res.status(201).json(stateFor());
+    }),
+  );
 
   // Rendering: approved plan → finished 9:16 video.
   api.post("/clips/:id/render", (req, res) => {
@@ -1094,6 +1226,7 @@ export function createApp() {
       ],
       hook: p.hook,
       cta: p.cta,
+      overlays: p.overlays ?? [],
       saveUrl: `/api/clips/${clip.id}/edited`,
       backUrl: `/#/c/${clip.campaignId}/clips`,
       ai: aiLive() ? { baseUrl: "/api/ai/v1", model: editorModel() } : undefined,

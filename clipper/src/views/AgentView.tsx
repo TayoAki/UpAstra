@@ -29,6 +29,10 @@ const TOOL_LABEL: Record<string, string> = {
   update_post_metrics: "Updated views",
   list_posts: "Checked posts",
   whats_working: "Checked what's working",
+  make_variants: "Wrote A/B variants",
+  clone_format: "Started breaking down a reference video",
+  list_formats: "Checked your formats",
+  get_format: "Read a format",
 };
 
 const STARTERS = [

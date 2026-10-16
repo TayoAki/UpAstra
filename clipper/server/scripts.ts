@@ -2,6 +2,7 @@ import { checkClip, words, WORDS_PER_SECOND } from "../shared/rules";
 import { classifyHook, formatOf } from "../shared/learning";
 import type { Campaign, Clip, FootageFile, HookStyle, Playbook } from "../shared/types";
 import { HOOK_STYLES } from "../shared/types";
+import { sanitizeOverlays } from "../shared/overlays";
 import { newId, now } from "./db";
 import { aiLive, chatJSON } from "./llm";
 
@@ -16,9 +17,11 @@ Write clip plans a video editor can execute from the campaign's own footage. Eac
 - only state facts from keyFacts — never invent features, rewards, codes, partnerships or results, and never break bannedClaims;
 - fit the length: about ${WORDS_PER_SECOND} spoken words per second;
 - list 2-5 shots, each naming an exact footage file from the list and the moment to cut (e.g. "last-second goal");
-- name its hook style, one of: ${HOOK_STYLES.filter((h) => h.id !== "other").map((h) => h.id).join(", ")}.
+- name its hook style, one of: ${HOOK_STYLES.filter((h) => h.id !== "other").map((h) => h.id).join(", ")};
+- optionally add 0-4 animated overlays that land on exact words of the voiceover ("cue" must be words copied from the narration): "comment" (a viewer comment the clip answers: {"kind":"comment","cue","user","text"}), "emoji" ({"kind":"emoji","cue","emoji"}) on a punchline, "text" (one big word or number: {"kind":"text","cue","text"}), or "tier" for ranking clips (one per ranked item: {"kind":"tier","cue","text","tier":"S|A|B|C|D"}). Use overlays only where they add something; never put a fact in an overlay that isn't in keyFacts.
 When "learning" is given, it is what this creator's past posts showed. Plans marked "proven" lean on what worked (proven traits, the style of the winning hooks — never copy them word for word) and avoid what underperformed. Plans marked "test" each try one untested option from the list instead, so the system keeps learning.
-Return JSON {"clips":[{"title","angle","hookStyle","hook","narration","onScreenText":[...],"cta","shots":[{"footageName","moment","seconds"}],"lengthSec","caption","hashtags":[...]}]}.`;
+When "format" is given, write every clip in that format: follow its recipe, beats, pacing, hook style and overlay pattern, adapted to this campaign's product, facts and footage (never copy the reference's words or claims).
+Return JSON {"clips":[{"title","angle","hookStyle","hook","narration","onScreenText":[...],"cta","shots":[{"footageName","moment","seconds"}],"lengthSec","caption","hashtags":[...],"overlays":[...]}]}.`;
 
 type Draft = Omit<Clip, "id" | "campaignId" | "status" | "qa" | "model" | "cost" | "createdAt" | "updatedAt"> & { hookStyle?: HookStyle };
 
@@ -58,6 +61,8 @@ function toDraft(raw: Record<string, unknown>, c: Campaign): Draft {
     lengthSec,
     caption: toStr(raw.caption),
     hashtags: toList(raw.hashtags).map((h) => (h.startsWith("#") ? h : `#${h}`)),
+    // Overlays must land on spoken words; ones cued to words that aren't in the voiceover are dropped.
+    overlays: sanitizeOverlays(raw.overlays, narration, () => newId("ov")),
   };
 }
 
@@ -154,7 +159,7 @@ function simulatedDrafts(c: Campaign, n: number, offset: number, plan?: (k: numb
 const tokensFor = (n: number) => Math.min(16_000, 1_500 + 1_300 * n);
 
 /** Write `n` new clip plans for a campaign, each QA-checked against the brief. */
-export async function planClips(c: Campaign, n: number, existing: Clip[], guide?: PlanGuide): Promise<{ clips: Clip[]; cost: number; model: string }> {
+export async function planClips(c: Campaign, n: number, existing: Clip[], guide?: PlanGuide, format?: { id: string; plan: Record<string, unknown> }): Promise<{ clips: Clip[]; cost: number; model: string }> {
   // The first plans repeat what's proven; the last `tests` try something new.
   const tests = guide ? Math.min(n, guide.tests) : n;
   const strategyOf = (i: number): "proven" | "test" => (i < n - tests ? "proven" : "test");
@@ -182,6 +187,7 @@ export async function planClips(c: Campaign, n: number, existing: Clip[], guide?
       count: n,
       avoidAngles: existing.map((x) => `${x.angle}: ${x.hook}`).slice(-20),
       learning,
+      format: format?.plan,
     }, tokensFor(n));
     model = r.model;
     cost = r.cost;
@@ -193,6 +199,7 @@ export async function planClips(c: Campaign, n: number, existing: Clip[], guide?
         campaign: briefForModel(c),
         footage,
         count: failing.length,
+        format: format?.plan,
         rewrite: failing.map((f) => ({ plan: drafts[f.i], failedChecks: f.qa.checks.filter((x) => !x.pass) })),
         instruction: "Rewrite each plan so every failed check passes. Keep the angle, hook and hookStyle.",
       }, tokensFor(failing.length));
@@ -211,6 +218,7 @@ export async function planClips(c: Campaign, n: number, existing: Clip[], guide?
   const clips = drafts.map<Clip>(({ hookStyle, ...d }, i) => ({
     ...d,
     traits: { hookStyle: hookStyle ?? classifyHook(d.hook), format: formatOf(d), strategy: learning ? strategyOf(i) : undefined },
+    formatId: format?.id,
     id: newId("clip"),
     campaignId: c.id,
     status: "draft",

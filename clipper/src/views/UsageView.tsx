@@ -12,6 +12,7 @@ const KIND_LABEL: Record<AIKind, string> = {
   voice: "Voiceovers",
   agent: "Clipping Agent",
   editor: "Editor AI chat",
+  format: "Breaking down reference videos",
 };
 
 const usd = (n: number) => (n > 0 && n < 0.01 ? `$${n.toFixed(4)}` : fmtUSD(Math.round(n * 100) / 100));

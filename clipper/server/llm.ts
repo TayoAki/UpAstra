@@ -3,13 +3,15 @@ import { checkAIBudget, recordAI } from "./usage";
 // The one place the app talks to a language model (OpenRouter, or any
 // OpenAI-compatible endpoint). Without a key, callers fall back to rules.
 
-export type AIRole = "extract" | "script" | "moments" | "voice";
+export type AIRole = "extract" | "script" | "moments" | "voice" | "format";
 
 const DEFAULTS: Record<AIRole, { env: string; model: string }> = {
   extract: { env: "EXTRACT_MODEL", model: "anthropic/claude-haiku-5.5" },
   script: { env: "SCRIPT_MODEL", model: "anthropic/claude-sonnet-5.5" },
   // Watches footage: Gemini takes video input through OpenRouter.
   moments: { env: "MOMENT_MODEL", model: "google/gemini-3.5-flash-lite" },
+  // Breaks a reference video down into a reusable format (video + audio in).
+  format: { env: "FORMAT_MODEL", model: "google/gemini-3.8-flash" },
   // Speaks voiceovers: an audio-output model on OpenRouter.
   voice: { env: "VOICE_MODEL", model: "openai/gpt-audio-mini" },
 };

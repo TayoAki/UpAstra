@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { BarChart3, Bot, CalendarDays, Captions, Clapperboard, Home, Inbox, Lightbulb, LogOut, Plus, Settings, ChevronRight, Search } from "lucide-react";
+import { BarChart3, Bot, CalendarDays, Captions, Clapperboard, Copy, Home, Inbox, Lightbulb, LogOut, Plus, Settings, ChevronRight, Search } from "lucide-react";
 import { fmtNum, fmtUSD } from "../shared/rules";
 import { api } from "./api";
 import { go, useApp, useRoute } from "./store";
@@ -7,6 +7,7 @@ import { CampaignView, CampaignRight } from "./views/Campaign";
 import { NewCampaign } from "./views/NewCampaign";
 import { LearningView } from "./views/Learning";
 import { CaptionsView } from "./views/CaptionsView";
+import { FormatsView } from "./views/FormatsView";
 import { ScheduleView } from "./views/ScheduleView";
 import { AgentView } from "./views/AgentView";
 import { Overview, OverviewRight } from "./views/Overview";
@@ -81,6 +82,7 @@ export function App() {
   else if (page === "posts") view = <PostsView />;
   else if (page === "learn") view = <LearningView scope={id ?? "all"} />;
   else if (page === "captions") view = <CaptionsView id={id} />;
+  else if (page === "formats") view = <FormatsView id={id} />;
   else if (page === "schedule") view = <ScheduleView />;
   else if (page === "agent") view = <AgentView id={id} />;
   else if (page === "settings") view = <SettingsView tab={id ?? "workspace"} />;
@@ -132,6 +134,7 @@ export function App() {
         {railBtn("/posts", page === "posts", <BarChart3 size={19} />, "Posts & earnings")}
         {railBtn("/schedule", page === "schedule", <CalendarDays size={19} />, "Schedule", state?.posts.filter((p) => p.status === "failed").length)}
         {railBtn("/captions", page === "captions", <Captions size={19} />, "Captions")}
+        {railBtn("/formats", page === "formats", <Copy size={19} />, "Formats — clone a viral video")}
         {railBtn("/learn", page === "learn", <Lightbulb size={19} />, "What's working")}
         {railBtn("/settings", page === "settings", <Settings size={19} />, "Settings")}
         <div className="spacer" />

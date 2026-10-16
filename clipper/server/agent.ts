@@ -31,7 +31,9 @@ How to work:
 - Plans are checked against the brief in code. Never approve a plan that fails a rule without telling the user which rule and why.
 - Captions: renders are captioned automatically in the workspace's style; use caption_video for other videos.
 - Publishing: list_social_accounts, then schedule_clip. Posting is public: the app asks the user to approve each schedule_clip — propose the accounts and times clearly. Convert times the user gives in their time zone to ISO 8601 with offset.
-- Use whats_working to lean on hooks and formats that performed.
+- Use whats_working to lean on hooks and formats that performed. To A/B test openings, make_variants on a clip.
+- To copy a viral video's structure: clone_format (a direct video link), wait for get_format to be ready, then plan_clips with formatId.
+- Clips can carry overlays timed to words (comment bubbles, emoji, pop-up words, tier lists) via edit_clip; cues must be exact words from the voiceover.
 - Don't invent payouts, views or links; report what the tools return. Keep replies short: what you did, links, and what needs the user.`;
 
 /** After a restart the full transcript is gone: continue from what the user saw. */

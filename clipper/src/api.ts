@@ -1,5 +1,5 @@
 import type { BrandKit, CaptionOverrides } from "../shared/caption-styles";
-import type { AdminUsage, CaptionJob, UsageReport } from "../shared/types";
+import type { AdminUsage, CaptionJob, ReferenceFormat, UsageReport } from "../shared/types";
 import type { Activity, Campaign, CampaignBrief, CampaignStats, Clip, Insights, LearningReport, Me, Post, ServiceStatus, SocialAccount } from "../shared/types";
 
 export type CampaignWithStats = Campaign & { stats: CampaignStats };
@@ -11,6 +11,7 @@ export interface State {
   insights: Record<string, Insights>;
   brand: BrandKit;
   captionJobs: (Omit<CaptionJob, "words"> & { wordCount: number })[];
+  formats: (Omit<ReferenceFormat, "transcript" | "cuts"> & { hasTranscript: boolean; cutCount: number })[];
   agentRuns: { id: string; title: string; status: string; updatedAt: string; pending: boolean }[];
   activity: Activity[];
   status: ServiceStatus;
@@ -82,7 +83,13 @@ export const api = {
   deleteCampaign: (id: string) => req<State>(`/campaigns/${id}`, "DELETE"),
   reextract: (id: string) => req<State>(`/campaigns/${id}/reextract`, "POST", {}),
   refreshFootage: (id: string) => req<State>(`/campaigns/${id}/footage/refresh`, "POST", {}),
-  planClips: (id: string, count: number) => req<State>(`/campaigns/${id}/clips`, "POST", { count }),
+  planClips: (id: string, count: number, formatId?: string) => req<State>(`/campaigns/${id}/clips`, "POST", { count, formatId }),
+  formatFromUrl: (url: string, name?: string) => req<{ format: ReferenceFormat; state: State }>("/formats/from-url", "POST", { url, name }),
+  getFormat: (id: string) => req<ReferenceFormat>(`/formats/${id}`),
+  updateFormat: (id: string, b: { name?: string; recipe?: string }) => req<State>(`/formats/${id}`, "PUT", b),
+  analyzeFormat: (id: string) => req<State>(`/formats/${id}/analyze`, "POST", {}),
+  deleteFormat: (id: string) => req<State>(`/formats/${id}`, "DELETE"),
+  makeVariants: (id: string, count: number, newCta: boolean) => req<State>(`/clips/${id}/variants`, "POST", { count, newCta }),
   updateClip: (id: string, b: Partial<Clip> & { override?: boolean }) => req<State>(`/clips/${id}`, "PUT", b),
   deleteClip: (id: string) => req<State>(`/clips/${id}`, "DELETE"),
   renderClip: (id: string, voice: string, override?: boolean) => req<State>(`/clips/${id}/render`, "POST", { voice, override }),

@@ -42,7 +42,8 @@ export function AppProvider({ me, setMe, children }: { me: Me; setMe: (m: Me | n
   // While a render is running, keep its progress fresh.
   const rendering =
     !!state?.clips.some((c) => c.render && !["done", "failed"].includes(c.render.status)) ||
-    !!state?.captionJobs?.some((j) => j.status === "transcribing" || j.status === "rendering");
+    !!state?.captionJobs?.some((j) => j.status === "transcribing" || j.status === "rendering") ||
+    !!state?.formats?.some((f) => f.status === "analyzing");
   useEffect(() => {
     if (!rendering) return;
     const t = setInterval(() => void refresh(), 4000);

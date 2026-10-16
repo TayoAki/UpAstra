@@ -35,6 +35,7 @@ interface EditPack {
   accent?: string;
   fonts?: { family: string; url: string }[];
   cta?: { text: string; from: number };
+  overlays?: { kind: "comment" | "emoji" | "text" | "tier"; text: string; start: number; end: number; tier?: string }[];
   saveUrl: string;
   backUrl: string;
   ai?: { baseUrl: string; model: string };
@@ -143,6 +144,30 @@ async function buildTimeline(pack: EditPack, progress: (s: string) => void) {
   if (pack.cta?.text) {
     const c = store().createTextClip(textTrack, pack.cta.from, wrap(pack.cta.text, 20), Math.max(0.5, pack.duration - pack.cta.from), { ...bold, fontSize: 64, color: "#ffffff", backgroundColor: pack.accent ?? ACCENT });
     if (c) store().updateTextTransform(c.id, { position: { x: 0.5, y: 0.5 } });
+  }
+  // Overlays as editable text on their own row (the tier board's coloured rows stay in the render only).
+  if (pack.overlays?.length) {
+    const ovTrack = await newTrack("video", "Overlays", undefined, 0);
+    const tiers = ["S", "A", "B", "C", "D"];
+    let emojiSpot = 0;
+    for (const o of pack.overlays) {
+      const len = Math.max(0.3, o.end - o.start);
+      if (o.kind === "comment") {
+        const c = store().createTextClip(ovTrack, o.start, wrap(o.text, 30), len, { ...bold, fontWeight: 600, fontSize: 40, color: "#1a1c20", backgroundColor: "#ffffff", textAlign: "left" });
+        if (c) store().updateTextTransform(c.id, { position: { x: 0.5, y: 0.36 } });
+      } else if (o.kind === "emoji") {
+        const c = store().createTextClip(ovTrack, o.start, o.text, len, { ...bold, fontSize: 180, color: "#ffffff" });
+        const spots = [{ x: 0.8, y: 0.36 }, { x: 0.2, y: 0.66 }, { x: 0.8, y: 0.66 }, { x: 0.2, y: 0.36 }];
+        if (c) store().updateTextTransform(c.id, { position: spots[emojiSpot++ % spots.length] });
+      } else if (o.kind === "tier") {
+        const row = Math.max(0, tiers.indexOf(o.tier ?? "C"));
+        const c = store().createTextClip(ovTrack, o.start, `${o.tier ?? "C"} · ${o.text}`, len, { ...bold, fontSize: 46, color: "#ffffff", strokeColor: "#000000", strokeWidth: 5, textAlign: "left" });
+        if (c) store().updateTextTransform(c.id, { position: { x: 0.3, y: 0.33 + row * 0.065 } });
+      } else {
+        const c = store().createTextClip(ovTrack, o.start, cased(o.text), len, { ...bold, fontSize: 120, color: "#ffffff", strokeColor: pack.accent ?? ACCENT, strokeWidth: 9 });
+        if (c) store().updateTextTransform(c.id, { position: { x: 0.5, y: 0.5 } });
+      }
+    }
   }
   for (const [i, cap] of pack.captions.entries()) {
     await store().addSubtitle({

@@ -99,6 +99,45 @@ With an [Outstand](https://www.outstand.so/) API key, users connect their own Ti
 
 **MCP tools:** `list_social_accounts`, `schedule_clip`, `list_schedule` and `cancel_scheduled_post`.
 
+## Formats (clone a viral video)
+
+**Formats** in the rail breaks a reference short (upload, or a direct video link) into a reusable format:
+- the hook (text, style, length);
+- the beats with timings;
+- pacing (scene cuts found by ffmpeg);
+- the closest caption style;
+- overlays, voice, the call to action;
+- a recipe.
+
+How it's built:
+- The reference is transcribed with whisper.cpp. A 2 fps preview with timestamps and audio goes to `FORMAT_MODEL` (default `google/gemini-3.8-flash`, about $0.01 per video).
+- **Write clip plans** with a format (from the format page, or the format picker on a campaign's Clips tab). The planner follows the recipe with the campaign's own footage, facts and rules. It gets the format's structure, never the reference's words.
+- References can be up to 3 minutes. TikTok, Instagram and YouTube page links can't be read; download the video and upload it.
+- MCP tools: `clone_format`, `list_formats`, `get_format`, and `plan_clips` with `formatId`.
+
+## A/B variants
+
+The branch button on a clip writes 2–5 variants:
+- Each variant has a new hook in a hook style the clip hasn't tried, and optionally a new call-to-action line.
+- The shots and the rest of the script stay the same.
+- The original becomes **A**, and the variants **B, C, D…**. Each is checked against the brief, and its length grows to fit a longer opening, within the brief's limit.
+- The first card in a group shows views per variant once they're posted, with the leader marked.
+- MCP tool: `make_variants`.
+
+## Overlays timed to words
+
+A clip can carry up to 12 overlays, each on exact words of its voiceover:
+- **comment bubble**: a "Reply to @user" card;
+- **emoji pop**;
+- **pop-up text**;
+- **tier list item**: drops into an S–D board that stays until the call to action.
+
+How they work:
+- The plan writer adds 0–4 where they help (only on words it actually wrote). You can add or remove them on the clip card. MCP: `edit_clip` with `overlays`.
+- Renders place them on the word timings from speech-to-text. Comments, text and the tier board are drawn in the subtitle track (libass). Emoji are [Noto Emoji](https://github.com/googlefonts/noto-emoji) images (Apache 2.0), fetched once and cached in the bucket, then laid over by ffmpeg.
+- Overlays whose words aren't in the voiceover are left out and noted in Activity.
+- In the editor, overlays open as editable text on an "Overlays" row. The tier board's coloured rows exist in the render only.
+
 ## Clipping Agent
 
 The **Agent** page is a chat that runs the whole loop for you: give it a brief and it can add the campaign, find moments, plan, check and render clips, caption videos and schedule posts. It uses the same MCP tools that outside agents get, connected in memory and acting as the signed-in user, so the same brief rules, limits and Activity log apply.
