@@ -715,3 +715,50 @@ All files in the six packages. Line counts are `wc -l` at the studied commit; fo
 | packages/region-evidence/test/region-evidence.test.ts | 28 | ✅ |
 
 The comparison is based on these of our files, read in full: `clipper/shared/overlays.ts` (56) and `clipper/server/overlays.ts` (310). The call sites were read: `clipper/server/render.ts:300-321`, `clipper/server/media.ts:140-164` and `clipper/server/captions.ts:125-164`.
+
+## Check
+
+Second-reviewer check against hypit `dc2b7a8f31b1ef1443a79ca448548d69e3ceb6a0` and `clipper/` as it is now.
+
+**Totals.** About 165 claims checked, covering every `path:line` citation in §§1–7 and the "Our app" comparisons:
+
+| Outcome | Count |
+|---|---|
+| Confirmed | ~153 |
+| Corrected | 12 |
+| Removed | 0 |
+| Newly marked unverified | 0 |
+
+The existing *(unverified)* marks stand. Six omissions were added.
+
+**Spot-confirmed priority items:**
+- Column stage defaults: code `0.66/0.73/356` (`style.ts:237-238`) vs manifest `0.5/0.24/132` (`manifest.ts:381-386`).
+- `fadeOutSamples: 0` (`render.ts:687`) vs "fades in and out" (`manifest.ts:303-304`).
+- `out-back` missing from the comment-sticker `enter-easing` vocabulary (`manifest.ts:236`).
+- The emoji-reveal `blob` schema uses `digest` (length 71, `manifest.ts:45-50`), while `BlobRef` carries `resource` (`packages/protocol/src/value.ts:11-17`). The schema is exported but not attached to manifest types.
+
+**Corrections:**
+- **§0:** the shared shape fits four packages, not five, and only three have `studio.ts`.
+- **TierBoard glide:** it doesn't always end at the window end. A window of `appearFrames` or less gives no glide and no move sound.
+- **Column breathing keyframes:** the exact offsets are now given.
+- **Comment-sticker `out-back`:** only the vocabulary list omits it. The schema at `:94` has it.
+- **Depth-stack pose rotation:** the current pose's rotation is added.
+- **Depth-stack reflow-fit:** it skips the first stage.
+- **Depth-stack test count:** 15, not 14.
+- **Our tier rows:** the collision starts at item 4, not item 7. The +26 px offset is smaller than the 38/48 px font, and items 7–9 overprint 4–6 exactly.
+- **Our tier width:** the overflow depends on the font. Poppins, Anton and Bebas fit a 22-char name at 38 px in the 283 px slot; Archivo Black and all-caps wide names overflow. These widths were measured from glyph advances, not rendered through libass.
+- **Our comment stacking:** three mutually overlapping comments stack without colliding, but with 3-line bodies they run 86 px past the band. The real collisions are with a non-previous comment, and with all over-board comments, which share one y.
+- **§7 fade-up row:** "exact" → "close".
+- **Ideas #4:** "7+" → "4th item".
+
+**Omissions added:**
+- Studio labels the ranking sound fade "Fade In".
+- With `out-back`, the comment-sticker enter opacity uses a different curve.
+- The avatar fallback defaults to `none`.
+- The depth-stack next-step tone defaults.
+- The depth-stack Surface-records test.
+- A challenge to the 90% ASS/ffmpeg verdict: image-first components, ASS/overlay z-order, group-opacity fades, and libass `\fs` vs CSS px.
+
+**Coverage:** every file in the six packages is listed, with line counts matching `wc -l`. The TS totals (5,011 / 1,992 / 756 / 2,650 / 1,550 / 312) and all-file totals match. No files added.
+
+**Verdict: Verified ✅.** About 7% of claims needed correction, and coverage is complete. The corrections that matter most are in our own overlays (tier collision from item 4, font-dependent overflow, the two real comment-collision cases), plus the qualified 90% figure.

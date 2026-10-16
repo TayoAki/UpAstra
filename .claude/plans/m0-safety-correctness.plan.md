@@ -2,7 +2,7 @@
 
 **Source PRD**: `.claude/prds/ugcmediaclips-v2.prd.md`
 **Selected Milestone**: 0 — Safety & correctness fixes
-**Complexity**: Small (4 independent batches, B0.1–B0.4 in `clipper/docs/BUILD-PLAN.md`)
+**Complexity**: Small–Medium (5 independent batches, B0.1–B0.5 in `clipper/docs/BUILD-PLAN.md`)
 
 ## Summary
 Four small fixes the hypit study found in our pipeline:
@@ -32,6 +32,7 @@ Each fix ships separately, test first.
 | `clipper/tests/proxy-time.test.ts` | CREATE | proxy timestamp accuracy test |
 | `clipper/tests/color.test.ts` | CREATE | bars-through-pipeline colour test |
 | `clipper/tests/render.test.ts` | UPDATE | CJK CTA cases |
+| `clipper/tests/overlays.test.ts` | UPDATE | layout collision sweep |
 
 ## Tasks
 ### Task 1: Env allowlist and tree kill (B0.1)
@@ -54,6 +55,11 @@ Each fix ships separately, test first.
 - **Mirror**: `align.ts:42`.
 - **Validate**: in `render.test.ts`, the ja and zh narrations give a CTA start equal to the timed start of the last sentence's first token.
 
+### Task 5: Overlay layout collisions (B0.5)
+- **Action**: Replace the fixed tier slot math with a grid sized for the item count, with font shrink-to-fit from fontkit advance widths. Place comments against all comments visible at their start, clamped to the footage band.
+- **Mirror**: `placeOverlays` / `overlayEvents` (`clipper/server/overlays.ts:28`, `:135`).
+- **Validate**: `tests/overlays.test.ts` gains a box-intersection sweep (1–12 tier items, 1–5 comments, every bundled font): no overlaps and all boxes in bounds.
+
 ## Validation
 ```bash
 cd clipper && npm run typecheck && npm test && npm run build
@@ -73,6 +79,7 @@ Then a production smoke test after deploy: render one clip; ffprobe shows bt709;
 - **B0.2:** `packages/media-local/src/files.ts:375-401`; study 09 #1.
 - **B0.3:** html-video `capture.ts:148-149`; study 05 #3.
 - **B0.4:** study 07 §13.3.
+- **B0.5:** ranking `render.ts:321`, `:472-476`; comment-sticker `program.ts:460-473`; study 08 check.
 
 ## Acceptance
 - [ ] All tasks complete

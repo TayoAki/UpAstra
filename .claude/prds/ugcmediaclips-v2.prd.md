@@ -17,7 +17,7 @@ Hypit shows how these problems can be solved: phrase-bound timing, a fitted over
 
   All four were confirmed in the independent check (study 06, Verified ✅).
 - **Overlays:**
-  - tier boards collide at 7 or more items per row;
+  - tier items collide from the 4th item, and items 7–9 overprint 4–6; comments can draw over each other (measured in the study 08 check);
   - long tier names truncate at a fixed character count;
   - hold times are fixed and ignore speech pace (study 08).
 - **CTA timing** uses a space-split word count, so it is wrong for CJK scripts (study 07 §13.3).
@@ -85,7 +85,7 @@ All of it is CPU-only, with no new paid providers, and keeps today's API and MCP
 
 | # | Milestone | Outcome | Status | Plan |
 |---|---|---|---|---|
-| 0 | Safety & correctness fixes | Keys never reach subprocesses; colours match the source; moment timestamps are real; CJK CTA is timed right | pending | `.claude/plans/m0-safety-correctness.plan.md` |
+| 0 | Safety & correctness fixes | Keys never reach subprocesses; colours match the source; moment timestamps are real; CJK CTA is timed right; tier and comment overlays never overlap | pending | `.claude/plans/m0-safety-correctness.plan.md` |
 | 1 | Resumable, step-cached renders | A redeploy never re-pays a step; identical sub-steps across variants are reused; users can cancel a render and read its log | pending | BUILD-PLAN M1 |
 | 2 | Captions that always fit | No caption leaves the safe area; CJK and mixed scripts space correctly; the highlight follows speech; four new presets | pending | BUILD-PLAN M2 |
 | 3 | Shots that land on their words | Each shot is bound to the phrase it illustrates and snaps to visual cuts | pending | BUILD-PLAN M3 |

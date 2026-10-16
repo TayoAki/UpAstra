@@ -62,7 +62,21 @@ Hypit paths below are relative to the hypit repo (`packages/...`, `skills/hypit/
 - **Tests first:** a Japanese and a Chinese narration with timed words. The CTA starts at the last sentence's first token ±1 frame.
 - **Parity:** study 07 §13.3 #8.
 
-**Milestone acceptance:** all four are deployed, and a production smoke render is checked with ffprobe for tags and with a `/proc` env check.
+**Milestone acceptance:** all five are deployed, and a production smoke render is checked with ffprobe for tags and with a `/proc` env check.
+
+### B0.5 Overlay layout collisions
+- **Measured in the batch 08 check** (`server/overlays.ts`, 1080×1920):
+  - tier items 4–6 sit only `px(26)` below items 1–3 and overlap them by about 22 px;
+  - items 7–9 get exactly the same position as 4–6;
+  - names in Archivo Black ("Boxed") overflow the 283 px slot, and a third-slot name can run off the frame;
+  - a comment checks only the previous comment, so C can reset to the top of the band and draw over a still-visible A;
+  - 3 stacked 3-line comments end 86 px below the footage band;
+  - during a tier board, all comments share the same y.
+- **Change:**
+  - lay tier rows out as a real grid: rows sized for the item count, with a second line per tier when there are more than 3 items, shrinking the font to fit;
+  - place each comment against **all** comments visible at its start, clamped to the band, falling back to a smaller card or a later start.
+- **Tests first:** a rectangle-intersection check over every placed box for 1–12 tier items and 1–5 overlapping comments of 1–3 lines gives no overlaps and every box inside the frame and band. Run it for each bundled font, using advance widths from fontkit.
+- **Parity:** ranking `render.ts:321` (row fit), `:472-476`; comment-sticker `program.ts:460-473` (study 08 #4, check). **Beats:** hypit throws; we repair.
 
 ---
 
@@ -192,7 +206,7 @@ Hypit paths below are relative to the hypit repo (`packages/...`, `skills/hypit/
 
 ### B4.3 Fit validation with repair
 - **Change:**
-  - more than 6 items per tier row wraps to a second row, or shrinks the cells;
+  - the grid fix from B0.5 is extended to Top-N and podium;
   - long tier names are measured and wrapped with an ellipsis (replacing `wrap()` by character count at `server/overlays.ts:88-104`);
   - comment cards fit their text box.
 - **Tests first:**
@@ -360,7 +374,7 @@ Hypit paths below are relative to the hypit repo (`packages/...`, `skills/hypit/
 
 | Order | Batch | Size | Depends on |
 |---|---|---|---|
-| 1 | B0.1–B0.4 | S each | — |
+| 1 | B0.1–B0.5 | S each (B0.5 M) | — |
 | 2 | B1.1 → B1.2 → B1.3 → B1.4 | M, M, M, S | B1.1 first |
 | 3 | B2.1 → B2.2 → B2.3 → B2.4 | S, M, S, M | B2.1 before B2.2 |
 | 4 | B3.2 → B3.1 → B3.3 | M, M, S | the aligner as it is today |
