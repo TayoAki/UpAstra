@@ -32,6 +32,8 @@ Each fix ships separately, test first.
 | `clipper/tests/proxy-time.test.ts` | CREATE | proxy timestamp accuracy test |
 | `clipper/tests/color.test.ts` | CREATE | bars-through-pipeline colour test |
 | `clipper/tests/render.test.ts` | UPDATE | CJK CTA cases |
+| `clipper/server/captions.ts`, `clipper/shared/rules.ts` | UPDATE | CJK sentence split and word count |
+| `clipper/tests/rules.test.ts` | UPDATE | CJK length check |
 | `clipper/tests/overlays.test.ts` | UPDATE | layout collision sweep |
 
 ## Tasks
@@ -50,10 +52,10 @@ Each fix ships separately, test first.
 - **Mirror**: the existing filter chain in compose.
 - **Validate**: `color.test.ts`: ffprobe reports `bt709` in all three tags, and `#E5484D` overlay → 228,70,75 ±3 and `#3366CC` footage → 46,98,198 ±3, decoded as BT.709.
 
-### Task 4: CJK CTA anchor (B0.4)
-- **Action**: Replace `sents[...].split(" ").length` with `scriptWords(lastSentence, language).length`.
-- **Mirror**: `align.ts:42`.
-- **Validate**: in `render.test.ts`, the ja and zh narrations give a CTA start equal to the timed start of the last sentence's first token.
+### Task 4: CJK CTA anchor and length checks (B0.4)
+- **Action**: Make `sentences()` (`clipper/server/captions.ts:28-33`) split on `。！？!?` too. Replace `split(" ").length` at `render.ts:306-308` with `scriptWords(lastSentence, language).length`. Make `words()` (`shared/rules.ts:50`) segment CJK text (about 2 characters per word).
+- **Mirror**: `align.ts:42` (`Intl.Segmenter` for zh/ja/th/…).
+- **Validate**: in `render.test.ts`, the ja and zh narrations give a CTA start equal to the last sentence's first token. In `rules.test.ts`, a 300-character zh script fails "voiceover fits" for 15 s, and the Latin snapshots are unchanged.
 
 ### Task 5: Overlay layout collisions (B0.5)
 - **Action**: Replace the fixed tier slot math with a grid sized for the item count, with font shrink-to-fit from fontkit advance widths. Place comments against all comments visible at their start, clamped to the footage band.

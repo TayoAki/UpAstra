@@ -32,8 +32,9 @@ Line counts come from `wc -l`. The ~10.7k in the brief matches the `src` total.
    - it splits word times inside merge groups character by character.
 
    It quantizes to frames once, at the end. §1 and §13 have the details.
-2. **Some of that machinery never runs in the shipped path.** Both WhisperX adapters hard-code `chars: []` (`packages/whisperx/src/transcript.ts:78`, `:93`), and the Python service calls `align(..., return_char_alignments=False)` (`packages/provider-whisperx-local/runtime/src/hypit_whisperx_service/engine.py:193-200`). No provider in the repo fills `speechActivity` (VAD). The aligner's character timing and VAD bounds are therefore only exercised by hand-built test fixtures. In production, merge groups fall back to "divide the evidence word by letter count", and missing words at the edges fall back to the whole segment (frame 0 to frameCount).
+2. **Some of that machinery never runs in the shipped path.** The one shared wire interpreter, `interpretWhisperXTranscript`, hard-codes `chars: []` in both of its branches (segments at `packages/whisperx/src/transcript.ts:78`, top-level words at `:93`). Both evidence providers in the repo go through it: `provider-whisperx-local/src/provider.ts:57`, `:180`, and the out-of-batch remote `provider-hypihub/src/provider.ts:620-624` (OpenAI-style `verbose_json` word timestamps). The Python service also calls `align(..., return_char_alignments=False)` (`packages/provider-whisperx-local/runtime/src/hypit_whisperx_service/engine.py:193-200`). A `git grep` of the whole hypit repo for `speechActivity` and `chars:` finds no non-test producer: the only writers are the type and schema in `speech-evidence/src/index.ts:55`, `:100`, the locator's internal buckets (`locate.ts:174-175`), and test fixtures (`speech-align.test.ts:68-73`, `evidence.test.ts:49-50`, `provider-hypihub/test/provider.test.ts:774`). The aligner's character timing and VAD bounds are therefore only exercised by hand-built test fixtures. In production, every group's characters are synthetic, even-split letters of the word window (`locate.ts:245`, `:206-227`), so merge groups "divide the evidence word by letter count". Unmeasured edge runs are bounded by the whole Segment: a leading run by `[0, first located start)` and a trailing run by `[last located end, frameCount)`, or all of `[0, frameCount)` when nothing is located (`locate.ts:352-355`, `:373-374`). *(corrected in check: it is one interpreter with two branches, used by two providers; edge bounds made precise)*
 3. **Likely crash path.** The locator deliberately lets overlapping or backward evidence through (`locate.ts:77`, and the test at `speech-align.test.ts:289-302`). The next step, `sealNarrativeAlignment`, then rejects any token whose start or end goes backwards (`packages/narrative-temporal/src/identity.ts:36-47`). An omitted word next to overlapping WhisperX words gets a zero-width window at the left neighbour's end (`locate.ts:373-375`). That can make the following token's start earlier than the filled token's start, which throws instead of degrading. No test covers locate followed by materialize on overlapping evidence. This is inferred from reading the code; I did not run it.
+   - **Check: confirmed by an end-to-end static trace (not executed).** Take script "one big two" with evidence `one [0.1,0.5]`, `two [0.4,0.8]` at the test clock of 1000 fps. The DP picks exact, omission (0.5), exact, because the cheapest alternative, a 2:1 "one big"↔"one" merge, costs 0.5·0.8 + 0.055 + 0.06 = 0.515 (`align.ts:71-77`, `:237`). `fillMissingTiming` gives "big" `left = 8000`, `right = 6400`, `usableRight = 8000` (`locate.ts:373-375`). That is a zero-width window, which `projectSampleTiming` widens to `[500,501)` (`:419-422`). "two" stays `[400,800)`. `alignNarrative` → `materializeNarrativeAlignment` → `sealNarrativeAlignment` (`local.ts:95-98`, `materialize.ts:47-49`) then hits `start 400 < previousStart 500` and throws "NarrativeAlignment Token … is invalid" (`narrative-temporal/src/identity.ts:42-43`). Nested windows (a later word ending before the earlier one ends) also throw on the `end < previousEnd` clause without any omission. Neither evidence sealing (`speech-evidence/src/index.ts:170-218`) nor the wire interpreter (`whisperx/src/transcript.ts:32-43`) rejects overlap or ordering. How often WhisperX or HypiHub emit such windows is plausible but not measured.
 4. **WhisperX contract.** It is a warm, single-flight, loopback-only Python service:
    - `GET /health` returns an identity handshake;
    - `POST /transcribe` takes `{audio_path, language}` and returns `{language, segments[{text,start,end,words[{text,start,end,score}]}]}`.
@@ -108,7 +109,7 @@ Line counts come from `wc -l`. The ~10.7k in the brief matches the `src` total.
 6. **Quantization, done once** (`:392-423`):
    - the start frame is `floor(sample·num / (16000·den))`;
    - the end frame is `ceil(...)`, clamped to frameCount;
-   - an empty result becomes the single containing frame `[f, f+1)`.
+   - an empty result becomes the single containing frame `[f, f+1)` with `f = min(frameCount−1, startFrame)`. The start frame is also clamped to frameCount (`:414`, `:421-422`). *(detail added in check)*
 
    Several tokens can therefore share frames. The "pigeonhole" test checks three tokens inside two frames: `[10,11],[10,12],[11,12]` (`speech-align.test.ts:338-356`).
 7. **Boundaries.** Segment anchors map to frame 0 and frameCount. Token anchors map to the token's start and end frames (`:466-477`).
@@ -172,7 +173,7 @@ All of this is pure CPU, a few hundred lines, and needs no new dependencies.
 - the Producer `request-speech-evidence-audio` (`component.ts:26-73`).
 
 **How it works.**
-- Evidence audio is defined as 16 kHz mono. The 48 kHz master sample count is converted with rounding half-up (`:152`), so `48,001 → 16,000` and `48,002 → 16,001` (test at `evidence.test.ts:16-23`). The 48 kHz master is hard-coded.
+- Evidence audio is defined as 16 kHz mono. The 48 kHz master sample count is converted with rounding half-up (`:152`), so `480,001 → 160,000` and `480,002 → 160,001` (test at `evidence.test.ts:16-23`). *(corrected in check: the test's values are ten times those first quoted)* The 48 kHz master is hard-coded.
 - `transcriptDocumentFromEvidence` writes seconds to 3 decimals. Missing times stay missing (`transcript-document.ts:12-52`).
 - `wordsAt` returns active words using half-open spans, plus ±3 words of context (`:75-87`).
 - `phraseRanges` matches whole consecutive words after NFKC normalization and stripping punctuation and whitespace. It returns every occurrence and throws if a boundary time is missing (`:94-111`).
@@ -200,7 +201,7 @@ All of this is pure CPU, a few hundred lines, and needs no new dependencies.
 - the exports `interpretWhisperXTranscript`, `verifyWhisperXAlignmentRequest`, `assertWhisperXEvidenceWav`, `whisperXRequestForEvidenceAudio` and `parseWhisperXLanguage` (`index.ts:1-15`).
 
 **How it works:**
-- **Request contract.** The request is `{domainId, audio: Blob(audio/wav), sampleFrames, language}` (`types.ts:13-18`). The language must match `^[a-z]{2,3}$` and not be `und`; "auto" is refused (`types.ts:6-11`, tests at `whisperx.test.ts:271-278`).
+- **Request contract.** The request is `{domainId, audio: Blob(audio/wav), sampleFrames, language}` (`types.ts:13-18`). The language must match `^[a-z]{2,3}$` and not be `und`; "auto" is refused (`types.ts:6-11`, tests at `whisperx.test.ts:70-77`; the file has only 140 lines). *(corrected in check)*
 - **WAV check.** The WAV is parsed chunk by chunk and must be PCM, mono, 16 kHz, s16, with `data` bytes equal to `sampleFrames·2` (`evidence.ts:30-59`).
 - **Wire interpretation** (`transcript.ts:64-96`):
   - `segments[].words[]` is preferred; top-level `words[]` is the fallback;
@@ -272,7 +273,7 @@ The test titled "retains individual character windows" (`cli.test.ts:139-165`) o
 
 **Quality.** The operational hygiene is excellent: identity handshake, frozen lockfile, a hard split between preparation and inference, an explicit busy status instead of a hidden queue, and a path jail. On the other hand:
 - path passing ties the service to one machine;
-- the health check runs twice per request;
+- a full `/health` round trip runs before every request (`provider.ts:143-165`), on top of the managed-program lifecycle probe (`program.ts:143-160`). "Twice per request" was not substantiated: the per-request path makes one health call. *(corrected in check)*
 - character alignments are thrown away.
 
 **Relevance: Medium-Low.** WhisperX with torch, pyannote and wav2vec2 is a poor fit for CPU-only Railway: the model loads take GBs and minutes. That is my judgement from the dependency set, not a measurement. The contract ideas transfer to our whisper.cpp wrapper: identity handshake, explicit busy status, "missing stays missing".
@@ -315,6 +316,7 @@ The test titled "retains individual character windows" (`cli.test.ts:139-165`) o
 **Quality.** Small, honest and well cited. The silent zero for digits is a trap: "Top 5 tips" undercounts.
 
 **Relevance: High.** Clipper estimates length as `words / 2.6` with a whitespace split (`clipper/shared/rules.ts:49-50`, `:101-103`; used in `scripts.ts:18`, `:50`, `:142` and `variants.ts:96`). That is wrong for CJK, where a sentence counts as one "word", and crude for long words.
+- *(check)* One more use: the UI estimate `src/components/ClipCard.tsx:107` (`~{words/2.6}s spoken`). `words()` is `split(/\s+/)` (`rules.ts:50`). For an unspaced zh/ja narration that is about 1 "word", so the pre-render "Voiceover fits the clip" check (`rules.ts:101-103`) almost always passes, and `scripts.ts:50`/`:142` derive `lengthSec` as roughly `min + 2` or `min + 3`. After a voiced render the measured `spokenSec` replaces the estimate (`rules.ts:101`).
 
 **Better version for us.**
 - Count syllables (a heuristic, or CMUdict if we accept a dictionary dependency) and Han/kana characters, as hypit does, but **expand digits** ("45" → "forty five") before counting.
@@ -442,6 +444,7 @@ Implement it with a 100–150-line tokenizer that emits `{speechText, captionWor
 - **Markup helpers.** `parseTemporalDuration("1.5s") → {seconds, 3/2}` (`markup/index.ts:53-67`); instants such as `start+12f`, `end-2s` and absolute values (`:80-94`); Window construction from exactly two of `from`, `until` and `for` (`:215-238`).
 
 **9.5 Probable bug.** For the `until + for` form, `constructWindow` first materializes a `start` operation from `timeline.start` (`markup/index.ts:161`, input from `:234-236`). It then replaces `start` with the shift result (`:195`). The original `materialize-start` operation stays in the fragment but feeds no export. `verifyGraphFragment` rejects any unreachable operation (`packages/author/src/fragment.ts:291-298`), and the Author linker runs it on every component (`author.ts:181`). So a standalone `<time:Window … until=… for=…/>` should fail to link. No test covers this form: `markup.test.ts` covers only `from+for` and `from+until`, and `timeline-author/test/surface.test.ts:114-127` covers only `from`/`until`. I found this by reading the code and have not run it.
+   - **Check: confirmed by static trace (not executed).** The `until+for` branch passes a literal `start: {ref:"timeline.start"}` (`markup/index.ts:234-237`). `materialize("start")` therefore pushes a `materialize-start` operation (`:156-159`, called at `:161`). With `direction === -1`, `shift` is based on `end` (`:181`), and `start` is reassigned to `shift` (`:195`). The exports are `compose` (inputs `shift` and `materialize-end`), `start` (→ `shift`) and `end` (→ `materialize-end`) (`:198-204`), so nothing references `materialize-start`. `sealGraphFragment` does not verify (`author/src/fragment.ts:183-191`). `verifyGraphFragment` collects reachable operations from the exports and asserts `UNREACHABLE_FRAGMENT_OPERATION` for any other (`:265-298`). It runs on every Author component (`author.ts:181`) and on elaboration (`fragment.ts:321`). The only caller of `createTemporalWindowConstruction` is the standalone `decodeAbsoluteWindowSurface` (`timeline-author/src/surface.ts:153-170`). Windows inside `<time:Timeline>` use timeline-author's own fragment compiler and are unaffected (`surface.test.ts:87-99` passes `until="end" for="1001ms"` there). The only other `until … for` test in the repo, `caption-fine.test.ts:542`, asserts that caption-fine *rejects* the form, so it is not coverage.
 
 **Tests (15).** Rational and NTSC arithmetic, out-of-range instants, window composition and identity, the disjoint relation, the triggered schedule, and the markup lowering of literal and reference forms.
 
@@ -473,7 +476,7 @@ Implement it with a 100–150-line tokenizer that emits `{speechText, captionWor
 </time:Timeline>
 ```
 
-There are also standalone `<time:Window timeline …>` and `<time:Instant timeline at offset>` forms (`manifest.ts:63-139`, `surface.ts:178-327`).
+There are also standalone `<time:Window timeline …>` and `<time:Instant timeline at offset>` forms (`manifest.ts:63-139`, `surface.ts:153-188`; surface.ts has 188 lines). *(corrected in check)*
 
 **How it works:**
 - **Point grammar.**
@@ -484,7 +487,7 @@ There are also standalone `<time:Window timeline …>` and `<time:Instant timeli
   - spans must be non-empty and points must be ≥0;
   - `for` takes a literal duration or a `TemporalExtent` reference, for example a generated voice's measured length (`README.md:100-112`);
   - `latest()` and `earliest()` are pairwise max and min.
-- **Exact frames only.** Construction durations must be whole frames (`program.ts:40-47`). With a static Clock this is validated at decode time with a friendly message (`surface.ts:227-241`; test at `surface.test.ts:72-85`, which rejects `4.25s`, `250ms` and `start+250ms` at 30 fps).
+- **Exact frames only.** Construction durations must be whole frames (`program.ts:40-47`). With a static Clock this is validated at decode time with a friendly message (`surface.ts:87-101` *(corrected in check)*; test at `surface.test.ts:72-85`, which rejects `4.25s`, `250ms` and `start+250ms` at 30 fps).
   - Consequence: at 29.97 fps, `"1s"` is rejected and you must write `1001ms`.
   - The temporal markup path *rounds* instead (`temporal/src/projection.ts:53`). The two rules disagree.
 - `parseDuration` is a copy of `temporal/markup`'s `parseTemporalDuration` (`fragment.ts:39-57` vs `temporal/src/markup/index.ts:53-67`).
@@ -579,6 +582,7 @@ All of it is computed imperatively in floats (`render.ts:246-311`). Writing it a
   - `ctaFrom` = the start of the last sentence's first word, clamped to `[1, duration−2.5]` (`:303-311`).
   - That word is found by counting `sentence.split(" ")` words backwards from the end of `timed` (`:306-308`). But `timed` comes from `scriptWords`, which uses `Intl.Segmenter` for zh/ja/th and similar languages (`align.ts:42-52`).
   - For those languages a sentence has 1 space-separated "word", so the CTA starts at the *last word* instead of the last sentence.
+  - *(check: confirmed.)* `alignScript(clip.narration, tr.words, tr.language)` (`render.ts:214`) builds `al.words` from `scriptWords(script, language)`. That uses `Intl.Segmenter` when `NO_SPACES.has(language)`, where `NO_SPACES` = zh/ja/th/lo/km/my/yue (`transcribe.ts:35`, `align.ts:42-52`, `:98`). `timed` is `al.words` (`render.ts:240`). On the other side, `sentences()` splits only on ASCII `[.!?]` followed by whitespace (`captions.ts:28-33`). A CJK narration punctuated with `。！？` is therefore a single "sentence", and `split(" ").length` is 1. With mixed spacing (e.g. "用 Hypit 生成") it is a small count unrelated to the Segmenter's token count. Result: `lastSentenceStart = timed[timed.length − 1].start` (`render.ts:306-308`), and `ctaFrom = clamp(·, 1, duration − 2.5)` (`:311`). In practice the CTA lands at about `min(lastWordStart, duration − 2.5)`, and tier overlays end there too (`overlays.ts:52`, via `render.ts:317`). Only the aligned path is affected; the spans fallback at `:309` does not use the word count.
   - Hypit's anchor model avoids this class of error: a Selection or Segment boundary is a token anchor id, never a recount.
 - **Overlays.** These are found by normalized cue-word search over timed words (`overlays.ts:28-56`). Tiers stay until the CTA (a cumulative schedule). Moments (§6) and `resolveTriggeredSchedule` (§9) are the principled versions.
 - **Units.** Everything is float seconds:
@@ -808,3 +812,30 @@ Clipper files read for the comparison:
 - `clipper/server/transcribe.ts` (76) ✅
 - `clipper/server/render.ts` (383) ✅
 - the relevant parts of `clipper/server/captions.ts` (1-120), `media.ts` (`speechSpans`), `overlays.ts` (`placeOverlays`), `caption-jobs.ts` (`transcribeJob`), `formats.ts` (transcript use) and `shared/rules.ts` (`WORDS_PER_SECOND`, the length check).
+
+## Check
+
+Second-reviewer check against `hypit@dc2b7a8f` and `/home/user/UpAstra/clipper` (read-only; nothing run).
+
+**Totals:** about 265 claims checked (each `path:line` citation, number, threshold, test count and test value), with 256 confirmed, 8 corrected, 0 removed and 0 marked unverified. One unsubstantiated claim ("health check runs twice per request") was rewritten rather than removed.
+
+**Corrections, each marked *(corrected in check)* in place:**
+1. §0.2 now names the single interpreter `interpretWhisperXTranscript` with two `chars: []` branches, used by both providers (whisperx-local and the out-of-batch `provider-hypihub`), and states the edge-gap bounds precisely.
+2. §2: the sample-projection test values are `480,001 → 160,000` and `480,002 → 160,001`.
+3. §3: the language-refusal test is at `whisperx.test.ts:70-77`, not `:271-278`.
+4. §4.3: the per-request health check runs once; the lifecycle probe is separate.
+5. §11: the static-clock validation is at `timeline-author/src/surface.ts:87-101`, not `:227-241`.
+6. §11: the standalone surfaces are at `surface.ts:153-188`, not `:178-327`.
+7. §1.3 step 6: the quantization detail (start clamp, containing frame `min(frameCount−1, start)`) has been added.
+8. §5: the `WORDS_PER_SECOND` usage list was missing `src/components/ClipCard.tsx:107` and the effect of the whitespace word count on CJK.
+
+**Priority items:**
+- **Aligner constants: all confirmed.** Omission 0.5 (`align.ts:237`) and insertion 0.35 (`:254`). The 0.055 segmentation and grouping cost (`:71`, `:74`). Mismatch reliability `0.5 + 0.5·mean(clamped score)`, default 0.8 when no scores (`:25-32`). The word-LCS term 0.06 (`:76-77`). Group sizes 1–4 (`DEFAULT_MAX_GROUP = 4`, `:8`, loops `:214-218`). The unbounded exact split or merge is offered only when the run exceeds 4 (`:219-223`). Tie-break order: cost (ε 1e-9), then more exact, fewer omissions, fewer insertions, lower complexity (`:91-99`). The backtrace from `(n,m)` means ends are charged (`:262-272`). Frame quantization: floor for the start, ceil for the end, both clamped to frameCount, and an empty result becomes `[f, f+1)` (`locate.ts:392-423`).
+- **Empty chars and no VAD in production: confirmed** by a whole-repo `git grep` for `speechActivity` and `chars:`. The only non-test writers are the hard-coded empty arrays in `whisperx/src/transcript.ts:78`, `:93`. The Python side passes `return_char_alignments=False` (`engine.py:199`).
+- **Bug 1 (permissive locator vs `sealNarrativeAlignment`): confirmed** by a static end-to-end trace with a concrete input (§0.3). Its frequency on real WhisperX output is plausible, not measured.
+- **Bug 2 (`until+for` leaves an unreachable `materialize-start`): confirmed** by static trace (§9.5). The failure is at Author link time (`author.ts:181` → `fragment.ts:291-298`), for the standalone `<time:Window timeline … until for/>` only.
+- **Our app CTA on CJK: confirmed** (§13.3). The aligned `timed` words come from `Intl.Segmenter` (`align.ts:42-52`, `render.ts:214`, `:240`). The count comes from `sentences(...).at(-1).split(" ")` (`render.ts:305-308`). `sentences()` does not split on `。！？` either (`captions.ts:28-33`), so the CTA collapses to `min(lastWordStart, duration − 2.5)`.
+
+**Coverage:** every file in the 12 packages was listed with `find` and `wc -l`: 168 tracked files, 167 text plus `Track.png`. All per-file line counts and the per-package src/test totals match the table exactly. **Files added to coverage: none.**
+
+**Verdict: Verified ✅.** About 3% of claims needed a correction (under 10%), and coverage is complete. The corrections were mostly citation line numbers. No numeric constant in the aligner was wrong, and both suspected bugs hold up under trace.

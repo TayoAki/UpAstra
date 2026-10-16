@@ -57,12 +57,20 @@ Hypit paths below are relative to the hypit repo (`packages/...`, `skills/hypit/
 - **Tests first:** both overlays and footage decode within ±3 of the source: `#E5484D` gives 228,70,75 and `#3366CC` gives about 46,98,198. ffprobe shows bt709 tags. Reference outputs: `scratchpad/check05/`.
 - **Parity:** html-video `capture.ts:143-150` (study 05 #3, check). **Beats:** hypit's tail conversion is safe only because it encodes from RGB browser frames; ours composites over YUV footage.
 
-### B0.4 CJK-safe CTA timing
-- **Change:** `server/render.ts:305-309` counts last-sentence words with `split(" ")`. Use `scriptWords(lastSentence, language)` from `server/align.ts:42`, which is the same segmentation as alignment, and anchor to the token index.
-- **Tests first:** a Japanese and a Chinese narration with timed words. The CTA starts at the last sentence's first token ±1 frame.
-- **Parity:** study 07 §13.3 #8.
-
-**Milestone acceptance:** all five are deployed, and a production smoke render is checked with ffprobe for tags and with a `/proc` env check.
+### B0.4 CJK-safe CTA timing and length checks
+- **Measured in the batch 07 check:**
+  - `sentences()` (`server/captions.ts:28-33`) splits only on ASCII `.!?` plus a space, so a `。！？` narration is one sentence;
+  - `render.ts:305-309` then counts it with `split(" ")` = 1, which puts the CTA (and the end of the tier overlays) at the last word;
+  - `words()` (`shared/rules.ts:50`) counts unspaced zh/ja as about 1 word, so the "voiceover fits" check and the `WORDS_PER_SECOND` length maths (`rules.ts:102`, `scripts.ts:18/50/142`, `variants.ts:96`, `src/components/ClipCard.tsx:107`) are meaningless for CJK.
+- **Change:**
+  - `sentences()` also splits on `。！？!?` with no trailing space;
+  - the CTA anchor uses `scriptWords(lastSentence, language).length` (`server/align.ts:42`);
+  - `words()` counts with the same segmenter, and CJK uses about 2 characters per "word" until B5.3 replaces the estimate.
+- **Tests first:**
+  - a ja and a zh narration: the CTA starts at the last sentence's first token ±1 frame;
+  - a 300-character Chinese script for a 15 s clip fails "voiceover fits";
+  - every existing Latin result is unchanged.
+- **Parity:** study 07 §13.3 #8, check.
 
 ### B0.5 Overlay layout collisions
 - **Measured in the batch 08 check** (`server/overlays.ts`, 1080×1920):
@@ -254,12 +262,13 @@ Hypit paths below are relative to the hypit repo (`packages/...`, `skills/hypit/
 - **Avoid:** an XML author language.
 
 ### B5.2 M:N aligner upgrade
-- **Change:** extend `alignScript` (`server/align.ts:54`) with 1..3×1..3 groups, an exact split/merge when the concatenations are equal, a 0.055 cost for "same letters, different segmentation", continuous edit-distance costs, deterministic tie-breaks and character-proportional splitting. Keep the free edges and the retake trim.
+- **Change:** extend `alignScript` (`server/align.ts:54`) with 1..4×1..4 groups, an unbounded exact split/merge for longer runs when the concatenations are equal, omission 0.5 and insertion 0.35 (which differ from our free edges, so keep ours at the edges), a 0.055 cost for "same letters, different segmentation", continuous edit-distance costs, deterministic tie-breaks and character-proportional splitting. Keep the free edges and the retake trim.
 - **Tests first:**
   - "website" vs "web site";
   - a brand merged or split by ASR;
   - CJK;
-  - every existing `tests/align.test.ts` case still passes.
+  - every existing `tests/align.test.ts` case still passes;
+  - overlapping or nested ASR word windows (e.g. `one [0.1,0.5]`, `two [0.4,0.8]` with "big" omitted) are clamped to monotonic and logged, never thrown. Hypit throws here (`narrative-temporal/src/identity.ts:42-43`, study 07 check).
 - **Parity:** study 07 §1, §13.1.
 - **Avoid:** charging for leading chatter, and throw-on-imperfection sealing.
 

@@ -165,7 +165,7 @@ Three separations do all the work:
 
 **Tests.** 2: mapping coverage, and the Seedance ModelArk body (`test/routes.test.ts:15-41`).
 
-**Quality notes.** (+) Handles a "200-ish run with a provider error inside" envelope correctly. (−) Uploaded references stay in the customer's workspace until someone removes them with `/rm`, and the Provider never calls it (`README.md:57-58`; there's no `/rm` call in `src/provider.ts`). The path is `hypit/<resource>.<ext>` (`src/provider.ts:151`), so a re-used resource overwrites its own file rather than adding a new one. It's still a storage leak per tenant for us. `outputUrls` guesses among 9 shapes: 5 array locations, then 4 single-URL fields (`src/provider.ts:96-103`) *(corrected in check: was "7")*. That's fragile. The output URLs are captured at poll time and downloaded at collect, and a URL that has expired by then fails with a 4xx, which isn't retried.
+**Quality notes.** (+) Handles a "200-ish run with a provider error inside" envelope correctly. (−) Uploaded references stay in the customer's workspace until someone removes them with `/rm`, and the Provider never calls it (`README.md:58-59`; there's no `/rm` call in `src/provider.ts`). The path is `hypit/<resource>.<ext>` (`src/provider.ts:151`), so a re-used resource overwrites its own file rather than adding a new one. It's still a storage leak per tenant for us. `outputUrls` guesses among 9 shapes: 5 array locations, then 4 single-URL fields (`src/provider.ts:96-103`) *(corrected in check: was "7")*. That's fragile. The output URLs are captured at poll time and downloaded at collect, and a URL that has expired by then fails with a 4xx, which isn't retried.
 
 **Relevance: Low–Medium.** Only route here to Wan 2.7.
 
@@ -340,14 +340,16 @@ All follow the same shape: a port table, `defineExactModelModule`, and one or tw
 | | Submit | Idempotency | Poll | Collect | Upload of refs | Pricing | Credentials |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | HypiHub | POST images/generations, images/edits, videos (`provider-hypihub/src/provider.ts:489-494`) | `idempotency-key` = operation | `/jobs/{id}`, 10 s, 20 min deadline | re-fetch `/jobs/{id}/assets` | negotiated S3 multipart / API multipart, checksummed | live `GET /pricing?model=` doc | OAuth PKCE w/ refresh, or API key |
-| TokenDance | Ark tasks / MiniMax | none | 10 s, 30 min | URL from poll | `data:` URL (≤ 30 MB img, 15 MB audio, 64 MB body); MiniMax file API | page link | API key |
-| Monid | `/v1/run` | none | `/v1/runs/{id}` | URLs from poll | workspace sfs, 1-day signed URL, never deleted | page link | API key |
-| HiAPI | `/v1/tasks` | yes | `/v1/tasks/{id}` | URLs from poll | `data:` URLs (per-model caps) | page link | API key |
-| BeatAPI | `/v1/{image,video}s/tasks` | yes | `/v1/tasks/{id}` | URLs from poll | `/v1/files` (≤ 50/100 MB) | page link | API key |
-| Pollo | path per model | none | `/v1/generation/{id}/status` | URLs from poll | caller-supplied public URL only | page link | `x-api-key` |
+| TokenDance | Ark tasks / MiniMax (`provider-tokendance/src/provider.ts:205-207`) | none | 10 s, 30 min | URL from poll | `data:` URL (≤ 30 MB img, 15 MB audio, 64 MB body); MiniMax file API | page link | API key |
+| Monid | `/v1/run` (`provider-monid/src/provider.ts:127-129`) | none | `/v1/runs/{id}`, 10 s, 30 min | URLs from poll | workspace sfs, 1-day signed URL, never deleted | page link | API key |
+| HiAPI | `/v1/tasks` (`provider-hiapi/src/provider.ts:157-159`) | `idempotency-key` = operation | `/v1/tasks/{id}`, 10 s, 30 min | URLs from poll | `data:` URLs (per-file caps for 7 model ids only; no body cap) *(corrected in check)* | page link | API key |
+| BeatAPI | `/v1/{image,video}s/tasks` (`provider-beatapi/src/provider.ts:175-179`) | `idempotency-key` = operation | `/v1/tasks/{id}`, 10 s, 30 min | URLs from poll | `/v1/files` (≤ 50/100 MB), never deleted | page link | API key |
+| Pollo | path per model (`provider-pollo/src/provider.ts:129-131`) | none | `/v1/generation/{id}/status`, 10 s, 30 min | URLs from poll | caller-supplied public URL only | page link | `x-api-key` |
+
+Check confirmed that the poll interval (10 s default) and the operation deadline (30 min, HypiHub 20 min) are the same in every Provider (`create*Provider` in each `src/provider.ts`). Idempotency keys go out from exactly three Providers, HypiHub, HiAPI and BeatAPI, always as `context.operation`. TokenDance, Monid and Pollo send none.
 
 Shared semantics (identical code in all six, e.g. `provider-hypihub/src/provider.ts:100-120`, `provider-hiapi/src/provider.ts:61-85`):
-- **Submit:** a transport failure → `*_SUBMISSION_UNKNOWN`, failed, never auto-resubmitted.
+- **Submit:** a transport failure (including a request timeout) → `*_SUBMISSION_UNKNOWN`, failed, never auto-resubmitted. An HTTP error on submit, 429 and 5xx included, is a plain `failed` with the service code (added in check).
 - **Poll:** transport errors, 429 and 5xx → stay pending, wake after `Retry-After` or the poll interval, capped at the operation deadline. Anything else fails.
 - **Collect:** same retry policy, but no deadline.
 - Every error message redacts URLs.
@@ -356,21 +358,23 @@ Shared semantics (identical code in all six, e.g. `provider-hypihub/src/provider
 
 | Model (capability) | HypiHub | TokenDance | Monid | HiAPI | BeatAPI | Pollo | Via our OpenRouter key? |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: | --- |
-| Seedance 2 / fast / mini / 2.5 (video) | ✓ | ✓ | ✓ | ✓ | ✓ | – | No (not a chat-completions model) *(unverified against today's OpenRouter catalogue)* |
-| MiniMax H3 (video) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | No *(unverified)* |
-| PixVerse V6 / C1 (video) | ✓ | – | – | – | – | – | No *(unverified)* |
-| Grok Imagine video | ✓ | – | – | ✓ | – | – | No *(unverified)* |
-| Grok Imagine 1.5 preview | ✓ | – | – | ✓ | ✓ | ✓ | No *(unverified)* |
-| GPT Image 2 (image) | ✓ | – | – | ✓ | ✓ | ✓ | Possibly; OpenRouter exposes some OpenAI image-output models via `modalities` *(unverified for this exact model)* |
-| Nano Banana 2 / Pro (image) | ✓ | – | – | ✓ | ✓ | ✓ | Likely: these are Gemini image models, which OpenRouter serves with image output in chat completions *(verify slugs)* |
-| Seedream 5 Lite (image) | ✓ | ✓ | – | ✓ | – | – | *(unverified)* |
-| Wan 2.7 Image / Pro | – | – | ✓ | – | – | – | *(unverified)* |
-| MiMo / Fish Audio / ElevenLabs voice design & clone | ✓ | – | – | – | – | – | No. OpenRouter's audio output is chat audio with preset voices (what `speak` uses) |
-| WhisperX alignment | ✓ | – | – | – | – | – | n/a (we run whisper.cpp locally) |
+| Seedance 2 / fast / mini / 2.5 (video) | ✓ | ✓ | ✓ | ✓ | ✓ | – | **Listed:** `bytedance/seedance-2.0`, `-2.0-fast`, `-2.0-mini`, `bytedance/seedance-2.5` (output `video`) *(corrected in check)* |
+| MiniMax H3 (video) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **Listed:** `minimax/hailuo-3` ("MiniMax: H3"), plus `minimax/hailuo-3-max` (output `video`) *(corrected in check)* |
+| PixVerse V6 / C1 (video) | ✓ | – | – | – | – | – | Not listed (no `pixverse` id) |
+| Grok Imagine video | ✓ | – | – | ✓ | – | – | **Listed:** `x-ai/grok-imagine-video` (output `video`) *(corrected in check)* |
+| Grok Imagine 1.5 preview | ✓ | – | – | ✓ | ✓ | ✓ | **Listed as GA, not preview:** `x-ai/grok-imagine-video-1.5`, plus `-1.5-lite`. Whether its limits match the preview port table is unverified *(corrected in check)* |
+| GPT Image 2 (image) | ✓ | – | – | ✓ | ✓ | ✓ | **Listed:** `openai/gpt-image-2` (output `image`; its description says "via the dedicated Images API") *(corrected in check)* |
+| Nano Banana 2 / Pro (image) | ✓ | – | – | ✓ | ✓ | ✓ | **Listed:** `google/gemini-3.1-flash-image` (+ `-preview`) = Nano Banana 2; `google/gemini-3-pro-image` (+ `-preview`) = Nano Banana Pro; output `image`+`text`. Also `google/gemini-nano-banana-2.1` and `-3.1-flash-lite-image` *(corrected in check)* |
+| Seedream 5 Lite (image) | ✓ | ✓ | – | ✓ | – | – | **Listed:** `bytedance-seed/seedream-5-0-lite` (output `image`), plus `-5-0-flash` and `-5-0-pro` *(corrected in check)* |
+| Wan 2.7 Image / Pro | – | – | ✓ | – | – | – | **Image variant not listed.** Only the *video* model `alibaba/wan-2.7` (text+image→video) is listed, alongside `wan-2.6` and `wan-3.0` *(corrected in check)* |
+| MiMo voice design & clone | ✓ | – | – | – | – | – | Not listed. The `xiaomi/mimo-*` entries are text-output chat models |
+| Fish Audio voice design & clone | ✓ | – | – | – | – | – | **Partial:** Fish Audio TTS is listed (`fish-audio/s1`, `s2-pro`, `s2.1-pro`, `drama-3`; output `speech`), but no voice-design or voice-clone model is listed. Whether those TTS ids accept a reference audio is not visible in the listing *(corrected in check)* |
+| ElevenLabs voice design (`eleven_ttv_v3`) | ✓ | – | – | – | – | – | **Partial:** ElevenLabs TTS is listed (`elevenlabs/eleven-v3`, `eleven-v4`, flash/turbo/multilingual; output `speech`) with 21 *preset* `supported_voices`. `eleven_ttv_v3` voice design isn't listed *(corrected in check)* |
+| WhisperX alignment | ✓ | – | – | – | – | – | n/a (we run whisper.cpp locally); OpenRouter lists `openai/whisper-*` transcription models |
 
-Sources for the ✓ cells: each Provider's `src/mapping.ts`. The OpenRouter column is from general knowledge, not from this repo, and needs a check of OpenRouter's live model list (filter by output modality) before we commit.
+Sources for the ✓ cells: each Provider's `src/mapping.ts` (re-checked). OpenRouter column: OpenRouter models API, checked 2026-10-16 (`GET https://openrouter.ai/api/v1/models?output_modalities=all`, 677 models; also filtered by `image`, `video`, `speech` and `audio`). Note that the **default** `/api/v1/models` returns only the 466 text-output models, so a plain `curl` of it shows none of the video, image-only or speech ids above. The listing says nothing about which OpenRouter endpoint serves video and speech output, or what parameters those models take: video ids report `supported_parameters` like `max_tokens`/`temperature` and `pricing` of `0`. That's unverified. Our `llm.ts` only calls `/chat/completions`, so any of these would need new client code either way.
 
-**Bottom line:** video generation needs at least one separate gateway key. HiAPI or BeatAPI give the widest coverage with an idempotent submit; HypiHub is the most robust but is hypit's own service. Image generation may be reachable through OpenRouter (Nano Banana family). Voice design and cloning need a separate key.
+**Bottom line** *(corrected in check)*: as of 2026-10-16, OpenRouter's catalogue lists Seedance 2/2.5, MiniMax H3, Grok Imagine video, GPT Image 2, Nano Banana 2/Pro and Seedream 5 Lite. Our existing key may therefore cover most of the video and image models in this batch, subject to checking OpenRouter's video/image generation API surface and pricing. Still gateway-only: PixVerse, Wan 2.7 *Image*, and voice **design/clone** (MiMo, Fish `voice-design-1`/`voice-clone`, ElevenLabs `eleven_ttv_v3`). OpenRouter offers only preset-voice TTS from ElevenLabs and Fish Audio. If we do need a gateway, HiAPI or BeatAPI give the widest coverage with an idempotent submit; HypiHub is the most robust but is hypit's own service.
 
 ### Comparison with `clipper/server/llm.ts`
 
@@ -381,7 +385,7 @@ Sources for the ✓ cells: each Provider's `src/mapping.ts`. The OpenRouter colu
 | Input validation | Full port table + Provider limits *before* any paid call | None beyond prompt construction; `response_format` fallback on 400 (`:198-201`) |
 | Retries | Poll-time retry on 429/5xx/transport with `Retry-After`; no blind resubmission | None in `chatJSON`/`forwardChat`. `render.ts` re-records an off-script voice take once (`clipper/server/render.ts:200-222`) |
 | Timeouts | Request 300 s, operation 20–30 min | 120 s chat (`clipper/server/llm.ts:195`), 180 s agent/voice (`:91`, `:227`) |
-| Cost | HypiHub: live pricing document per model; others: a pricing page link. No billed-cost capture | Billed `usage.cost` from OpenRouter on every call → `recordAI` (`:52`, `:96`, `:206`, `:256`; `clipper/server/usage.ts:57`); daily per-workspace cap (`clipper/server/llm.ts:41-50`) |
+| Cost | HypiHub: live pricing document per model; others: a pricing page link. No billed-cost capture | Billed `usage.cost` from OpenRouter on every call → `recordAI` (`:52`, `:96`, `:206`, `:256`; `clipper/server/usage.ts:56` *(corrected in check)*); daily per-workspace cap (`clipper/server/llm.ts:41-50`) |
 | Credentials | Per-Endpoint credential slot, OAuth refresh written back through a narrow `replace` | One server-wide env key |
 | TTS | Voice design/clone models returning audio-set Resources (b64 or URL), multiple previews | `speak`: streamed `gpt-audio-mini`, `pcm16` 24 kHz, 8 preset voices, rejects < 4,800 bytes of audio (`clipper/server/llm.ts:211-259`; `clipper/shared/types.ts:259`) |
 | Error evidence | Code, route, status, model, request id; URLs redacted | `AI ${status}: first 300 chars` (`clipper/server/llm.ts:94`, `:202`) |
@@ -404,9 +408,9 @@ Our metering is *better* than hypit's here: we record actual billed cost per cal
 ## Things not to copy
 
 - **The Type → Producer → Need → Fragment ceremony** (`packages/generation/src/model.ts:442-658`). Five nominal types per model is built for an agent-authored, content-addressed build graph. Our planner builds a request in one function.
-- **Inline `data:` URL references** (TokenDance, HiAPI: up to 64 MB JSON bodies, `packages/provider-tokendance/src/routes.ts:38-42`). This means memory spikes on a shared CPU box. Upload to our S3 and pass signed URLs (all gateways accept URLs, or have a `publicAssetUrl` hook).
+- **Inline `data:` URL references** (TokenDance: JSON bodies up to 64 MB, `packages/provider-tokendance/src/routes.ts:38-42`. HiAPI has no body cap at all, and per-file caps for only 7 model ids, `packages/provider-hiapi/src/routes.ts:25-33` *(corrected in check)*). This means memory spikes on a shared CPU box. Upload to our S3 and pass signed URLs (all gateways accept URLs, or have a `publicAssetUrl` hook).
 - **Uploads that are never cleaned up** (Monid sfs, `packages/provider-monid/README.md:58-59`; BeatAPI files). This is per-tenant storage leakage.
-- **Collect with no deadline** (`packages/provider-hypihub/src/provider.ts:540` and the same line in every Provider). Add one.
+- **Collect with no deadline** (`packages/provider-hypihub/src/provider.ts:540` and the equivalent `collect` catch in every Provider, at different line numbers: TokenDance `:252`, Monid `:251`, HiAPI `:217`, BeatAPI `:234`, Pollo `:190` *(corrected in check)*). Add one.
 - **Six near-identical Provider files** with copied `failure`/`retrying`/`unknownSubmission` helpers and per-surface copies of `exact`/`ref`/`sameType`. Write one generic async-job client with per-gateway adapters instead.
 - **Author-literal durations** (`packages/seedance/README.md:27-31`). With no agent in the loop, derive the duration from the measured voiceover.
 - **Leaving cost as a page link.** Keep our pattern of recording the billed amount per call, and also store the gateway's quoted price at submit for budgeting checks (`checkAIBudget`).
@@ -580,3 +584,41 @@ Every file in the 20 packages is listed below. Line counts are from `wc -l` at t
 | `packages/elevenlabs-speech/test/elevenlabs-speech.test.ts` | 67 | ✅ |
 
 **Totals:** 159 files, 17,305 lines (11,661 in `src/**` and `kits/**`).
+
+---
+
+## Check
+
+Independent second review against hypit @ `dc2b7a8f31b1ef1443a79ca448548d69e3ceb6a0`, plus `clipper/` and OpenRouter's live catalogue, on 2026-10-16.
+
+**Method.** Re-ran `wc -l` over all 20 packages. Read in full `generation/src/mapping.ts`, `provider-hypihub/src/provider.ts`, `upload.ts`, `errors.ts` and `oauth.ts`, plus the submit/poll/collect, resolver and download code of all five other Providers. Checked every port-table number in the 11 model packages, the Provider refusal lists and mappings, the kit and cleanup-program text, test counts, and the `clipper/server/llm.ts`, `usage.ts`, `render.ts` and `shared/types.ts` references. Queried `https://openrouter.ai/api/v1/models` both with and without `output_modalities` filters.
+
+**Totals.** About 230 claims checked (the notes carry ~318 citation tokens; repeated and adjacent ones were checked together).
+- Confirmed: ~211.
+- Corrected: 19. Eight are code claims: the unused shared prompt schema (×2), Monid's `outputUrls` shape count, TokenDance's `≤ 30 MB` and MiniMax video upload, `usage.ts:56`, HiAPI having no body cap (×2), and "same line in every Provider". Eleven are in the OpenRouter column: ten rows plus the bottom line.
+- Removed: 0.
+- Unverified: 2. Whether OpenRouter's Grok Imagine 1.5 GA id matches the preview port table, and which OpenRouter endpoint and parameters serve video and speech output.
+
+**Priority items confirmed.**
+- `compileWireRequest` refuses any unmappable port or item field before any resolver or upload call (`mapping.ts:118`, `:154-173`). Every rule the notes list for `assertMappingCoversPorts` is present (`:186-249`).
+- HypiHub lifecycle (`provider.ts:482-544`):
+  - `idempotency-key: context.operation` on submit (`:494`).
+  - Transport failure → `HYPIHUB_SUBMISSION_UNKNOWN`, not retried (`:115-120`, `:496-497`).
+  - 10 s poll (`:592`) and 20-minute deadline from `startedAt` (`:518-523`, `:556`).
+  - `Retry-After` honoured and capped at the deadline in poll (`:107-114`, `:531`).
+  - `collect` passes no deadline (`:540`), so 5xx and transport errors reschedule forever.
+- The same `retrying` / `unknownSubmission` pattern is in all six Providers, with a 30-minute default deadline outside HypiHub.
+- Idempotency keys: HypiHub, HiAPI, BeatAPI only.
+- `data:` URL embedding: TokenDance (Ark) and HiAPI only.
+- Monid sfs uploads are never `/rm`-ed. BeatAPI `/v1/files` uploads are never deleted either.
+
+**Omissions added (cited).**
+- HTTP 429 and 5xx on submit is a plain failure even with an idempotency key, and `startedAt` is stamped after the POST returns.
+- HypiHub's download retries 4xx too, with no backoff. The other Providers download once per collect, and already-stored assets are re-downloaded on a retry.
+- HiAPI's uncapped inline Base64 for most models.
+- Monid's output URLs expire between poll and collect.
+- The default OpenRouter `/models` listing hides non-text-output models.
+
+**Coverage.** All 159 files and 17,305 lines (11,661 in `src/**` + `kits/**`) match `wc -l` exactly, and the per-package line and `test()` counts match. Files added to coverage: none.
+
+**Verdict: Verified ✅.** About 8% of checked claims needed correction, and coverage is complete. The code-level analysis is accurate: the lifecycle, idempotency, `data:` URL and cleanup claims all hold. One conclusion changed materially. Today's OpenRouter catalogue lists Seedance, MiniMax H3, Grok Imagine video, GPT Image 2, Nano Banana 2/Pro and Seedream 5 Lite, so the original bottom line ("video generation needs at least one separate gateway key") no longer holds as stated. PixVerse, Wan 2.7 Image and voice design/clone remain gateway-only.

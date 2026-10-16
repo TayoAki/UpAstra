@@ -20,7 +20,7 @@ Hypit shows how these problems can be solved: phrase-bound timing, a fitted over
   - tier items collide from the 4th item, and items 7–9 overprint 4–6; comments can draw over each other (measured in the study 08 check);
   - long tier names truncate at a fixed character count;
   - hold times are fixed and ignore speech pace (study 08).
-- **CTA timing** uses a space-split word count, so it is wrong for CJK scripts (study 07 §13.3).
+- **CJK:** CTA timing uses a space-split word count, sentences split only on ASCII punctuation, and the "voiceover fits" check counts an unspaced Chinese or Japanese script as about one word, so it almost always passes (study 07 §13.3 and its check).
 - **Moment timestamps.** The vision proxy decodes keyframes only and then resamples to 1 fps, so the burned-in timestamps can drift from real frame times, which lands shots on the wrong moment (study 09 §1).
 - **Process environment.** ffmpeg and whisper inherit the full process environment, including API keys (study 05, study 09).
 - **Colour.** No explicit BT.709 tagging or conversion is done when RGBA overlays are composited; a colour shift is likely (study 05). *Assumption — needs validation with a colour-bar render.*
