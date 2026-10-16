@@ -189,7 +189,13 @@ export async function withRetries(send: () => Promise<Response>, tries = 3): Pro
     if (i >= tries || !(r.status === 429 || r.status >= 500)) return r;
     const after = Number(r.headers.get("retry-after"));
     await r.body?.cancel().catch(() => undefined);
-    await new Promise((res) => setTimeout(res, Number.isFinite(after) && r.headers.has("retry-after") ? Math.min(after, 20) * 1000 : i === 1 ? 1000 : 3000));
+    const wait = Number.isFinite(after) && r.headers.has("retry-after") ? Math.min(after, 20) * 1000 : i === 1 ? 1000 : 3000;
+    // The wait ends early if the job is cancelled.
+    await new Promise<void>((res, rej) => {
+      const job = currentSignal();
+      const t = setTimeout(res, wait);
+      job?.addEventListener("abort", () => (clearTimeout(t), rej(job.reason)), { once: true });
+    });
   }
 }
 

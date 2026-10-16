@@ -845,7 +845,7 @@ export function createApp() {
     spendAI(req.workspaceId!, 1);
     // Asked to try again: a fresh breakdown, not the stored one, and no stale receipts.
     enqueueFormat({ workspaceId: req.workspaceId!, formatId: f.id, fresh: true });
-    Object.assign(f, { status: "analyzing", step: "Queued", error: undefined, resumes: undefined, steps: undefined, updatedAt: now() });
+    Object.assign(f, { status: "analyzing", step: "Queued", error: undefined, resumes: undefined, steps: undefined, refresh: true, updatedAt: now() });
     save();
     res.status(202).json(stateFor());
   });
@@ -1400,7 +1400,7 @@ export function createApp() {
 
   api.post("/clips/:id/render/cancel", (req, res) => {
     const clip = findClip(String(req.params.id));
-    if (!cancelRender(clip)) throw new HttpError(409, "This clip isn't rendering");
+    if (!cancelRender(clip)) throw new HttpError(409, "This clip isn't rendering (or is already stopping)");
     log({ campaignId: clip.campaignId, kind: "clip", message: `Render cancelled for "${clip.title}".` });
     save();
     res.json(stateFor());

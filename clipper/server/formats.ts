@@ -8,7 +8,7 @@ import { alert, isUserError } from "./alerts";
 import { getDoc, HttpError, loadTenant, log, now, runInWorkspace, save, saveNow, tenantLoadHooks } from "./db";
 import { chatJSON, mediaLive, modelFor } from "./llm";
 import { netArgs, probe, run } from "./media";
-import { isPending, submitJob, waitingCount } from "./jobs";
+import { currentSignal, errorText, isPending, submitJob, waitingCount } from "./jobs";
 import { cachedStep } from "./steps";
 import { videoStore } from "./storage";
 import { transcribe, transcriptionAvailable } from "./transcribe";
@@ -151,7 +151,7 @@ async function analyze(t: Task) {
       version: 1,
       params: { source: f.sourceKey, ask, system: createHash("sha256").update(SYSTEM).digest("hex"), model: modelFor("format") },
       paid: true,
-      fresh: t.fresh,
+      fresh: t.fresh || f.refresh,
       save: saveNow,
       run: async () => {
         await buildReferenceProxy(src, proxy);
@@ -160,12 +160,12 @@ async function analyze(t: Task) {
     });
     if (reused) r.cost = 0;
     const breakdown = cleanBreakdown(r.json, info.duration);
-    set(f, { status: "ready", step: undefined, breakdown, cost: Math.round(((f.cost ?? 0) + r.cost) * 10000) / 10000, model: r.model });
+    set(f, { status: "ready", step: undefined, refresh: undefined, breakdown, cost: Math.round(((f.cost ?? 0) + r.cost) * 10000) / 10000, model: r.model });
     log({ kind: "clip", message: `Broke down "${f.name}" into a format: ${breakdown.summary.slice(0, 120)}`, cost: r.cost || undefined });
   } catch (err) {
-    const msg = (err as Error).message.slice(0, 400);
+    const msg = errorText(err).slice(0, 400);
     console.error(`[formats] ${f.id} failed:`, msg);
-    if (!isUserError(msg) && !/references can be up to|needs an AI key/.test(msg)) alert("format breakdown failed", msg, `workspace ${t.workspaceId} · format ${f.id}`);
+    if (!isUserError(msg) && !currentSignal()?.aborted && !/references can be up to|needs an AI key/.test(msg)) alert("format breakdown failed", msg, `workspace ${t.workspaceId} · format ${f.id}`);
     set(f, { status: "failed", step: undefined, error: msg });
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

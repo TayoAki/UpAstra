@@ -9,7 +9,7 @@ import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, saveNow,
 import { mediaLive, modelFor, speak } from "./llm";
 import { blackSpans, concat, compose, cutSegment, cutSignature, ffmpegAvailable, H, run, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
 import { cacheKey, footageSource, isCached } from "./footage-cache";
-import { cancelJob, cancelWaiting, checkCancelled, currentSignal, isPending, pendingCount, submitJob, waitingCount } from "./jobs";
+import { cancelJob, cancelWaiting, checkCancelled, currentSignal, errorText, isPending, pendingCount, submitJob, waitingCount } from "./jobs";
 import { cachedStep } from "./steps";
 import { alignScript, type Alignment } from "./align";
 import { transcribe, transcriptionAvailable, whisperModel, type Word } from "./transcribe";
@@ -86,8 +86,8 @@ async function process_(job: Job) {
       await renderClip(job.workspaceId, clip, r);
     } catch (err) {
       const cancelled = !!currentSignal()?.aborted;
-      const msg = cancelled ? "Cancelled" : (err as Error).message;
-      console.error(`[render] ${clip.id} ${cancelled ? "cancelled" : "failed"}:`, (err as Error).message);
+      const msg = cancelled ? "Cancelled" : errorText(err);
+      console.error(`[render] ${clip.id} ${cancelled ? "cancelled" : "failed"}:`, errorText(err));
       if (!cancelled && !isUserError(msg)) alert("render failed", msg.slice(0, 300), `workspace ${job.workspaceId} · clip ${clip.id}`);
       const c = getDoc().clips.find((x) => x.id === job.clipId);
       if (c?.render) {
@@ -138,7 +138,8 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
         r.cost = round2((r.cost + a.cost) * 1000) / 1000;
         log({ campaignId: c.id, kind: "footage", message: `Found ${f.moments?.length ?? 0} moments in "${f.name}".`, cost: a.cost || undefined });
       } catch (err) {
-        f.analysisError = (err as Error).message.slice(0, 300);
+        checkCancelled(); // a cancel isn't a problem with the footage
+        f.analysisError = errorText(err).slice(0, 300);
       }
       save();
       if (!f.durationSec) failed.set(f.id, f.analysisError ?? "couldn't open it");
@@ -204,6 +205,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
         save: saveNow,
         // Only a clean, word-timed take is reused later; a weak one is kept for this render only.
         keep: (t) => !transcriptionAvailable() || (!!t.al && t.al.matched >= 0.85 && t.al.extra.inside <= 3),
+        scope: r.requestedAt,
         run: async () => {
           let best: { wav: string; seconds: number; al?: Alignment } | undefined;
           for (let attempt = 1; attempt <= 2; attempt++) {
@@ -304,6 +306,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
         save,
         run: async () => {
           const src = await footageSource(f);
+          checkCancelled();
           await cutSegment(src, start, len, f.hasAudio !== false, out);
           // Goals often fade to black before the replay: if a shot has more than a
           // moment of black, slide it away from the black and cut again.
@@ -357,7 +360,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     const final = path.join(tmp, "final.mp4");
     await compose({ video: joined, ass, voice: voicePath, duration, out: final, fontsDir: await prepareFonts(tmp, brand), workDir: tmp, stickers });
 
-    step(r, "rendering", "Uploading the video");
+    step(r, "rendering", "Uploading the video"); // the last point a cancel takes effect
     const key = `${workspaceId}/clips/${clip.id}-${Date.now()}.mp4`;
     await videoStore().put(key, final, "video/mp4");
 

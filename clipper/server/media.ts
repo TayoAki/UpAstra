@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { currentSignal } from "./jobs";
+import { abortReason, currentSignal } from "./jobs";
 import { stickerGraph, type Sticker } from "./overlays";
 
 // ffmpeg plumbing. Footage is read straight from its public link: ffmpeg
@@ -96,7 +96,7 @@ export function run(cmd: string, args: string[], timeoutMs = 20 * 60_000): Promi
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       if (pid) live.delete(pid);
-      if (cancelled) return reject(new Error(String(signal?.reason ?? "Cancelled")));
+      if (cancelled) return reject(new Error(signal ? abortReason(signal) : "Cancelled"));
       if (code === 0) resolve({ stdout, stderr });
       else {
         console.error(`[ffmpeg] ${cmd} ${args.filter((a) => !/^https?:/.test(a)).join(" ").slice(0, 600)}\n${stderr.trim().split("\n").slice(-12).join("\n")}`);

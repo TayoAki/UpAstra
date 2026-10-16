@@ -98,4 +98,12 @@ describe("cachedStep", () => {
     await expect(cachedStep({ workspaceId: ws, receipts: r2, name: "x", kind: "store-fail", version: 1, params: {}, paid: true, file: missing, save: () => undefined, run: async () => 1 })).rejects.toThrow();
     expect(r2.x.status).toBe("failed");
   });
+
+  it("reuses a weak result when the same run resumes, but not for a new run", async () => {
+    let runs = 0;
+    const go = (scope: string) => cachedStep({ workspaceId: ws, receipts: {}, name: "take", kind: "scope-test", version: 1, params: { s: 1 }, scope, keep: () => false, save: () => undefined, run: async () => ++runs });
+    expect((await go("render-1")).value).toBe(1);
+    expect(await go("render-1")).toEqual({ value: 1, reused: true }); // the resume
+    expect((await go("render-2")).value).toBe(2); // a re-render tries for a better take
+  });
 });

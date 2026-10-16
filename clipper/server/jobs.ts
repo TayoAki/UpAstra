@@ -30,8 +30,14 @@ export const currentSignal = () => signals.getStore();
 /** Throw if the running job has been cancelled (call between steps). */
 export function checkCancelled() {
   const s = currentSignal();
-  if (s?.aborted) throw new Error(String(s.reason ?? "Cancelled"));
+  if (s?.aborted) throw new Error(abortReason(s));
 }
+
+/** Why a signal was aborted, as text. */
+export const abortReason = (s: AbortSignal) => (s.reason instanceof Error ? s.reason.message : String(s.reason ?? "Cancelled"));
+
+/** A message from anything thrown (aborted fetches throw the abort reason itself). */
+export const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /** Workspaces in the order they first queued work; turns go round this ring. */
 const ring: string[] = [];
@@ -110,7 +116,8 @@ export function cancelJob(id: string, reason = "Cancelled"): boolean {
   if (cancelWaiting(id)) return true;
   const r = running.get(id);
   if (!r) return false;
-  r.abort.abort(reason);
+  if (r.abort.signal.aborted) return false; // already stopping
+  r.abort.abort(new Error(reason));
   return true;
 }
 

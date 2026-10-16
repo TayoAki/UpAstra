@@ -9,7 +9,7 @@ import { prepareFonts } from "./fonts";
 import { BT709, burnFilter, probe, run, yuvMatrix } from "./media";
 import { videoStore } from "./storage";
 import { transcribe } from "./transcribe";
-import { isPending, submitJob, waitingCount } from "./jobs";
+import { currentSignal, errorText, isPending, submitJob, waitingCount } from "./jobs";
 import { recordUsage } from "./usage";
 import { alert, isUserError } from "./alerts";
 
@@ -63,9 +63,9 @@ async function runTask(t: Task) {
     if (t.kind === "transcribe") await transcribeJob(j);
     else await renderJob(j, t.workspaceId);
   } catch (err) {
-    const msg = (err as Error).message.slice(0, 400);
+    const msg = errorText(err).slice(0, 400);
     console.error(`[captions] ${t.kind} ${j.id} failed:`, msg);
-    if (!isUserError(msg)) alert(`caption ${t.kind} failed`, msg.slice(0, 300), `workspace ${t.workspaceId} · job ${j.id}`);
+    if (!isUserError(msg) && !currentSignal()?.aborted) alert(`caption ${t.kind} failed`, msg.slice(0, 300), `workspace ${t.workspaceId} · job ${j.id}`);
     set(j, t.kind === "render" ? { status: "ready", error: `Render failed: ${msg}`, step: undefined } : { status: "failed", error: msg, step: undefined });
   }
 }

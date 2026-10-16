@@ -68,17 +68,22 @@ export async function cachedStep<T>(o: {
   paid?: boolean;
   /** Persist the receipts. For paid steps it's awaited before the call, so a crash can't lose the "started" mark. */
   save: () => unknown;
-  /** Whether a result is good enough to reuse later (default: always). Others still count as done. */
+  /** Whether a result is good enough to reuse later (default: always). Others are kept only for this `scope`. */
   keep?: (value: T) => boolean;
+  /** This run (e.g. a render's requestedAt): a result not worth keeping is still reused when this run resumes. */
+  scope?: string;
   /** Run anew even if a result is stored (an explicit "try again"); the new result replaces it. */
   fresh?: boolean;
   run: () => Promise<T>;
 }): Promise<{ value: T; reused: boolean }> {
   const key = stepKey(o.kind, o.version, o.params);
-  const at = base(o.workspaceId, key);
+  const scoped = o.scope ? stepKey(o.kind, o.version, { params: o.params, scope: o.scope }) : undefined;
   const store = videoStore();
   const ext = o.file ? path.extname(o.file) : "";
-  if (!o.fresh && (await store.exists(`${at}.json`).catch(() => false))) {
+  for (const k of o.fresh ? [] : [key, scoped]) {
+    if (!k) continue;
+    const at = base(o.workspaceId, k);
+    if (!(await store.exists(`${at}.json`).catch(() => false))) continue;
     try {
       const value = JSON.parse(await readText(`${at}.json`)) as T;
       if (o.file) await pipeline((await store.read(`${at}${ext}`)).stream, fs.createWriteStream(o.file));
@@ -97,7 +102,10 @@ export async function cachedStep<T>(o: {
   let value: T;
   try {
     value = await o.run();
-    if (o.keep?.(value) ?? true) {
+    const keep = o.keep?.(value) ?? true;
+    const target = keep ? key : scoped;
+    if (target) {
+      const at = base(o.workspaceId, target);
       // The value is written last: its presence means the whole entry is there.
       if (o.file) await store.put(`${at}${ext}`, o.file, "application/octet-stream");
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "step-"));

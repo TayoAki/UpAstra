@@ -227,6 +227,8 @@ export interface ReferenceFormat {
   resumes?: number;
   /** What happened to each expensive step, by content key. */
   steps?: Record<string, { key: string; status: "started" | "done" | "failed"; at: string; reused?: boolean }>;
+  /** Asked to analyze again: don't reuse a stored breakdown, even after a restart. */
+  refresh?: boolean;
   cost: number;
   model?: string;
   createdAt: string;

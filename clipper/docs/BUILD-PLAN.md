@@ -126,7 +126,7 @@ Hypit paths below are relative to the hypit repo (`packages/...`, `skills/hypit/
 ### B1.4 Cancel and log
 - **Change:** `POST /api/clips/:id/render/cancel`, with a durable stop where the first cause wins, and a per-render execution log (`step`, `ms`, the stderr tail) stored with the output. Add a "Retry upload only" path for the "result attention" state.
 - **Tests first:**
-  - cancel mid-cut kills ffmpeg and leaves the clip `cancelled`;
+  - cancel mid-cut kills ffmpeg and the render ends as failed with error "Cancelled" (no new status value, so every client already shows it; decided in M1);
   - deleting a clip, caption job or format stops its running job (today it doesn't, batch 02 check);
   - a 429 or 5xx from OpenRouter retries with `Retry-After` and backoff (today only the 400 fallback exists, `server/llm.ts:197-201`);
   - the log endpoint returns the steps in order, with `omitted` counts.
