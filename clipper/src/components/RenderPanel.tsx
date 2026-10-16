@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, CalendarClock, Clapperboard, Download, Loader2, RotateCcw, Scissors } from "lucide-react";
+import { AlertTriangle, CalendarClock, Clapperboard, Download, Loader2, RotateCcw, Scissors, X } from "lucide-react";
 import { ScheduleModal } from "./ScheduleModal";
 import type { Clip, VoiceOption } from "../../shared/types";
 import { VOICES } from "../../shared/types";
@@ -44,7 +44,10 @@ export function RenderPanel({ clip }: { clip: Clip }) {
       <div className="render-box">
         <div className="row">
           <Loader2 size={16} className="spin" />
-          <strong>{r.step}</strong>
+          <strong className="grow">{r.step}</strong>
+          <button className="btn sm ghost" disabled={busy} onClick={() => void run(() => api.cancelRender(clip.id), "Render cancelled")}>
+            <X size={14} /> Cancel
+          </button>
         </div>
         <div className="render-steps">
           {STEPS.slice(0, 4).map((s) => (

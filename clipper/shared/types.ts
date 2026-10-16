@@ -301,6 +301,9 @@ export interface RenderInfo {
   editedAt?: string;
   /** What happened to each expensive step (voiceover, each shot), by content key. */
   steps?: Record<string, { key: string; status: "started" | "done" | "failed"; at: string; reused?: boolean }>;
+  /** When this run started, and each step it went through (seconds since then). */
+  startedAt?: string;
+  log?: { at: number; step: string }[];
 }
 
 export interface EditParts {

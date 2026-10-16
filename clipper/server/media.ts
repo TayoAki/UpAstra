@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { currentSignal } from "./jobs";
 import { stickerGraph, type Sticker } from "./overlays";
 
 // ffmpeg plumbing. Footage is read straight from its public link: ffmpeg
@@ -76,17 +77,26 @@ export function run(cmd: string, args: string[], timeoutMs = 20 * 60_000): Promi
     let stderr = "";
     p.stdout.on("data", (d) => (stdout += d));
     p.stderr.on("data", (d) => (stderr = (stderr + d).slice(-8000)));
-    const timer = setTimeout(() => {
+    const kill = () => {
       try {
         process.kill(-p.pid!, "SIGKILL");
       } catch {
         p.kill("SIGKILL");
       }
-    }, timeoutMs);
+    };
+    const timer = setTimeout(kill, timeoutMs);
+    // A cancelled job takes its processes with it.
+    const signal = currentSignal();
+    let cancelled = false;
+    const onAbort = () => ((cancelled = true), kill());
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
     p.on("error", (e) => (clearTimeout(timer), pid && live.delete(pid), reject(e)));
     p.on("close", (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       if (pid) live.delete(pid);
+      if (cancelled) return reject(new Error(String(signal?.reason ?? "Cancelled")));
       if (code === 0) resolve({ stdout, stderr });
       else {
         console.error(`[ffmpeg] ${cmd} ${args.filter((a) => !/^https?:/.test(a)).join(" ").slice(0, 600)}\n${stderr.trim().split("\n").slice(-12).join("\n")}`);

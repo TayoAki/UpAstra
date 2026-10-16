@@ -93,6 +93,7 @@ export const api = {
   updateClip: (id: string, b: Partial<Clip> & { override?: boolean }) => req<State>(`/clips/${id}`, "PUT", b),
   deleteClip: (id: string) => req<State>(`/clips/${id}`, "DELETE"),
   renderClip: (id: string, voice: string, override?: boolean) => req<State>(`/clips/${id}/render`, "POST", { voice, override }),
+  cancelRender: (id: string) => req<State>(`/clips/${id}/render/cancel`, "POST", {}),
   videoUrl: (id: string, key: string, download = false) => `/api/clips/${id}/video?v=${encodeURIComponent(key.slice(-24))}${download ? "&download=1" : ""}`,
   editorUrl: (id: string) => `/editor/?co_clip=${encodeURIComponent(id)}#/new?width=1080&height=1920&fps=30`,
   analyzeFootage: (campaignId: string, footageId: string) => req<State>(`/campaigns/${campaignId}/footage/${footageId}/analyze`, "POST", {}),

@@ -1,4 +1,5 @@
 import { currentWorkspaceId, HttpError } from "./db";
+import { currentSignal } from "./jobs";
 import { checkAIBudget, recordAI } from "./usage";
 // The one place the app talks to a language model (OpenRouter, or any
 // OpenAI-compatible endpoint). Without a key, callers fall back to rules.
@@ -172,6 +173,26 @@ export interface AIResult<T> {
 /** OpenRouter only: video input and audio output aren't part of the plain OpenAI API. */
 export const mediaLive = () => !forcedOff && !!process.env.OPENROUTER_API_KEY;
 
+/** A request timeout that also ends when the running job is cancelled. */
+const jobSignal = (ms: number) => {
+  const job = currentSignal();
+  return job ? AbortSignal.any([AbortSignal.timeout(ms), job]) : AbortSignal.timeout(ms);
+};
+
+/**
+ * Retry rate limits and server errors (twice), waiting as long as the
+ * provider's Retry-After says (at most 20 s), else 1 s then 3 s.
+ */
+export async function withRetries(send: () => Promise<Response>, tries = 3): Promise<Response> {
+  for (let i = 1; ; i++) {
+    const r = await send();
+    if (i >= tries || !(r.status === 429 || r.status >= 500)) return r;
+    const after = Number(r.headers.get("retry-after"));
+    await r.body?.cancel().catch(() => undefined);
+    await new Promise((res) => setTimeout(res, Number.isFinite(after) && r.headers.has("retry-after") ? Math.min(after, 20) * 1000 : i === 1 ? 1000 : 3000));
+  }
+}
+
 export async function chatJSON<T>(role: AIRole, system: string, user: unknown, maxTokens = 4000, media: unknown[] = []): Promise<AIResult<T>> {
   const p = provider();
   if (!p) throw new Error("No AI provider configured");
@@ -188,12 +209,14 @@ export async function chatJSON<T>(role: AIRole, system: string, user: unknown, m
   };
   if (p.openrouter) body.usage = { include: true };
   const post = () =>
-    fetch(p.url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${p.key}`, "Content-Type": "application/json", ...p.headers },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120_000),
-    }).then(async (r) => ({ ok: r.ok, status: r.status, text: await r.text() }));
+    withRetries(() =>
+      fetch(p.url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${p.key}`, "Content-Type": "application/json", ...p.headers },
+        body: JSON.stringify(body),
+        signal: jobSignal(120_000),
+      }),
+    ).then(async (r) => ({ ok: r.ok, status: r.status, text: await r.text() }));
   let res = await post();
   if (res.status === 400 && /response_format|json_object/i.test(res.text)) {
     delete body.response_format;
@@ -210,7 +233,7 @@ export async function chatJSON<T>(role: AIRole, system: string, user: unknown, m
 /** Read a script aloud. Returns 24 kHz mono 16-bit PCM and the provider's cost. */
 export async function speak(script: string, voice: string): Promise<{ pcm: Buffer; cost: number; transcript: string }> {
   if (!mediaLive()) throw new Error("Voiceover needs OPENROUTER_API_KEY");
-  const res = await fetch(`${process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1"}/chat/completions`, {
+  const res = await withRetries(() => fetch(`${process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1"}/chat/completions`, {
     method: "POST",
     headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, "Content-Type": "application/json", "X-Title": "UGCMediaClips" },
     body: JSON.stringify({
@@ -224,8 +247,8 @@ export async function speak(script: string, voice: string): Promise<{ pcm: Buffe
         { role: "user", content: script },
       ],
     }),
-    signal: AbortSignal.timeout(180_000),
-  });
+    signal: jobSignal(180_000),
+  }));
   if (!res.ok || !res.body) throw new Error(`Voice ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const chunks: Buffer[] = [];
   let transcript = "";

@@ -9,6 +9,7 @@ import { createApp } from "../server/app";
 import { initAuth } from "../server/auth";
 import { getDoc, runInWorkspace, useMemoryBackend } from "../server/db";
 import { ffmpegAvailable } from "../server/media";
+import { isPending } from "../server/jobs";
 import { enqueueRender } from "../server/render";
 
 // B1.1/B1.2: a voiced render pays for its voiceover once. Rendering the same
@@ -21,6 +22,7 @@ let app: http.Server;
 let base = "";
 let cookie = "";
 let tmp = "";
+let campaignId = "";
 
 // 3 s of a 300 Hz tone, 24 kHz mono 16-bit, as the voice model streams it.
 const pcm = Buffer.alloc(24000 * 2 * 3);
@@ -116,6 +118,7 @@ describe.skipIf(!ffmpegAvailable())("step cache in renders", () => {
     await api("/api/auth/signup", "POST", { email: "vc@test.dev", password: "password123" });
     const brief = `Game Link: https://example.com/game\nThe name "Turbo Ball" must be spoken.\nEncourage viewers to play Turbo Ball now near the end of the video.\nCPM: $1\nVideos 10-20 seconds.\nFootage: ${videoUrl}`;
     const c = (await api("/api/campaigns", "POST", { text: brief })).body.campaign;
+    campaignId = c.id;
     await api(`/api/campaigns/${c.id}`, "PUT", { brief: { ...c.brief, footage: [{ label: "Gameplay", url: videoUrl }] } });
     await api(`/api/campaigns/${c.id}/footage/refresh`, "POST", {});
     const clip = (await api(`/api/campaigns/${c.id}/clips`, "POST", { count: 1 })).body.clips[0];
@@ -148,4 +151,25 @@ describe.skipIf(!ffmpegAvailable())("step cache in renders", () => {
     expect(third.error).toMatch(/budget/i);
     expect(tts).toBe(1);
   }, 180_000);
+
+  it("cancels a render on request, logs its steps, and stops work for a deleted clip", async () => {
+    delete process.env.AI_DAILY_BUDGET_USD; // the previous test spent today's budget on purpose
+    const clip = (await api(`/api/campaigns/${campaignId}/clips`, "POST", { count: 1 })).body.clips[0];
+    expect((await api(`/api/clips/${clip.id}/render`, "POST", { voice: "none", override: true })).status).toBe(202);
+    await new Promise((r) => setTimeout(r, 400));
+    expect((await api(`/api/clips/${clip.id}/render/cancel`, "POST", {})).status).toBe(200);
+    const r = await settle(clip.id);
+    expect(r.status).toBe("failed");
+    expect(r.error).toMatch(/cancel/i);
+    expect(r.log.length).toBeGreaterThan(0);
+    expect(r.log[0]).toMatchObject({ step: expect.any(String), at: expect.any(Number) });
+    expect((await api(`/api/clips/${clip.id}/render/cancel`, "POST", {})).status).toBe(409); // nothing to cancel
+
+    expect((await api(`/api/clips/${clip.id}/render`, "POST", { voice: "none", override: true })).status).toBe(202);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(isPending(clip.id)).toBe(true);
+    await api(`/api/clips/${clip.id}`, "DELETE");
+    for (let i = 0; i < 40 && isPending(clip.id); i++) await new Promise((r) => setTimeout(r, 100));
+    expect(isPending(clip.id)).toBe(false);
+  }, 120_000);
 });

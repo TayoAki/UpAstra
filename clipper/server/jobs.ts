@@ -5,6 +5,8 @@
 // doesn't fit yet waits rather than being skipped, so light jobs can't
 // starve renders. Enqueueing wakes the controller; nothing polls.
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 export type JobKind = "render" | "caption" | "format";
 const WEIGHT: Record<JobKind, number> = { render: 2, caption: 1, format: 1 };
 
@@ -19,7 +21,18 @@ export interface Job {
 export const capacity = () => Math.max(1, Number(process.env.JOB_CAPACITY ?? 2) || 2);
 
 const waiting: Job[] = [];
-const running = new Map<string, { job: Job; weight: number }>();
+const running = new Map<string, { job: Job; weight: number; abort: AbortController }>();
+const signals = new AsyncLocalStorage<AbortSignal>();
+
+/** The running job's cancel signal, wherever its work is (ffmpeg runs, AI calls). */
+export const currentSignal = () => signals.getStore();
+
+/** Throw if the running job has been cancelled (call between steps). */
+export function checkCancelled() {
+  const s = currentSignal();
+  if (s?.aborted) throw new Error(String(s.reason ?? "Cancelled"));
+}
+
 /** Workspaces in the order they first queued work; turns go round this ring. */
 const ring: string[] = [];
 let lastTurn: string | undefined;
@@ -62,10 +75,11 @@ function drain() {
     if (used + weight > capacity()) break;
     waiting.splice(waiting.indexOf(job), 1);
     used += weight;
-    running.set(job.id, { job, weight });
+    const abort = new AbortController();
+    running.set(job.id, { job, weight, abort });
     lastTurn = job.workspaceId;
-    void job
-      .run()
+    void signals
+      .run(abort.signal, () => job.run())
       .catch((err) => console.error(`[jobs] ${job.kind} ${job.id} failed:`, (err as Error).message))
       .finally(() => {
         used -= weight;
@@ -88,6 +102,15 @@ export const isPending = (id: string) => running.has(id) || waiting.some((j) => 
 export const isRunning = (id: string) => running.has(id);
 export const waitingCount = (workspaceId: string, kind: JobKind) => waiting.filter((j) => j.workspaceId === workspaceId && j.kind === kind).length;
 export const pendingCount = (kind?: JobKind) => waiting.filter((j) => !kind || j.kind === kind).length + [...running.values()].filter((r) => !kind || r.job.kind === kind).length;
+
+/** Stop a job: drop it if it's waiting, abort it if it's running. False if it's unknown. */
+export function cancelJob(id: string, reason = "Cancelled"): boolean {
+  if (cancelWaiting(id)) return true;
+  const r = running.get(id);
+  if (!r) return false;
+  r.abort.abort(reason);
+  return true;
+}
 
 /** Drop a job that hasn't started; false if it's running or unknown. */
 export function cancelWaiting(id: string): boolean {

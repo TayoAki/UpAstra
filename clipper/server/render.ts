@@ -9,7 +9,7 @@ import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, tenantLo
 import { mediaLive, modelFor, speak } from "./llm";
 import { blackSpans, concat, compose, cutSegment, ffmpegAvailable, FPS, H, run, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
 import { cacheKey, footageSource, isCached } from "./footage-cache";
-import { isPending, pendingCount, submitJob, waitingCount } from "./jobs";
+import { cancelJob, cancelWaiting, checkCancelled, currentSignal, isPending, pendingCount, submitJob, waitingCount } from "./jobs";
 import { cachedStep } from "./steps";
 import { alignScript, type Alignment } from "./align";
 import { NO_SPACES, transcribe, transcriptionAvailable, type Word } from "./transcribe";
@@ -80,12 +80,15 @@ async function process_(job: Job) {
     const clip = getDoc().clips.find((c) => c.id === job.clipId);
     if (!clip?.render) return;
     const r = clip.render;
+    r.startedAt = now();
+    r.log = [];
     try {
       await renderClip(job.workspaceId, clip, r);
     } catch (err) {
-      const msg = (err as Error).message;
-      console.error(`[render] ${clip.id} failed:`, msg);
-      if (!isUserError(msg)) alert("render failed", msg.slice(0, 300), `workspace ${job.workspaceId} · clip ${clip.id}`);
+      const cancelled = !!currentSignal()?.aborted;
+      const msg = cancelled ? "Cancelled" : (err as Error).message;
+      console.error(`[render] ${clip.id} ${cancelled ? "cancelled" : "failed"}:`, (err as Error).message);
+      if (!cancelled && !isUserError(msg)) alert("render failed", msg.slice(0, 300), `workspace ${job.workspaceId} · clip ${clip.id}`);
       const c = getDoc().clips.find((x) => x.id === job.clipId);
       if (c?.render) {
         c.render.status = "failed";
@@ -101,9 +104,13 @@ async function process_(job: Job) {
   }, job.actor);
 }
 
+/** Show progress, keep a timed log of the steps, and stop here if the render was cancelled. */
 const step = (r: RenderInfo, status: RenderInfo["status"], text: string) => {
+  checkCancelled();
   r.status = status;
   r.step = text;
+  const at = r.startedAt ? Math.round((Date.now() - Date.parse(r.startedAt)) / 100) / 10 : 0;
+  r.log = [...(r.log ?? []), { at, step: text }].slice(-80);
   save();
 };
 
@@ -406,3 +413,13 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
 }
 
 export const queueLength = () => pendingCount("render");
+
+/** Stop a clip's render: drop it from the queue, or abort it where it is. False if it isn't rendering. */
+export function cancelRender(clip: Clip): boolean {
+  if (cancelWaiting(clip.id)) {
+    if (clip.render) Object.assign(clip.render, { status: "failed", step: "Failed", error: "Cancelled", finishedAt: now() });
+    if (clip.status === "rendering") clip.status = "approved";
+    return true;
+  }
+  return cancelJob(clip.id);
+}

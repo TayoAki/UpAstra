@@ -119,7 +119,8 @@ describe.skipIf(!ffmpegAvailable())("render pipeline", () => {
     const r = await api(`/api/clips/${clip.id}/render`, "POST", { voice: "none", override: true });
     expect(r.status).toBe(202);
     let done: { status: string; error?: string; videoKey?: string; durationSec?: number } | undefined;
-    for (let i = 0; i < 120 && !done; i++) {
+    // Up to 2 minutes: renders share the CPU with the rest of the suite.
+    for (let i = 0; i < 240 && !done; i++) {
       await new Promise((res) => setTimeout(res, 500));
       const s = await api("/api/state");
       const rr = s.body.clips.find((x: { id: string }) => x.id === clip.id).render;

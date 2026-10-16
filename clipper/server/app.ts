@@ -14,7 +14,8 @@ import { extractBrief, normalizeBrief } from "./extract";
 import { aiLive, editorModel, forwardChat, mediaLive, modelFor, spendAI } from "./llm";
 import { emptyMonth, isAdmin, monthCost, monthKey, recordAI, usageReport } from "./usage";
 import { analyzeFootage } from "./moments";
-import { enqueueRender, renderAvailable } from "./render";
+import { cancelRender, enqueueRender, renderAvailable } from "./render";
+import { cancelJob } from "./jobs";
 import { saveStream, saveTo, saveUpload } from "./footage-cache";
 import { Readable } from "node:stream";
 import { applyEdits, enqueueCaptionJob } from "./caption-jobs";
@@ -861,6 +862,7 @@ export function createApp() {
     wrap(async (req, res) => {
       const f = findFormat(String(req.params.id));
       const doc = getDoc();
+      cancelJob(f.id, "Deleted");
       doc.formats = (doc.formats ?? []).filter((x) => x.id !== f.id);
       await videoStore().deletePrefix(f.sourceKey.replace(/[^/]+$/, "")).catch(() => undefined);
       save();
@@ -929,6 +931,7 @@ export function createApp() {
     wrap(async (req, res) => {
       const doc = getDoc();
       const j = findJob(String(req.params.id));
+      cancelJob(j.id, "Deleted");
       doc.captionJobs = (doc.captionJobs ?? []).filter((x) => x.id !== j.id);
       for (const k of [j.sourceKey, j.outputKey]) if (k?.startsWith(`${req.workspaceId}/captions/`)) await videoStore().deletePrefix(k.slice(0, k.lastIndexOf("/") + 1)).catch(() => undefined);
       save();
@@ -1394,9 +1397,18 @@ export function createApp() {
     }),
   );
 
+  api.post("/clips/:id/render/cancel", (req, res) => {
+    const clip = findClip(String(req.params.id));
+    if (!cancelRender(clip)) throw new HttpError(409, "This clip isn't rendering");
+    log({ campaignId: clip.campaignId, kind: "clip", message: `Render cancelled for "${clip.title}".` });
+    save();
+    res.json(stateFor());
+  });
+
   api.delete("/clips/:id", (req, res) => {
     const doc = getDoc();
     const clip = findClip(String(req.params.id));
+    cancelJob(clip.id, "Deleted");
     doc.clips = doc.clips.filter((x) => x.id !== clip.id);
     for (const p of doc.posts.filter((x) => x.clipId === clip.id)) p.clipId = undefined;
     save();
