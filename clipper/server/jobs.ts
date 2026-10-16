@@ -84,17 +84,19 @@ function drain() {
       .finally(() => {
         used -= weight;
         running.delete(job.id);
-        // Forget workspaces with nothing left, so the ring doesn't grow forever.
-        if (!waiting.some((j) => j.workspaceId === job.workspaceId) && ![...running.values()].some((r) => r.job.workspaceId === job.workspaceId)) {
-          const i = ring.indexOf(job.workspaceId);
-          if (i >= 0) {
-            ring.splice(i, 1);
-            if (lastTurn === job.workspaceId) lastTurn = ring[(i - 1 + ring.length) % ring.length];
-          }
-        }
+        forgetIfIdle(job.workspaceId);
         drain();
       });
   }
+}
+
+/** Forget a workspace with nothing waiting or running, so the ring doesn't grow forever. */
+function forgetIfIdle(workspaceId: string) {
+  if (waiting.some((j) => j.workspaceId === workspaceId) || [...running.values()].some((r) => r.job.workspaceId === workspaceId)) return;
+  const i = ring.indexOf(workspaceId);
+  if (i < 0) return;
+  ring.splice(i, 1);
+  if (lastTurn === workspaceId) lastTurn = ring.length ? ring[(i - 1 + ring.length) % ring.length] : undefined;
 }
 
 /** Waiting or running. */
@@ -116,6 +118,7 @@ export function cancelJob(id: string, reason = "Cancelled"): boolean {
 export function cancelWaiting(id: string): boolean {
   const i = waiting.findIndex((j) => j.id === id);
   if (i < 0) return false;
-  waiting.splice(i, 1);
+  const [job] = waiting.splice(i, 1);
+  forgetIfIdle(job.workspaceId);
   return true;
 }

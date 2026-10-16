@@ -61,7 +61,7 @@ describe("cachedStep", () => {
     const receipts: Receipts = { voice: { key: stepKey("voice-test", 1, params), status: "started", at: new Date().toISOString() } };
     let runs = 0;
     const go = () => cachedStep({ workspaceId: ws, receipts, name: "voice", kind: "voice-test", version: 1, params, paid: true, save: () => undefined, run: async () => ++runs });
-    await expect(go()).rejects.toThrow(/needs attention|already started/i);
+    await expect(go()).rejects.toThrow(/server restarted.*may already have been charged/i);
     expect(runs).toBe(0);
     // A different script is a different step: it runs.
     const other = await cachedStep({ workspaceId: ws, receipts, name: "voice", kind: "voice-test", version: 1, params: { script: "bye" }, paid: true, save: () => undefined, run: async () => ++runs });
@@ -74,5 +74,28 @@ describe("cachedStep", () => {
     await expect(go(true)).rejects.toThrow("boom");
     expect(receipts.x.status).toBe("failed");
     expect((await go(false)).value).toBe(7);
+  });
+
+  it("stores only results worth reusing, and runs anew when asked", async () => {
+    const receipts: Receipts = {};
+    let runs = 0;
+    const go = (o: { good: boolean; fresh?: boolean }) =>
+      cachedStep({ workspaceId: ws, receipts, name: "take", kind: "keep-test", version: 1, params: {}, fresh: o.fresh, keep: (v) => v.good, save: () => undefined, run: async () => ({ good: o.good, n: ++runs }) });
+    expect((await go({ good: false })).reused).toBe(false);
+    expect((await go({ good: true })).value.n).toBe(2); // the weak result wasn't kept
+    expect((await go({ good: false })).value).toEqual({ good: true, n: 2 }); // the good one is
+    expect((await go({ good: true, fresh: true })).value.n).toBe(3); // asked for a fresh run
+    expect(receipts.take.status).toBe("done");
+  });
+
+  it("writes the started receipt before a paid call, and marks a failed store as failed", async () => {
+    const events: string[] = [];
+    const receipts: Receipts = {};
+    await cachedStep({ workspaceId: ws, receipts, name: "paid", kind: "order-test", version: 1, params: {}, paid: true, save: async () => void events.push(`save:${receipts.paid?.status}`), run: async () => (events.push("run"), 1) });
+    expect(events.slice(0, 2)).toEqual(["save:started", "run"]);
+    const r2: Receipts = {};
+    const missing = path.join(tmp, "never-written.bin");
+    await expect(cachedStep({ workspaceId: ws, receipts: r2, name: "x", kind: "store-fail", version: 1, params: {}, paid: true, file: missing, save: () => undefined, run: async () => 1 })).rejects.toThrow();
+    expect(r2.x.status).toBe("failed");
   });
 });

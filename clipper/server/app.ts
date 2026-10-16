@@ -843,8 +843,9 @@ export function createApp() {
     const f = findFormat(String(req.params.id));
     if (f.status === "analyzing") throw new HttpError(409, "Already working on it");
     spendAI(req.workspaceId!, 1);
-    enqueueFormat({ workspaceId: req.workspaceId!, formatId: f.id });
-    Object.assign(f, { status: "analyzing", step: "Queued", error: undefined, resumes: undefined, updatedAt: now() });
+    // Asked to try again: a fresh breakdown, not the stored one, and no stale receipts.
+    enqueueFormat({ workspaceId: req.workspaceId!, formatId: f.id, fresh: true });
+    Object.assign(f, { status: "analyzing", step: "Queued", error: undefined, resumes: undefined, steps: undefined, updatedAt: now() });
     save();
     res.status(202).json(stateFor());
   });

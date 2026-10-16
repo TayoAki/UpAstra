@@ -20,6 +20,9 @@ describe("CJK scripts", () => {
     expect(sentences("等等。。。现在下载！")).toEqual(["等等。。。", "现在下载！"]);
     expect(sentences("他说“真好！”我们走吧。")).toEqual(["他说“真好！”", "我们走吧。"]);
     expect(sentences("Wait?! Really. Version 3.5 is out.")).toEqual(["Wait?!", "Really.", "Version 3.5 is out."]);
+    // A quoted "!" mid-sentence doesn't end it; one before a capital does.
+    expect(sentences('He said "wow!" then left. Try it now.')).toEqual(['He said "wow!" then left.', "Try it now."]);
+    expect(sentences('She yelled "Go!" Then we won.')).toEqual(['She yelled "Go!"', "Then we won."]);
     // ASCII marks with no space, inside unspaced text.
     expect(sentences("这是最好的车!快来下载吧?")).toEqual(["这是最好的车!", "快来下载吧?"]);
     expect(sentences("これは最高の車です。「本当にすごい！」今すぐ試してね。")).toEqual(["これは最高の車です。", "「本当にすごい！」", "今すぐ試してね。"]);

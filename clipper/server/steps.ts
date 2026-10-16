@@ -66,14 +66,19 @@ export async function cachedStep<T>(o: {
   params: unknown;
   file?: string;
   paid?: boolean;
-  save: () => void;
+  /** Persist the receipts. For paid steps it's awaited before the call, so a crash can't lose the "started" mark. */
+  save: () => unknown;
+  /** Whether a result is good enough to reuse later (default: always). Others still count as done. */
+  keep?: (value: T) => boolean;
+  /** Run anew even if a result is stored (an explicit "try again"); the new result replaces it. */
+  fresh?: boolean;
   run: () => Promise<T>;
 }): Promise<{ value: T; reused: boolean }> {
   const key = stepKey(o.kind, o.version, o.params);
   const at = base(o.workspaceId, key);
   const store = videoStore();
   const ext = o.file ? path.extname(o.file) : "";
-  if (await store.exists(`${at}.json`).catch(() => false)) {
+  if (!o.fresh && (await store.exists(`${at}.json`).catch(() => false))) {
     try {
       const value = JSON.parse(await readText(`${at}.json`)) as T;
       if (o.file) await pipeline((await store.read(`${at}${ext}`)).stream, fs.createWriteStream(o.file));
@@ -85,25 +90,31 @@ export async function cachedStep<T>(o: {
   }
   const prior = o.receipts[o.name];
   if (o.paid && prior?.key === key && prior.status === "started")
-    throw new StepNeedsAttention(`The server restarted while the ${o.name} step was running and it may already have been charged, so it wasn't run again. It needs attention: render again to redo it.`);
+    throw new StepNeedsAttention(`The server restarted while the ${o.name} step was running and it may already have been charged, so it wasn't run again automatically. Start it again to redo it.`);
   o.receipts[o.name] = { key, status: "started", at: new Date().toISOString() };
-  o.save();
+  if (o.paid) await o.save();
+  else void o.save();
   let value: T;
   try {
     value = await o.run();
+    if (o.keep?.(value) ?? true) {
+      // The value is written last: its presence means the whole entry is there.
+      if (o.file) await store.put(`${at}${ext}`, o.file, "application/octet-stream");
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "step-"));
+      try {
+        fs.writeFileSync(path.join(dir, "v.json"), JSON.stringify(value ?? null));
+        await store.put(`${at}.json`, path.join(dir, "v.json"), "application/json");
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
   } catch (err) {
     o.receipts[o.name] = { key, status: "failed", at: new Date().toISOString() };
-    o.save();
+    await o.save();
     throw err;
   }
-  // The value is written last: its presence means the whole entry is there.
-  if (o.file) await store.put(`${at}${ext}`, o.file, "application/octet-stream");
-  const meta = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "step-")), "v.json");
-  fs.writeFileSync(meta, JSON.stringify(value ?? null));
-  await store.put(`${at}.json`, meta, "application/json");
-  fs.rmSync(path.dirname(meta), { recursive: true, force: true });
   o.receipts[o.name] = { key, status: "done", at: new Date().toISOString() };
-  o.save();
+  await o.save();
   return { value, reused: false };
 }
 

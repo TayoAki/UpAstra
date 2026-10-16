@@ -29,6 +29,9 @@ export function sentences(text: string): string[] {
     if (closed && next && QUOTING.test(chars.slice(i + 1, i + 3).join(""))) continue;
     // ASCII marks end a sentence only before a space ("3.5" doesn't), or
     // straight before unspaced text ("车!快来").
+    // After a closing quote, ASCII marks end the sentence only if a capital
+    // (or anything but a lowercase word) follows: He said "wow!" then left.
+    if (closed && !fullWidth && next === " " && /\p{Ll}/u.test(chars[i + 2] ?? "")) continue;
     if (next === undefined || next === " " || fullWidth || (/[!?]/.test(chars[i]) && UNSPACED.test(next))) {
       if (cur.trim()) out.push(cur.trim());
       cur = "";

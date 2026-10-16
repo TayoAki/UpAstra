@@ -167,6 +167,17 @@ describe("formats", () => {
     expect(f.steps.breakdown).toMatchObject({ status: "done", reused: true });
     expect(visionCalls()).toBe(before);
 
+    // Asking to analyze again gets a fresh breakdown, not the stored one.
+    expect((await call(`/api/formats/${id}/analyze`, "POST", {})).status).toBe(202);
+    for (let i = 0; i < 100; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      f = (await call(`/api/formats/${id}`)).body;
+      if (f.status === "ready") break;
+    }
+    expect(f.status).toBe("ready");
+    expect(visionCalls()).toBe(before + 1);
+    expect(f.steps.breakdown.reused).toBeFalsy();
+
     // Not ready → refused; unknown id → refused.
     expect((await call(`/api/campaigns/${camp.id}/clips`, "POST", { count: 1, formatId: "fmt_nope" })).status).toBe(400);
     expect((await call(`/api/formats/${id}`, "DELETE")).body.formats).toHaveLength(0);

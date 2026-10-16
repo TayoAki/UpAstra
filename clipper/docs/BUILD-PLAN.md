@@ -96,7 +96,7 @@ Hypit paths below are relative to the hypit repo (`packages/...`, `skills/hypit/
   - a resumed format breakdown re-pays for vision (`server/formats.ts:151`);
   - resumes skip `checkAIBudget` entirely (it is reached only via `spendAI` at enqueue, `server/llm.ts:48`);
   - the boot scan doesn't resume formats (`server/db.ts:147-155`).
-- **Change:** a `render_steps` record per render: `{renderId, step, key, status: started|done|failed, outputKey, costUsd, at}`. Write `started` before every paid or expensive step (TTS, vision, transcription, cut, compose) and `done` with the output key after it.
+- **Change:** receipts per job (`render.steps`, `format.steps`): `{key, status: started|done|failed, at, reused}`, with outputs in storage under `steps/<workspace>/<key>`. The paid steps (TTS with its word timing, the vision breakdown) and the shot cuts get them; the `started` receipt is saved before a paid call. Compose and transcription aren't receipted: they're free CPU and the final MP4 is stored anyway (decided in M1). Only clean, word-timed takes are reused later, and an explicit "analyze again" runs fresh (M1 review).
 - **Tests first:**
   - kill a render after TTS. On resume, the TTS mock is called 0 more times and the render completes.
   - an unknown outcome (a `started` with no `done` on a paid step) is surfaced as "needs attention", never silently repeated;

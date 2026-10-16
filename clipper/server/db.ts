@@ -358,6 +358,16 @@ export function save() {
   }, 300);
 }
 
+/** Save the current workspace now (not debounced), e.g. before a paid call. */
+export async function saveNow() {
+  const id = currentWorkspaceId();
+  const t = id ? tenants.get(id) : undefined;
+  if (!id || !t) return;
+  clearTimeout(t.timer);
+  t.timer = undefined;
+  await getBackend().saveDoc(id, t.doc);
+}
+
 export async function flushAll() {
   await Promise.all(
     [...tenants].map(async ([id, t]) => {

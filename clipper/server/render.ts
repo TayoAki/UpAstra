@@ -5,14 +5,14 @@ import { traitsOf } from "../shared/learning";
 import { checkClip, round2 } from "../shared/rules";
 import type { Campaign, Clip, EditParts, FootageFile, RenderInfo, VoiceOption } from "../shared/types";
 import { buildAss, groups, HOOK_SECONDS, lastSentenceStart, sentences, timeWords } from "./captions";
-import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, tenantLoadHooks } from "./db";
+import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, saveNow, tenantLoadHooks } from "./db";
 import { mediaLive, modelFor, speak } from "./llm";
-import { blackSpans, concat, compose, cutSegment, ffmpegAvailable, FPS, H, run, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
+import { blackSpans, concat, compose, cutSegment, cutSignature, ffmpegAvailable, H, run, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
 import { cacheKey, footageSource, isCached } from "./footage-cache";
 import { cancelJob, cancelWaiting, checkCancelled, currentSignal, isPending, pendingCount, submitJob, waitingCount } from "./jobs";
 import { cachedStep } from "./steps";
 import { alignScript, type Alignment } from "./align";
-import { NO_SPACES, transcribe, transcriptionAvailable, type Word } from "./transcribe";
+import { NO_SPACES, transcribe, transcriptionAvailable, whisperModel, type Word } from "./transcribe";
 import { accentOf, resolveCaptionStyle } from "../shared/caption-styles";
 import { prepareFonts } from "./fonts";
 import { analyzeFootage, pickMoment } from "./moments";
@@ -198,10 +198,12 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
         name: "voiceover",
         kind: "voice",
         version: 1,
-        params: { narration: clip.narration, voice: r.voice, model: modelFor("voice"), glossary, timed: transcriptionAvailable() },
+        params: { narration: clip.narration, voice: r.voice, model: modelFor("voice"), glossary, timing: transcriptionAvailable() ? path.basename(whisperModel()) : null },
         file: takeFile,
         paid: true,
-        save,
+        save: saveNow,
+        // Only a clean, word-timed take is reused later; a weak one is kept for this render only.
+        keep: (t) => !transcriptionAvailable() || (!!t.al && t.al.matched >= 0.85 && t.al.extra.inside <= 3),
         run: async () => {
           let best: { wav: string; seconds: number; al?: Alignment } | undefined;
           for (let attempt = 1; attempt <= 2; attempt++) {
@@ -297,7 +299,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
         name: `shot${i + 1}`,
         kind: "cut",
         version: 1,
-        params: { source: f.storageKey ?? cacheKey(f), start: requested, len, audio: f.hasAudio !== false, total, frame: [W, H, FPS] },
+        params: { source: f.storageKey ?? cacheKey(f), start: requested, len, audio: f.hasAudio !== false, total, cut: cutSignature() },
         file: out,
         save,
         run: async () => {

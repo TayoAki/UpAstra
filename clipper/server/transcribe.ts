@@ -23,11 +23,11 @@ export interface Transcript {
 }
 
 const bin = () => process.env.WHISPER_BIN ?? "whisper-cli";
-const model = () => process.env.WHISPER_MODEL ?? path.resolve(process.cwd(), "models/ggml-base.bin");
+export const whisperModel = () => process.env.WHISPER_MODEL ?? path.resolve(process.cwd(), "models/ggml-base.bin");
 
 let available: boolean | null = null;
 export function transcriptionAvailable(): boolean {
-  if (available === null) available = fs.existsSync(model()) && spawnSync(bin(), ["--help"], { stdio: "ignore" }).status === 0;
+  if (available === null) available = fs.existsSync(whisperModel()) && spawnSync(bin(), ["--help"], { stdio: "ignore" }).status === 0;
   return available;
 }
 
@@ -46,7 +46,7 @@ export async function transcribe(input: string, opts: { language?: string; gloss
     const wav = path.join(dir, "audio.wav");
     await run("ffmpeg", [...netArgs(input), "-v", "error", "-y", "-i", input, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wav], 20 * 60_000);
     const prompt = (opts.glossary ?? []).filter(Boolean).slice(0, 20).join(", ");
-    const args = ["-m", model(), "-f", wav, "-l", opts.language || "auto", "-ml", "1", "-sow", "-oj", "-of", path.join(dir, "out"), "-np", "-t", String(Math.max(1, Math.min(8, os.cpus().length)))];
+    const args = ["-m", whisperModel(), "-f", wav, "-l", opts.language || "auto", "-ml", "1", "-sow", "-oj", "-of", path.join(dir, "out"), "-np", "-t", String(Math.max(1, Math.min(8, os.cpus().length)))];
     if (prompt) args.push("--prompt", prompt);
     await run(bin(), args, 30 * 60_000);
     const json = JSON.parse(fs.readFileSync(path.join(dir, "out.json"), "utf8"));

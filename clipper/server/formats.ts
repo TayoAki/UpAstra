@@ -5,7 +5,7 @@ import path from "node:path";
 import { CAPTION_STYLES } from "../shared/caption-styles";
 import { HOOK_STYLES, OVERLAY_KINDS, type FormatBreakdown, type HookStyle, type OverlayKind, type ReferenceFormat } from "../shared/types";
 import { alert, isUserError } from "./alerts";
-import { getDoc, HttpError, loadTenant, log, now, runInWorkspace, save, tenantLoadHooks } from "./db";
+import { getDoc, HttpError, loadTenant, log, now, runInWorkspace, save, saveNow, tenantLoadHooks } from "./db";
 import { chatJSON, mediaLive, modelFor } from "./llm";
 import { netArgs, probe, run } from "./media";
 import { isPending, submitJob, waitingCount } from "./jobs";
@@ -39,7 +39,7 @@ Times are seconds from the start. Describe only what is actually in the video.`;
 
 // ---- Queue ------------------------------------------------------------------------
 
-type Task = { workspaceId: string; formatId: string };
+type Task = { workspaceId: string; formatId: string; /** Re-run the paid breakdown instead of reusing a stored one. */ fresh?: boolean };
 
 export function enqueueFormat(t: Task) {
   if (waitingCount(t.workspaceId, "format") >= 3) throw new HttpError(429, "You already have 3 videos waiting to be broken down. Try again when they finish.");
@@ -151,7 +151,8 @@ async function analyze(t: Task) {
       version: 1,
       params: { source: f.sourceKey, ask, system: createHash("sha256").update(SYSTEM).digest("hex"), model: modelFor("format") },
       paid: true,
-      save,
+      fresh: t.fresh,
+      save: saveNow,
       run: async () => {
         await buildReferenceProxy(src, proxy);
         return chatJSON<Record<string, unknown>>("format", SYSTEM, ask, 5000, [{ type: "video_url", video_url: { url: `data:video/mp4;base64,${fs.readFileSync(proxy).toString("base64")}` } }]);

@@ -171,15 +171,21 @@ export const VIDEO_H = 844;
  * One shot: cut `seconds` from `url` at `start`, frame it for 9:16 (blurred
  * fill behind a slightly zoomed landscape shot), normalized audio.
  */
-export async function cutSegment(url: string, start: number, seconds: number, hasAudio: boolean, out: string) {
-  const fg = `scale=${Math.round(W * 1.25)}:${VIDEO_H}:force_original_aspect_ratio=increase,crop=${W}:${VIDEO_H}`;
-  const filter = [
+const cutFilter = (hasAudio: boolean) =>
+  [
     `[0:v]split[a][b]`,
     `[a]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},gblur=sigma=28,eq=brightness=-0.12[bg]`,
-    `[b]${fg}[fg]`,
+    `[b]scale=${Math.round(W * 1.25)}:${VIDEO_H}:force_original_aspect_ratio=increase,crop=${W}:${VIDEO_H}[fg]`,
     `[bg][fg]overlay=0:${VIDEO_TOP},fps=${FPS},format=yuv420p,setsar=1[v]`,
     hasAudio ? `[0:a]aresample=44100,aformat=channel_layouts=stereo,apad[a1]` : `anullsrc=r=44100:cl=stereo[a1]`,
   ].join(";");
+const CUT_ENCODE = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", ...BT709, "-c:a", "aac", "-b:a", "160k"];
+
+/** Everything about how a shot is cut, so a stored cut is reused only while it would come out the same. */
+export const cutSignature = () => `${cutFilter(true)}|${CUT_ENCODE.join(" ")}`;
+
+export async function cutSegment(url: string, start: number, seconds: number, hasAudio: boolean, out: string) {
+  const filter = cutFilter(hasAudio);
   await run("ffmpeg", [
     ...netArgs(url),
     "-v", "error", "-y",
@@ -188,8 +194,7 @@ export async function cutSegment(url: string, start: number, seconds: number, ha
     "-filter_complex", filter,
     "-map", "[v]", "-map", "[a1]",
     "-t", seconds.toFixed(2),
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", ...BT709,
-    "-c:a", "aac", "-b:a", "160k",
+    ...CUT_ENCODE,
     out,
   ]);
 }
