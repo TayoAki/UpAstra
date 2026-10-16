@@ -106,9 +106,10 @@ describe("comment layout", () => {
     const placed = Array.from({ length: 6 }, (_, i) => ({ o: { id: `c${i}`, kind: "comment", user: `u${i}`, text: body } as Overlay, start: 1, end: 3 }));
     const hidden = hiddenComments(placed, L("Poppins Black"));
     expect(hidden.length).toBeGreaterThan(0);
-    const drawn = overlayEvents(placed, L("Poppins Black")).filter((l) => l.includes("Reply to @"));
+    // Each card is drawn as an entry and an exit event; count cards by who they reply to.
+    const drawn = [...new Set(overlayEvents(placed, L("Poppins Black")).flatMap((l) => l.match(/Reply to @(\w+)/)?.[1] ?? []))];
     expect(drawn.length + hidden.length).toBe(6);
-    for (const h of hidden) expect(drawn.some((l) => l.includes(`@${h.user}`))).toBe(false);
+    for (const h of hidden) expect(drawn).not.toContain(h.user);
   });
 
   it("keeps cards off the hook, pop-up words and emoji stickers", () => {
