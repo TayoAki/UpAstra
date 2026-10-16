@@ -112,4 +112,10 @@ describe("phrase binding, harder cases", () => {
     expect(ja[1].bound).toBe(true);
     expect(ja[1].start).toBeCloseTo(jw.findIndex((w) => w.startsWith("今")) * 0.4, 5);
   });
+
+  it("doesn't bind a Latin phrase inside a longer word", () => {
+    const words = timedWords("we love it a lot then career moves and the car wins".split(" "));
+    const t = shotTimes([{ seconds: 2 }, { seconds: 2, phrase: "car" }], words, 8);
+    expect(t[1].start).toBeCloseTo(10 * 0.4, 5); // "car" (word 10), not "career" (word 6)
+  });
 });

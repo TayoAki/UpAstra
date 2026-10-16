@@ -26,12 +26,25 @@ describe("sound design", () => {
       { o: o({ kind: "tier", text: "Octane", tier: "S" }), start: 4, end: 9 },
       { o: o({ kind: "tier", text: "Fennec", tier: "A" }), start: 5, end: 9 },
       { o: o({ kind: "emoji", emoji: "🔥" }), start: 6, end: 7 },
-    ], L);
+    ], L, [{ start: 6 }]);
     expect(ev.filter((e) => e.kind === "pop").map((e) => e.at)).toEqual([1, 4, 5, 6]);
     const whooshes = ev.filter((e) => e.kind === "whoosh");
     expect(whooshes).toHaveLength(2);
     expect(whooshes[0].at).toBeGreaterThan(4);
     expect(whooshes[0].at).toBeLessThan(5); // the first item glides before the second is named
+  });
+
+  it("plays effects only for what's drawn, when it's drawn", () => {
+    const o = (x: Partial<Overlay>) => ({ id: Math.random().toString(36), ...x }) as Overlay;
+    const body = "this is a really long comment that needs three lines to fit in the card";
+    const placed = [
+      ...Array.from({ length: 6 }, (_, i) => ({ o: o({ kind: "comment", user: `u${i}`, text: body }), start: 1, end: 3 })),
+      { o: o({ kind: "emoji", emoji: "🔥" }), start: 4, end: 5 },
+    ];
+    const ev = sfxEvents(placed, L, [] /* no sticker image for the emoji */);
+    const pops = ev.filter((e) => e.kind === "pop");
+    expect(pops.length).toBeLessThan(6); // hidden cards make no sound
+    expect(pops.every((p) => p.at !== 4)).toBe(true); // nor does an emoji with no image
   });
 
   it.skipIf(!ffmpegAvailable())("puts a pop exactly on its overlay and keeps the mix at -14 LUFS", async () => {

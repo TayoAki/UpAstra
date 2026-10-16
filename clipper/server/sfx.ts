@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { tierSchedule, type OverlayLayout, type Placed } from "./overlays";
+import { layoutComments, tierSchedule, type OverlayLayout, type Placed } from "./overlays";
 
 // Opt-in sound design (brief.soundDesign): a short pop when an overlay
 // appears and a whoosh when a tier item glides into its cell, timed from the
@@ -16,16 +16,22 @@ export interface SfxEvent {
 /** How loud each effect sits under the voice (linear gain). */
 export const SFX_GAIN: Record<SfxKind, number> = { pop: 0.5, whoosh: 0.35 };
 
-/** When each effect plays: a pop on every overlay's entrance, a whoosh on every tier glide. */
-export function sfxEvents(placed: Placed[], L: OverlayLayout): SfxEvent[] {
+/**
+ * When each effect plays, following what's actually drawn: a pop on each
+ * tier reveal, comment card (when it really appears; hidden cards make no
+ * sound), pop-up word and emoji sticker (only those with an image, when
+ * `stickers` is given), and a whoosh on each tier glide.
+ */
+export function sfxEvents(placed: Placed[], L: OverlayLayout, stickers?: { start: number }[]): SfxEvent[] {
   const out: SfxEvent[] = [];
   const tiers = placed.filter((p) => p.o.kind === "tier" && p.o.text?.trim());
   if (tiers.length) {
     const to = Math.max(...tiers.map((t) => t.end));
     for (const s of tierSchedule(tiers.map((t) => t.start), to)) out.push({ at: s.start, kind: "pop" }, { at: s.glideStart, kind: "whoosh" });
   }
-  for (const p of placed) if (p.o.kind !== "tier" && (p.o.kind !== "text" || p.o.text?.trim()) && (p.o.kind !== "comment" || p.o.text?.trim())) out.push({ at: p.start, kind: "pop" });
-  void L; // the layout doesn't change timing today; kept so effects can follow placement later
+  for (const c of layoutComments(placed, L)) if (c.shown) out.push({ at: c.start, kind: "pop" });
+  for (const p of placed) if (p.o.kind === "text" && p.o.text?.trim()) out.push({ at: p.start, kind: "pop" });
+  for (const s of stickers ?? placed.filter((p) => p.o.kind === "emoji" && p.o.emoji)) out.push({ at: s.start, kind: "pop" });
   return out.sort((a, b) => a.at - b.at || a.kind.localeCompare(b.kind));
 }
 

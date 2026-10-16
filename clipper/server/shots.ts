@@ -18,21 +18,24 @@ export function shotTimes(shots: { seconds: number; phrase?: string }[], words: 
   if (!n) return [];
   // Match phrases on the words' text joined without spaces (character
   // offsets map back to words), so unspaced scripts (Chinese, Japanese,
-  // Thai) bind too. A Latin phrase must start on a word boundary.
+  // Thai) bind too. A Latin phrase must start and end on word boundaries.
   let stream = "";
   const owner: number[] = [];
   const wordStart = new Set<number>();
+  const wordEnd = new Set<number>();
   words.forEach((w, i) => {
     const t = norm(w.text).replace(/ /g, "");
     wordStart.add(stream.length);
     stream += t;
+    wordEnd.add(stream.length);
     for (let k = 0; k < t.length; k++) owner.push(i);
   });
   const find = (phrase: string, from: number): { at: number; end: number } | undefined => {
     const p = norm(phrase).replace(/ /g, "");
     if (!p) return undefined;
     const boundary = /^[\p{Script=Latin}\p{N}]/u.test(p);
-    for (let at = stream.indexOf(p, from); at >= 0; at = stream.indexOf(p, at + 1)) if (!boundary || wordStart.has(at)) return { at, end: at + p.length };
+    // A Latin phrase must be whole words ("car" isn't inside "career").
+    for (let at = stream.indexOf(p, from); at >= 0; at = stream.indexOf(p, at + 1)) if (!boundary || (wordStart.has(at) && wordEnd.has(at + p.length))) return { at, end: at + p.length };
     return undefined;
   };
   const anchor: (number | undefined)[] = new Array(n).fill(undefined);

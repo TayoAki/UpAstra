@@ -343,7 +343,7 @@ export function commentLayout(comments: CommentIn[], L: OverlayLayout, board?: {
       // Everything on screen at the same time: other cards, and the hook, pop-up words and stickers.
       const live: Box[] = [...out.filter((p) => p.shown), ...blocked].filter((p) => p.start < c.end && c.start < p.end);
       for (const maxLines of [3, 2, 1]) {
-        const fit = fitText(c.text, { font: L.font, widths: L.fontWidths, size: px(46), minSize: px(38), maxWidth: w - px(152), maxLines });
+        const fit = fitText(c.text, { font: L.font, widths: L.fontWidths, size: px(46), minSize: px(38), maxWidth: c.user ? w - px(152) : w - px(80), maxLines });
         if (!fit.lines.length) break;
         // A card with no "Reply to @…" header is shorter.
         const h = (c.user ? px(118) : px(80)) + fit.lines.length * Math.round(fit.size * (56 / 46));
@@ -412,23 +412,23 @@ export function overlayEvents(placed: Placed[], L: OverlayLayout): string[] {
     if (!p.shown) continue;
     const { x, y, w, h, user } = p;
     // A card tilted 2.5°: every piece rotates around the card's centre, unwinds
-    // from 8° as it slides up and fades in, and fades up on the way out.
+    // from 4.5° (so it can't swing into a settled neighbour) as it slides up and fades in, and fades up on the way out.
     const org = `\\org(${Math.round(x + w / 2)},${Math.round(y + h / 2)})`;
     const exit = Math.min(0.2, (p.end - p.start) * 0.25);
     const piece = (layer: number, style: string, px0: number, py0: number, tags: string, text: string, an = 7) => {
       const [x0, y0] = [Math.round(px0), Math.round(py0)];
-      lines.push(`Dialogue: ${layer},${ts(p.start)},${ts(p.end - exit)},${style},,0,0,0,,{\\an${an}${org}\\move(${x0},${y0 + px(28)},${x0},${y0},0,180)\\frz8\\t(0,220,\\frz2.5)\\fad(140,0)${tags}}${text}`);
+      lines.push(`Dialogue: ${layer},${ts(p.start)},${ts(p.end - exit)},${style},,0,0,0,,{\\an${an}${org}\\move(${x0},${y0 + px(28)},${x0},${y0},0,180)\\frz4.5\\t(0,220,\\frz2.5)\\fad(140,0)${tags}}${text}`);
       lines.push(`Dialogue: ${layer},${ts(p.end - exit)},${ts(p.end)},${style},,0,0,0,,{\\an${an}${org}\\move(${x0},${y0},${x0},${y0 - px(24)},0,${Math.round(exit * 1000)})\\frz2.5\\fad(0,${Math.round(exit * 1000)})${tags}}${text}`);
     };
     piece(10, "OvShape", x, y, "\\1c&H00FFFFFF&\\p1", `${roundedRect(w, h, px(34))}{\\p0}`);
     const av = px(68);
-    piece(11, "OvShape", x + px(28), y + px(26), `\\1c${assColor(L.accent)}\\shad0\\p1`, `${roundedRect(av, av, av / 2)}{\\p0}`);
-    // Who's being replied to only when the plan said so; a nameless card has no header.
+    // Who's being replied to only when the plan said so; a nameless card has no avatar or header.
     if (user) {
+      piece(11, "OvShape", x + px(28), y + px(26), `\\1c${assColor(L.accent)}\\shad0\\p1`, `${roundedRect(av, av, av / 2)}{\\p0}`);
       piece(12, "OvUser", x + px(28) + av / 2, y + px(26) + av / 2, `\\1c&H00FFFFFF&\\fs${px(34)}\\b1`, esc(user[0].toUpperCase()), 5);
       piece(12, "OvUser", x + px(116), y + px(30), "", `Reply to @${esc(user)}`);
     }
-    piece(12, "OvBody", x + px(116), y + (user ? px(74) : px(36)), p.bodySize !== px(46) ? `\\fs${p.bodySize}` : "", p.body.join("\\N"));
+    piece(12, "OvBody", x + (user ? px(116) : px(40)), y + (user ? px(74) : px(36)), p.bodySize !== px(46) ? `\\fs${p.bodySize}` : "", p.body.join("\\N"));
   }
 
   // Pop-up words in the middle of the footage, alternating tilt.

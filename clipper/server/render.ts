@@ -367,7 +367,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     fs.writeFileSync(ass, buildAss({ hook: clip.hook, captions: captionGroups, cta: ctaText, ctaFrom, duration, style, accent: accentOf(brand), language: r.language, overlays: { placed, layout } }));
     const final = path.join(tmp, "final.mp4");
     // Sound design (opt-in per brief): effects on the overlays' own times, voice-ducked game audio.
-    const sound = c.brief.soundDesign ? { events: sfxEvents(placed, layout).filter((e) => e.at < duration - 0.1) } : undefined;
+    const sound = c.brief.soundDesign ? { events: sfxEvents(placed, layout, stickers).filter((e) => e.at < duration - 0.1) } : undefined;
     await compose({ video: joined, ass, voice: voicePath, duration, out: final, fontsDir: await prepareFonts(tmp, brand), workDir: tmp, stickers, sound });
 
     step(r, "rendering", "Uploading the video"); // the last point a cancel takes effect

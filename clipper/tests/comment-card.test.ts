@@ -14,7 +14,7 @@ describe("comment card", () => {
     expect(orgs.size).toBe(1); // every piece rotates around the same point
     expect([...orgs][0]).toBeDefined();
     const entry = ev.filter((l) => l.includes(",0:00:01.00,"));
-    for (const e of entry) expect(e).toMatch(/\\frz8\\t\(0,\d+,\\frz2\.5\)/);
+    for (const e of entry) expect(e).toMatch(/\\frz4\.5\\t\(0,\d+,\\frz2\.5\)/);
     const exit = ev.filter((l) => /^Dialogue: \d+,0:00:03\.\d\d,0:00:04\.00,/.test(l));
     expect(exit.length).toBe(entry.length);
     for (const e of exit) expect(e).toMatch(/\\fad\(0,\d+\)/);
@@ -25,5 +25,7 @@ describe("comment card", () => {
     const ev = card({ user: undefined });
     expect(ev.some((l) => l.includes("Reply to"))).toBe(false);
     expect(ev.some((l) => /\}viewer|\}V$/.test(l))).toBe(false);
+    // No avatar either: just the card and its text.
+    expect(ev.filter((l) => l.includes("\\shad0\\p1"))).toHaveLength(0);
   });
 });
