@@ -48,6 +48,97 @@ export function campaignStats(brief: CampaignBrief, clips: Clip[], posts: Post[]
 // Clip QA
 
 export const WORDS_PER_SECOND = 2.6;
+
+// ---------------------------------------------------------------------------
+// How long a script takes to say
+
+const ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
+const TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+
+/** An integer as it's said in English. */
+export function spellNumber(n: number): string {
+  if (n < 20) return ONES[n];
+  if (n < 100) return `${TENS[Math.floor(n / 10)]}${n % 10 ? ` ${ONES[n % 10]}` : ""}`;
+  if (n < 1000) return `${ONES[Math.floor(n / 100)]} hundred${n % 100 ? ` ${spellNumber(n % 100)}` : ""}`;
+  for (const [size, name] of [[1e9, "billion"], [1e6, "million"], [1e3, "thousand"]] as const)
+    if (n >= size) return `${spellNumber(Math.floor(n / size))} ${name}${n % size ? ` ${spellNumber(n % size)}` : ""}`;
+  return String(n);
+}
+
+/** Numbers and amounts spelled out the way they're read ("$5" → "five dollars", "2026" → "twenty twenty six"). */
+function spokenNumbers(text: string): string {
+  return text.replace(/\$?\d[\d,]*(\.\d+)?%?/g, (m) => {
+    const dollars = m.startsWith("$");
+    const pct = m.endsWith("%");
+    const raw = m.replace(/[$%]/g, "");
+    const [whole, frac] = raw.split(".");
+    const n = Number(whole.replace(/,/g, ""));
+    if (!Number.isFinite(n) || n > 1e12) return m;
+    // A four-digit year (not a round hundred) is read in pairs.
+    const isYear = !dollars && !pct && !whole.includes(",") && /^\d{4}$/.test(whole) && n >= 1100 && n < 2100 && n % 100 !== 0 && n % 1000 >= 10;
+    let said = isYear ? `${spellNumber(Math.floor(n / 100))} ${spellNumber(n % 100)}` : spellNumber(n);
+    if (frac) said += ` point ${[...frac].map((d) => ONES[+d]).join(" ")}`;
+    return `${said}${dollars ? " dollars" : ""}${pct ? " percent" : ""}`;
+  });
+}
+
+/** Syllables in an English-like word (vowel groups, minus a silent final e). */
+function syllables(word: string): number {
+  const w = word.toLowerCase().replace(/[^a-z]/g, "");
+  if (!w) return 0;
+  let n = (w.match(/[aeiouy]+/g) ?? []).length;
+  if (/[^aeiouy]e$/.test(w) && !/[^aeiouy]le$/.test(w) && n > 1) n--; // silent e ("game"), but "table"
+  if (/[gq]ue$/.test(w) && n > 1) n--; // "league", "unique"
+  return Math.max(1, n);
+}
+
+const HAN = /\p{Script=Han}/u;
+const KANA_MORA = /[\p{Script=Hiragana}\p{Script=Katakana}ー]/u;
+const SMALL_KANA = /[ぁぃぅぇぉゃゅょゎァィゥェォャュョヮ]/; // part of the mora before (っ/ッ count)
+const HANGUL = /\p{Script=Hangul}/u;
+const THAI = /[\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+
+function units(text: string) {
+  const u = { latin: 0, han: 0, kana: 0, other: 0 };
+  for (const token of spokenNumbers(text).split(/\s+/)) {
+    let latin = "";
+    for (const ch of token) {
+      if (HAN.test(ch)) u.han++;
+      else if (KANA_MORA.test(ch)) u.kana += SMALL_KANA.test(ch) ? 0 : 1;
+      else if (HANGUL.test(ch)) u.other++;
+      else if (THAI.test(ch)) u.other += 1 / 3;
+      else latin += ch;
+    }
+    u.latin += syllables(latin);
+  }
+  return u;
+}
+
+/** Spoken units in a script: syllables, Chinese characters, Japanese morae. */
+export const speechUnits = (text: string) => {
+  const u = units(text);
+  return Math.round(u.latin + u.han + u.kana + u.other);
+};
+
+/** Syllables a second for a typical TTS voice (≈ 2.6 English words a second). */
+export const UNITS_PER_SECOND = 3.6;
+
+/** Units weighted to English syllables: Chinese is read ~4.5 characters/s, Japanese ~7 morae/s. */
+export const speechLoad = (text: string) => {
+  const u = units(text);
+  return u.latin + u.other + u.han * (UNITS_PER_SECOND / 4.5) + u.kana * (UNITS_PER_SECOND / 7);
+};
+
+/** Seconds to say `text`, at a voice's learned pace if known. */
+export const speechSeconds = (text: string, unitsPerSec = UNITS_PER_SECOND) => speechLoad(text) / unitsPerSec;
+
+/** Learn a voice's pace from a render: a running mean of units per second. */
+export function calibrate(prev: { unitsPerSec: number; n: number } | undefined, load: number, seconds: number) {
+  if (!(seconds > 0.5) || !(load > 0)) return prev;
+  const rate = load / seconds;
+  const n = Math.min((prev?.n ?? 0) + 1, 20); // the last ~20 renders count
+  return { unitsPerSec: prev ? prev.unitsPerSec + (rate - prev.unitsPerSec) / n : rate, n };
+}
 // Scripts written without spaces (Chinese, Japanese, Thai, …) count about two
 // characters per spoken "word", so length estimates work for them too.
 const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/gu;
@@ -110,7 +201,7 @@ export function checkClip(clip: Pick<Clip, "hook" | "narration" | "cta" | "lengt
   checks.push({ rule: `Length ${min}–${max}s`, pass: clip.lengthSec >= min && clip.lengthSec <= max, note: `${clip.lengthSec}s planned` });
   // After a voiced render the real spoken length is known; before, estimate it from the word count.
   const measured = clip.render?.status === "done" && clip.render.voice !== "none" ? clip.render.spokenSec : undefined;
-  const talk = Math.round(measured ?? words(clip.narration) / WORDS_PER_SECOND);
+  const talk = Math.round(measured ?? speechSeconds(clip.narration));
   checks.push({ rule: "Voiceover fits the clip", pass: talk <= clip.lengthSec + 2, note: measured !== undefined ? `${talk}s spoken` : `~${talk}s of narration` });
 
   // 5. No banned claims.

@@ -386,6 +386,8 @@ export interface Activity {
 
 export interface WorkspaceDoc {
   version: 1;
+  /** Each AI voice's measured pace (speechLoad units a second), learned from voiced renders. */
+  voiceRates?: Record<string, { unitsPerSec: number; n: number }>;
   campaigns: Campaign[];
   clips: Clip[];
   posts: Post[];

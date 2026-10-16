@@ -54,7 +54,7 @@ describe("voiceover length after a render", () => {
   it("uses the measured spoken length once a voiced render exists", async () => {
     const { checkClip } = await import("../shared/rules");
     const brief = { requiredPhrases: [], cta: { text: "", placement: "end" }, lengthSec: { min: 15, max: 60 }, bannedClaims: [] } as never;
-    const narration = Array.from({ length: 65 }, () => "word").join(" "); // ~25s estimated
+    const narration = Array.from({ length: 30 }, () => "information").join(" "); // 120 syllables, ~33s estimated
     const base = { hook: "x", narration, cta: "", lengthSec: 21, onScreenText: [], shots: [] };
     const fit = (c: object) => checkClip(c as never, brief).checks.find((x) => x.rule === "Voiceover fits the clip")!;
     expect(fit(base).pass).toBe(false);

@@ -1,4 +1,5 @@
-import { checkClip, words, WORDS_PER_SECOND } from "../shared/rules";
+import { checkClip, speechSeconds, WORDS_PER_SECOND } from "../shared/rules";
+import { getDoc } from "./db";
 import { classifyHook, formatOf } from "../shared/learning";
 import type { Campaign, Clip, FootageFile, HookStyle, Playbook } from "../shared/types";
 import { HOOK_STYLES } from "../shared/types";
@@ -22,6 +23,16 @@ Write clip plans a video editor can execute from the campaign's own footage. Eac
 When "learning" is given, it is what this creator's past posts showed. Plans marked "proven" lean on what worked (proven traits, the style of the winning hooks — never copy them word for word) and avoid what underperformed. Plans marked "test" each try one untested option from the list instead, so the system keeps learning.
 When "format" is given, write every clip in that format: follow its recipe, beats, pacing, hook style and overlay pattern, adapted to this campaign's product, facts and footage (never copy the reference's words or claims).
 Return JSON {"clips":[{"title","angle","hookStyle","hook","narration","onScreenText":[...],"cta","shots":[{"footageName","moment","seconds","phrase"}],"lengthSec","caption","hashtags":[...],"overlays":[...]}]}.`;
+
+/** This workspace's voices' learned pace (syllables a second), averaged; the default until a voice is measured. */
+export function pace(): number | undefined {
+  try {
+    const rates = Object.values(getDoc().voiceRates ?? {});
+    return rates.length ? rates.reduce((n, r) => n + r.unitsPerSec, 0) / rates.length : undefined;
+  } catch {
+    return undefined; // outside a workspace (scripts, tests)
+  }
+}
 
 type Draft = Omit<Clip, "id" | "campaignId" | "status" | "qa" | "model" | "cost" | "createdAt" | "updatedAt"> & { hookStyle?: HookStyle };
 
@@ -49,7 +60,7 @@ export function toDraft(raw: Record<string, unknown>, c: Campaign): Draft {
     return { footageId: f?.id, footageName: f?.name ?? (toStr(s.footageName) || undefined), moment: toStr(s.moment), seconds: Math.max(1, Math.round(Number(s.seconds) || 4)), ...(phrase && cueInScript(phrase, toStr(raw.narration)) ? { phrase } : {}) };
   });
   const narration = toStr(raw.narration);
-  const lengthSec = Math.round(Number(raw.lengthSec) || Math.max(c.brief.lengthSec.min, Math.ceil(words(narration) / WORDS_PER_SECOND) + 2));
+  const lengthSec = Math.round(Number(raw.lengthSec) || Math.max(c.brief.lengthSec.min, Math.ceil(speechSeconds(narration, pace())) + 2));
   const style = toStr(raw.hookStyle) as HookStyle;
   return {
     hookStyle: HOOK_STYLES.some((h) => h.id === style) ? style : undefined,
@@ -141,7 +152,7 @@ function simulatedDrafts(c: Campaign, n: number, offset: number, plan?: (k: numb
       const f = video[(i * 3 + s) % Math.max(video.length, 1)];
       return { footageId: f?.id, footageName: f?.name, moment: ["Strongest moment for the hook", "Gameplay that shows the feature", "Big finish under the call to action"][s], seconds: s === 1 ? 10 : 6 };
     });
-    const lengthSec = Math.min(b.lengthSec.max, Math.max(b.lengthSec.min, Math.ceil(words(narration) / WORDS_PER_SECOND) + 3));
+    const lengthSec = Math.min(b.lengthSec.max, Math.max(b.lengthSec.min, Math.ceil(speechSeconds(narration, pace())) + 3));
     return {
       title: `${a.angle}: ${product}`,
       angle: a.angle,

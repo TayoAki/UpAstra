@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { traitsOf } from "../shared/learning";
-import { checkClip, round2 } from "../shared/rules";
+import { calibrate, checkClip, round2, speechLoad } from "../shared/rules";
 import type { Campaign, Clip, EditParts, FootageFile, RenderInfo, VoiceOption } from "../shared/types";
 import { buildAss, fitCaptionsFor, groups, HOOK_SECONDS, lastSentenceStart, sentences, timeWords } from "./captions";
 import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, saveNow, tenantLoadHooks } from "./db";
@@ -419,6 +419,12 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     fresh.lengthSec = Math.round(duration);
     // What the learning system compares once this clip is posted.
     fresh.traits = { ...traitsOf(fresh), voice: r.voice, opening };
+    // Learn this voice's pace, so plans for it are timed better next time.
+    if (voicePath && r.voice !== "none") {
+      const doc = getDoc();
+      const rate = calibrate(doc.voiceRates?.[r.voice], speechLoad(clip.narration), speechEnd);
+      if (rate) doc.voiceRates = { ...doc.voiceRates, [r.voice]: rate };
+    }
     fresh.qa = checkClip(fresh, c.brief);
     recordUsage("renders", 1);
     recordUsage("renderSec", duration);

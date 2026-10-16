@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Check, Copy, GitBranch, Pencil, Send, Trash2, Trophy, X } from "lucide-react";
 import { fmtNum } from "../../shared/rules";
-import { words, WORDS_PER_SECOND } from "../../shared/rules";
+import { speechSeconds } from "../../shared/rules";
 import type { Campaign, Clip } from "../../shared/types";
 import { api } from "../api";
 import { go, useApp } from "../store";
@@ -104,7 +104,7 @@ export function ClipCard({ clip, campaign, showCampaign }: { clip: Clip; campaig
             <input className="input" value={d.hook} onChange={(e) => setD({ ...d, hook: e.target.value })} />
           </label>
           <label className="field">
-            Voiceover <span className="faint">(~{Math.round(words(d.narration) / WORDS_PER_SECOND)}s spoken)</span>
+            Voiceover <span className="faint">(~{Math.round(speechSeconds(d.narration))}s spoken)</span>
             <textarea className="textarea" value={d.narration} onChange={(e) => setD({ ...d, narration: e.target.value })} />
           </label>
           <div className="form-grid">
