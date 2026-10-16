@@ -11,6 +11,8 @@ import { overlayEvents, overlayStyles, textWidth, type OverlayLayout, type Place
 
 /** A gap between words longer than this (seconds) is a pause: the karaoke highlight rests. */
 const PAUSE = 0.35;
+/** Styles drawn as one event per spoken word. */
+const PER_WORD = new Set(["karaoke", "box", "underline", "accumulate"]);
 
 /** How long the hook stays on screen. */
 export const HOOK_SECONDS = 3.2;
@@ -184,7 +186,8 @@ export function buildAss(o: {
     "[V4+ Styles]",
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
     `Style: Hook,${font},${px(76)},${white},${white},&H00000000,&H64000000,${bold},0,0,0,100,100,0,0,1,${px(7)},${px(2)},8,${px(70)},${px(70)},${Math.round(((VIDEO_TOP - 330) / H) * FH)},1`,
-    `Style: Cap,${font},${px(st.size)},${white},${white},${boxed ? back : assColor(st.outline)},${back},${bold},0,0,0,100,100,0,0,${boxed ? 3 : 1},${px(st.outlineWidth)},${px(st.shadow)},5,${px(70)},${px(70)},0,1`,
+    // A fill sweep (\kf) goes from the secondary colour to the primary: the highlight.
+    `Style: Cap,${font},${px(st.size)},${st.animation === "sweep" ? hl : white},${white},${boxed ? back : assColor(st.outline)},${back},${bold},0,0,0,100,100,0,0,${boxed ? 3 : 1},${px(st.outlineWidth)},${px(st.shadow)},5,${px(70)},${px(70)},0,1`,
     `Style: Cta,${font},${px(72)},&H00FFFFFF,&H00FFFFFF,${accent},${accent},${bold},0,0,0,100,100,0,0,3,${px(26)},0,5,${px(90)},${px(90)},0,1`,
     ...(o.overlays?.placed.length ? overlayStyles(o.overlays.layout) : []),
     "",
@@ -196,7 +199,8 @@ export function buildAss(o: {
   // a second line grows upward, away from the platform's buttons and text.
   const y = Math.round(st.position * FH + px(st.size) / 2);
   const place = `\\an2\\pos(${Math.round(FW / 2)},${y})${st.glow ? "\\blur4" : ""}`;
-  const pop = "\\fscx86\\fscy86\\t(0,90,\\fscx100\\fscy100)";
+  // A spring: in small, overshoot a little, settle.
+  const pop = "\\fscx72\\fscy72\\t(0,90,\\fscx105\\fscy105)\\t(90,170,\\fscx100\\fscy100)";
   const cased = (t: string) => (st.uppercase ? t.toLocaleUpperCase(o.language || undefined) : t);
   const fitted = fitCaptions(o.captions, { size: px(st.size), outline: px(st.outlineWidth), font, maxWidth: FW - 2 * px(70), cased });
   for (const g of fitted) {
@@ -204,14 +208,36 @@ export function buildAss(o: {
     const end = Math.min(g.end, o.duration);
     const words = g.lines.flat();
     const size = g.size ? `\\fs${g.size}` : "";
-    // Words (one optionally highlighted), spaced by script, lines broken with \N.
+    // Words spaced by script, lines broken with \N; the spoken word (index
+    // `active`) drawn in the style's per-word treatment.
     const render = (active?: number) => {
       let i = 0;
       return g.lines
-        .map((line) => line.map((x, q) => (q ? sepBetween(line[q - 1].text, x.text) : "") + (i++ === active ? `{\\c${hl}}${esc(cased(x.text))}{\\c${white}}` : esc(cased(x.text)))).join(""))
+        .map((line) =>
+          line
+            .map((x, q) => {
+              const k = i++;
+              const sep = q ? sepBetween(line[q - 1].text, x.text) : "";
+              const t = esc(cased(x.text));
+              if (st.animation === "sweep") return `${sep}{\\kf${sweepCs(k)}}${t}`;
+              if (st.animation === "accumulate") return active !== undefined && k === active + 1 ? `{\\alpha&HFF&}${sep}${t}` : `${sep}${t}`;
+              if (k !== active) return `${sep}${t}`;
+              if (st.animation === "box") return `${sep}{\\3c${hl}\\bord${Math.max(4, Math.round(px(st.size) * 0.16))}\\shad0}${t}{\\r}`;
+              if (st.animation === "underline") return `${sep}{\\c${hl}\\u1}${t}{\\r}`;
+              return `${sep}{\\c${hl}}${t}{\\c${white}}`;
+            })
+            .join(""),
+        )
         .join("\\N");
     };
-    if (st.animation === "karaoke" && words.length > 1) {
+    // How long each word takes to fill (centiseconds), from its start to the next word's.
+    const sweepCs = (k: number) => Math.max(1, Math.round(((k < words.length - 1 ? words[k + 1].start : Math.min(words[k].end, end)) - Math.max(words[k].start, g.start)) * 100));
+    if (st.animation === "sweep") {
+      const lead = Math.max(0, Math.round((words[0].start - g.start) * 100));
+      lines.push(`Dialogue: 0,${ts(g.start)},${ts(end)},Cap,,0,0,0,,{${place}${size}${pop}}${lead ? `{\\k${lead}}` : ""}${render()}`);
+      continue;
+    }
+    if (PER_WORD.has(st.animation) && words.length > 1) {
       // One event per word: the whole caption, with the spoken word in the
       // highlight colour. In a pause longer than PAUSE the highlight rests
       // (the line stays, nothing lit) until the next word is said.
@@ -225,7 +251,7 @@ export function buildAss(o: {
       });
       continue;
     }
-    const anim = st.animation === "pop" || st.animation === "karaoke" ? pop : st.animation === "fade" ? "\\fad(70,70)" : "";
+    const anim = st.animation === "fade" ? "\\fad(70,70)" : st.animation === "none" ? "" : pop;
     lines.push(`Dialogue: 0,${ts(g.start)},${ts(end)},Cap,,0,0,0,,{${place}${size}${anim}}${render()}`);
   }
   if (o.overlays?.placed.length) lines.push(...overlayEvents(o.overlays.placed, o.overlays.layout));

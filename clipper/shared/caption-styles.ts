@@ -3,7 +3,12 @@ import { joinWords } from "./words";
 // campaign's own choice on top of that. The same resolved style drives the
 // server's burned-in captions (ASS / libass) and the editor's caption track.
 
-export type CaptionAnimation = "pop" | "karaoke" | "fade" | "none";
+/**
+ * How a caption moves: pop in, fade, none, or a per-word treatment of the
+ * spoken word (karaoke colour, a box behind it, an underline, a fill sweep,
+ * or words appearing as they're said).
+ */
+export type CaptionAnimation = "pop" | "karaoke" | "fade" | "none" | "box" | "underline" | "sweep" | "accumulate";
 
 export interface CaptionStyle {
   id: string;
@@ -49,6 +54,10 @@ export const CAPTION_STYLES: CaptionStyle[] = [
   { id: "boxed", name: "Boxed", description: "White text on a dark box, easy to read on busy footage.", font: "Archivo Black", size: 70, color: "#FFFFFF", highlight: "#FFD60A", outline: "#000000", outlineWidth: 18, shadow: 0, box: "#000000CC", uppercase: false, wordsPerCaption: 4, position: 0.8, animation: "fade" },
   { id: "neon", name: "Neon", description: "Glowing cyan outline for gaming clips.", font: "Poppins ExtraBold", size: 86, color: "#FFFFFF", highlight: "#FF4FD8", outline: "#22D3EE", outlineWidth: 5, shadow: 0, uppercase: true, wordsPerCaption: 3, position: 0.79, animation: "karaoke", glow: true },
   { id: "minimal", name: "Minimal", description: "Clean sentence case, a few words at a time.", font: "Poppins Bold", size: 62, color: "#FFFFFF", highlight: "#FFFFFF", outline: "#000000", outlineWidth: 3, shadow: 2, uppercase: false, wordsPerCaption: 6, position: 0.82, animation: "fade" },
+  { id: "box-highlight", name: "Box highlight", description: "The spoken word sits on a bright box.", font: "Poppins Black", size: 88, color: "#FFFFFF", highlight: "#E5484D", outline: "#000000", outlineWidth: 7, shadow: 2, uppercase: true, wordsPerCaption: 3, position: 0.79, animation: "box" },
+  { id: "underline", name: "Underline", description: "The spoken word turns yellow and underlined.", font: "Poppins ExtraBold", size: 82, color: "#FFFFFF", highlight: "#FFD60A", outline: "#000000", outlineWidth: 7, shadow: 2, uppercase: true, wordsPerCaption: 3, position: 0.79, animation: "underline" },
+  { id: "fill-sweep", name: "Fill sweep", description: "Colour fills each word as it's said.", font: "Anton", size: 108, color: "#FFFFFF", highlight: "#39E75F", outline: "#000000", outlineWidth: 8, shadow: 3, uppercase: true, wordsPerCaption: 4, position: 0.78, animation: "sweep" },
+  { id: "accumulate", name: "Build up", description: "Words appear one by one as they're spoken.", font: "Poppins Bold", size: 72, color: "#FFFFFF", highlight: "#FFFFFF", outline: "#000000", outlineWidth: 5, shadow: 2, uppercase: false, wordsPerCaption: 5, position: 0.8, animation: "accumulate" },
   { id: "subtitle", name: "Subtitle", description: "Classic two-line subtitles on a soft box.", font: "Poppins Bold", size: 54, color: "#FFFFFF", highlight: "#FFFFFF", outline: "#000000", outlineWidth: 14, shadow: 0, box: "#00000099", uppercase: false, wordsPerCaption: 9, position: 0.84, animation: "none" },
 ];
 

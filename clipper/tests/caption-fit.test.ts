@@ -106,3 +106,49 @@ describe("caption placement and pauses", () => {
     for (let t = 0; t < 2.4; t += 0.05) expect(at(t), `t=${t}`).toBeDefined();
   });
 });
+
+// B2.4: four new presets drawn natively in ASS, and a spring pop.
+describe("caption presets", () => {
+  const words = [
+    { text: "one", start: 0, end: 0.3 },
+    { text: "two", start: 0.35, end: 0.7 },
+    { text: "three", start: 0.75, end: 1.1 },
+  ];
+  const caps = (id: string) =>
+    buildAss({ hook: "", captions: [{ text: "one two three", start: 0, end: 1.1, words }], cta: "", ctaFrom: 9, duration: 2, style: resolveCaptionStyle(undefined, { style: id }) })
+      .split("\n")
+      .filter((l) => l.startsWith("Dialogue: 0,") || l.startsWith("Style: Cap,"));
+
+  it("box highlight: the spoken word sits on a thick accent outline", () => {
+    const ev = caps("box-highlight").filter((l) => l.startsWith("Dialogue"));
+    expect(ev).toHaveLength(3);
+    expect(ev[1]).toMatch(/\{\\3c&H[0-9A-F]+\\bord\d+\\shad0\}TWO\{\\r\}/);
+  });
+
+  it("underline: the spoken word is underlined", () => {
+    const ev = caps("underline").filter((l) => l.startsWith("Dialogue"));
+    expect(ev[2]).toMatch(/\{\\c&H[0-9A-F]+\\u1\}THREE\{\\r\}/);
+  });
+
+  it("fill sweep: one event per caption, each word filling over its own time", () => {
+    const lines = caps("fill-sweep");
+    const ev = lines.filter((l) => l.startsWith("Dialogue"));
+    expect(ev).toHaveLength(1);
+    expect(ev[0]).toContain("{\\kf35}ONE {\\kf40}TWO {\\kf35}THREE");
+    // \kf fills from the secondary colour to the primary: primary is the highlight.
+    const [, , , primary, secondary] = lines[0].split(",");
+    expect(primary).not.toBe(secondary);
+  });
+
+  it("accumulate: words appear as they're said, without moving the line", () => {
+    const ev = caps("accumulate").filter((l) => l.startsWith("Dialogue"));
+    expect(ev).toHaveLength(3);
+    expect(ev[0]).toMatch(/one\{\\alpha&HFF&\} two three/);
+    expect(ev[2]).not.toContain("\\alpha&HFF&");
+  });
+
+  it("pops with a spring: 72% → 105% → 100%", () => {
+    const [e] = caps("bold-pop").filter((l) => l.startsWith("Dialogue"));
+    expect(e).toContain("\\fscx72\\fscy72\\t(0,90,\\fscx105\\fscy105)\\t(90,170,\\fscx100\\fscy100)");
+  });
+});
