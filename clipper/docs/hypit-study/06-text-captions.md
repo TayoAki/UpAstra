@@ -393,15 +393,15 @@ Each occurrence has its own style, motion and absolute window. A separate `Mask`
 
 **Relevance: Medium.** Our fonts work differently:
 
-- We copy every bundled TTF plus the brand uploads into a per-job folder (`clipper/server/fonts.ts:11-25`).
+- We copy every bundled TTF plus the brand uploads into a per-job folder (`clipper/server/fonts.ts:14-28`).
 - libass picks a face by **family name string** (`clipper/shared/caption-styles.ts:12`, `clipper/server/captions.ts:133`).
-- Missing glyphs (CJK, Arabic) fall back to system Noto through fontconfig (`clipper/server/fonts.ts:7-8`).
+- Missing glyphs (CJK, Arabic) fall back to system Noto through fontconfig (`clipper/server/fonts.ts:8-10`).
 
 A mistyped or mismatched brand family silently falls back. hypit's exact-face refs make that impossible.
 
 **Better version.** We don't need npm Fontsource. Instead:
 
-1. Keep `fc-scan` at upload (`clipper/server/fonts.ts:28-36`).
+1. Keep `fc-scan` at upload (`clipper/server/fonts.ts:30-39`).
 2. At render, check `fc-match -f '%{file}' "<family>"` against the per-job dir. Log, alert or fall back explicitly when the match is outside it.
 3. Pin the Noto CJK and Arabic files into the image's `fonts/` dir, so fallback is reproducible across Railway hosts.
 
@@ -498,7 +498,7 @@ libass `\bord` already draws outward under the fill, so we don't share hypit's C
 
 ### Fonts
 
-See §5. Our fallback is implicit (fontconfig plus system Noto, `clipper/server/fonts.ts:7-8`), and hypit's is explicit (an ordered exact stack plus `<Fallback>` children, `packages/caption-fine/src/surface.ts:68-106`).
+See §5. Our fallback is implicit (fontconfig plus system Noto, `clipper/server/fonts.ts:8-10`), and hypit's is explicit (an ordered exact stack plus `<Fallback>` children, `packages/caption-fine/src/surface.ts:68-106`).
 
 ---
 
