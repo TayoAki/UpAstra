@@ -96,3 +96,12 @@ describe("review comments", () => {
     expect((await api(`/api/clips/${clip.id}/apply-comments`, "POST", {})).status).toBe(409);
   });
 });
+
+describe("open-source notices", () => {
+  it("serves the third-party notices with the LGPL text for the caption preview", async () => {
+    const r = await fetch(`${base}/licenses`);
+    expect(r.status).toBe(200);
+    const html = await r.text();
+    for (const s of ["JASSUB", "libass", "FreeType Project", "HarfBuzz", "FriBidi", "GNU LESSER GENERAL PUBLIC LICENSE", "v2.5.21"]) expect(html).toContain(s);
+  });
+});

@@ -1411,3 +1411,35 @@ tr.clickable:hover td {
   display: inline-block;
   max-width: 100%;
 }
+
+/* Hover-scrub: a thin bar; hovering shows the frame at that point. */
+.scrub {
+  position: relative;
+  height: 12px;
+  margin-top: 6px;
+  border-radius: 6px;
+  background: var(--line, #ddd);
+  cursor: ew-resize;
+}
+.scrub-pop {
+  position: absolute;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 5;
+  pointer-events: none;
+  background: #000;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.3);
+}
+.scrub-pop video {
+  display: block;
+  width: 120px;
+}
+.scrub-pop span {
+  display: block;
+  text-align: center;
+  color: #fff;
+  font-size: 11px;
+  padding: 2px 0;
+}

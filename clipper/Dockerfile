@@ -47,6 +47,7 @@ COPY --from=build /app/package.json ./
 COPY --from=build /app/server ./server
 COPY --from=build /app/shared ./shared
 COPY --from=build /app/fonts ./fonts
+COPY --from=build /app/licenses ./licenses
 COPY --from=editor /editor-dist ./editor-dist
 EXPOSE 8788
 # node directly (not npm) so SIGTERM reaches the app and it can flush workspaces.

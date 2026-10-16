@@ -331,6 +331,12 @@ export interface RenderInfo {
   log?: { at: number; step: string }[];
   /** A recompose: only the final compose runs, from stored steps; nothing paid is redone. */
   recompose?: boolean;
+  /** Which run's take a weak (unshared) voiceover is stored under: kept across recomposes. */
+  scope?: string;
+  /** For a recompose: the render it replaces, restored if the recompose fails. */
+  previous?: Omit<RenderInfo, "previous">;
+  /** A fingerprint of the ASS that was burned in (the preview's should match it). */
+  assSha?: string;
 }
 
 export interface EditParts {
@@ -344,7 +350,7 @@ export interface EditParts {
   overlays?: { kind: OverlayKind; text: string; start: number; end: number; tier?: Tier }[];
   duration: number;
   /** What the preview rebuilds the captions from: the shown words' times, named moments, language. */
-  timing?: { words: { text: string; start: number; end: number }[]; moments: Record<string, number>; language?: string };
+  timing?: { words: { text: string; start: number; end: number }[]; moments: Record<string, number>; language?: string; ctaFrom?: number };
   /** A small copy of the video without captions or overlays, for the in-browser preview. */
   proxyKey?: string;
 }

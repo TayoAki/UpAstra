@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { contactSheets, frameCount, frameTimes, grabFrames, phraseWindow, sceneCutsIn, SHEET } from "../server/frames";
+import { buildStoryboard, contactSheets, frameCount, frameTimes, grabFrames, phraseWindow, sceneCutsIn, SHEET, storyboardPlan } from "../server/frames";
 import { ffmpegAvailable } from "../server/media";
 
 describe("frame sampling", () => {
@@ -24,6 +24,18 @@ describe("frame sampling", () => {
     expect(phraseWindow(words, "car lea")).toBeUndefined(); // whole words only
     const zh = ["现在", "就在", "罗布", "乐思", "上玩"].map((text, i) => ({ text, start: i, end: i + 0.9 }));
     expect(phraseWindow(zh, "罗布乐思", 1, 0)).toEqual({ start: 2, end: 3.9 });
+  });
+});
+
+describe("storyboard layout", () => {
+  it("never has more than 360 tiles, whatever the length", () => {
+    expect(storyboardPlan(6)).toMatchObject({ interval: 1, count: 6, cols: 6, rows: 1 });
+    for (const d of [1, 59, 360, 361, 400, 3599, 7200, 36_000]) {
+      const p = storyboardPlan(d);
+      expect(p.count).toBeLessThanOrEqual(360);
+      expect(p.count * p.interval).toBeGreaterThanOrEqual(d - 1e-6); // covers the whole file
+    }
+    expect(storyboardPlan(7200)).toMatchObject({ interval: 20, count: 360, cols: 20, rows: 18 });
   });
 });
 
@@ -69,6 +81,16 @@ describe.skipIf(!ffmpegAvailable())("frames from a video", () => {
     expect(px[0]).toBeGreaterThan(px[2]); // still red: 1 s into the file, not 3 s
     expect((await sceneCutsIn(off, 0, 6))[0]).toBeCloseTo(3, 1); // the same timeline as the frames
   }, 60_000);
+
+  it("draws a 15-minute file as one 360-tile atlas from keyframes", async () => {
+    const long = path.join(dir, "long.mp4");
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=128x72:rate=2:duration=900", "-c:v", "libx264", "-preset", "ultrafast", "-g", "4", long]);
+    const out = path.join(dir, "board.jpg");
+    const p = await buildStoryboard(long, 900, out);
+    expect(p).toMatchObject({ count: 360, cols: 20, rows: 18, interval: 2.5 });
+    const size = execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0", out]).toString().trim();
+    expect(size).toBe(`${20 * 160},${18 * 90}`);
+  }, 120_000);
 
   it("finds the scene cut", async () => {
     const cuts = await sceneCutsIn(src, 0, 6);

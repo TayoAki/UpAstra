@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -66,7 +67,17 @@ export function enqueueRender(workspaceId: string, clip: Clip, voice: VoiceOptio
   // One workspace can't fill the shared queue.
   const max = Number(process.env.MAX_QUEUED_RENDERS ?? 20);
   if (waitingCount(workspaceId, "render") >= max) throw new HttpError(429, `You already have ${max} clips waiting to render. Try again when some finish.`);
-  clip.render = { status: "queued", step: "Waiting in the render queue", voice, requestedAt: now(), cost: 0, ...(recompose ? { recompose: true } : {}) };
+  const prev = clip.render;
+  const requestedAt = now();
+  clip.render = {
+    status: "queued",
+    step: "Waiting in the render queue",
+    voice,
+    requestedAt,
+    cost: 0,
+    // A recompose reads the take stored for the run it recomposes, and keeps that run to fall back to.
+    ...(recompose && prev ? { recompose: true, scope: prev.scope ?? prev.requestedAt, previous: { ...prev, previous: undefined } as Omit<RenderInfo, "previous"> } : {}),
+  };
   clip.status = "rendering";
   submit({ workspaceId, clipId: clip.id, actor });
 }
@@ -93,7 +104,15 @@ async function process_(job: Job) {
       console.error(`[render] ${clip.id} ${cancelled ? "cancelled" : "failed"}:`, errorText(err));
       if (!cancelled && !isUserError(msg)) alert("render failed", msg.slice(0, 300), `workspace ${job.workspaceId} · clip ${clip.id}`);
       const c = getDoc().clips.find((x) => x.id === job.clipId);
-      if (c?.render) {
+      if (c?.render?.recompose && c.render.previous && !cancelled) {
+        // A failed recompose leaves the finished video as it was.
+        log({ campaignId: c.campaignId, kind: "clip", message: `Couldn't apply the caption changes to "${c.title}" (${msg.slice(0, 160)}); the previous video is kept.` });
+        c.render = { ...c.render.previous, error: undefined };
+        if (c.status === "rendering") c.status = "approved";
+      } else if (c?.render?.recompose && c.render.previous && cancelled) {
+        c.render = { ...c.render.previous };
+        if (c.status === "rendering") c.status = "approved";
+      } else if (c?.render) {
         c.render.status = "failed";
         c.render.error = msg.slice(0, 500);
         c.render.step = "Failed";
@@ -237,7 +256,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
         save: saveNow,
         // Only a clean, word-timed take is reused later; a weak one is kept for this render only.
         keep: (t) => !transcriptionAvailable() || (!!t.al && t.al.matched >= 0.85 && t.al.extra.inside <= 3),
-        scope: r.requestedAt,
+        scope: r.scope ?? r.requestedAt,
         run: async () => {
           let best: { wav: string; seconds: number; al?: Alignment } | undefined;
           for (let attempt = 1; attempt <= 2; attempt++) {
@@ -395,6 +414,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
       log({ campaignId: c.id, kind: "clip", message: `Left out ${missed.length + missing.length} overlay(s) on "${clip.title}"${missed.length ? ` — cue words not in the voiceover: ${missed.map((o) => `"${o.cue ?? o.text}"`).join(", ")}` : ""}${missing.length ? ` — no image for ${missing.join(" ")}` : ""}.` });
     const ass = path.join(tmp, "subs.ass");
     fs.writeFileSync(ass, assText);
+    r.assSha = createHash("sha256").update(assText).digest("hex").slice(0, 16);
     const final = path.join(tmp, "final.mp4");
     // Sound design (opt-in per brief): effects on the overlays' own times, voice-ducked game audio.
     const sound = c.brief.soundDesign ? { events: sfxEvents(placed, layout, stickers).filter((e) => e.at < duration - 0.1) } : undefined;
@@ -407,7 +427,8 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     // Keep the pieces so the editor can open this render as a timeline.
     step(r, "rendering", "Saving the editable parts");
     const partsPrefix = `${workspaceId}/clips/${clip.id}/parts/`;
-    await videoStore().deletePrefix(partsPrefix).catch(() => undefined);
+    // A recompose keeps the parts it was made from until it has succeeded (it may fall back to them).
+    if (!r.recompose) await videoStore().deletePrefix(partsPrefix).catch(() => undefined);
     const stamp = `${partsPrefix}${Date.now()}`;
     const round = (n: number) => Math.round(n * 1000) / 1000;
     const editParts: EditParts = { shots: [], captions: [], hook: { text: clip.hook, end: Math.min(HOOK_SECONDS, duration) }, cta: { text: ctaText, from: round(ctaFrom) }, duration };
@@ -421,7 +442,8 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
       await videoStore().put(editParts.voiceKey, voicePath, "audio/wav");
     }
     // For the in-browser preview: the picture without captions, with the voice, small.
-    editParts.timing = { words: words.map((w) => ({ text: w.text, start: round(w.start), end: round(w.end) })), moments, language: r.language };
+    // Unrounded, so the preview rebuilds exactly the ASS that was burned in.
+    editParts.timing = { words: words.map((w) => ({ text: w.text, start: w.start, end: w.end })), moments, language: r.language, ctaFrom };
     try {
       const proxy = path.join(tmp, "proxy.mp4");
       const audio = voicePath ? ["-i", voicePath, "-map", "0:v", "-map", "1:a"] : ["-map", "0:v", "-map", "0:a?"];
@@ -458,6 +480,11 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     } satisfies Partial<RenderInfo>);
     if (fresh.status === "rendering") fresh.status = "ready";
     fresh.lengthSec = Math.round(duration);
+    // The plan changed (its length, status): edits opened before this must reload.
+    fresh.revision = (fresh.revision ?? 0) + 1;
+    const oldStamp = r.previous?.parts?.shots[0]?.key.split("/").slice(0, -1).join("/");
+    if (r.recompose && oldStamp && oldStamp !== stamp) await videoStore().deletePrefix(`${oldStamp}/`).catch(() => undefined);
+    fresh.render.previous = undefined;
     // What the learning system compares once this clip is posted.
     fresh.traits = { ...traitsOf(fresh), voice: r.voice, opening };
     // Learn this voice's pace, so plans for it are timed better next time.
@@ -482,7 +509,9 @@ export const queueLength = () => pendingCount("render");
 /** Stop a clip's render: drop it from the queue, or abort it where it is. False if it isn't rendering. */
 export function cancelRender(clip: Clip): boolean {
   if (cancelWaiting(clip.id)) {
-    if (clip.render) Object.assign(clip.render, { status: "failed", step: "Failed", error: "Cancelled", finishedAt: now() });
+    // A cancelled recompose leaves the finished video as it was.
+    if (clip.render?.recompose && clip.render.previous) clip.render = { ...clip.render.previous };
+    else if (clip.render) Object.assign(clip.render, { status: "failed", step: "Failed", error: "Cancelled", finishedAt: now() });
     if (clip.status === "rendering") clip.status = "approved";
     return true;
   }

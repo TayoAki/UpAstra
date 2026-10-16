@@ -151,6 +151,7 @@ export function App() {
               <button onClick={() => (setMenu(false), go("/settings/account"))}>Account settings</button>
               <button onClick={() => (setMenu(false), window.open("#/terms", "_blank"))}>Terms</button>
               <button onClick={() => (setMenu(false), window.open("#/privacy", "_blank"))}>Privacy</button>
+              <button onClick={() => (setMenu(false), window.open("/licenses", "_blank"))}>Open-source licenses</button>
               <button onClick={() => api.logout().then(() => setMe(null))}>
                 <span className="row">
                   <LogOut size={14} /> Sign out

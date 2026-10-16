@@ -5,6 +5,7 @@ import { HOOK_STYLES, OVERLAY_KINDS, type ReferenceFormat } from "../../shared/t
 import { api, type State } from "../api";
 import { uploadFile } from "../components/Upload";
 import { ago, Empty, Panel } from "../components/ui";
+import { HoverScrub } from "../components/Scrub";
 import { go, useApp } from "../store";
 
 const STATUS: Record<ReferenceFormat["status"], [string, string]> = { uploaded: ["Uploaded", ""], analyzing: ["Breaking down", "warn"], ready: ["Ready", "ok"], failed: ["Failed", "bad"] };
@@ -153,7 +154,10 @@ function FormatDetail({ id }: { id: string }) {
 
       <div className="format-grid">
         <div>
-          <video className="format-video" src={`/api/formats/${id}/video`} controls playsInline preload="metadata" />
+          <div>
+            <video className="format-video" src={`/api/formats/${id}/video`} controls playsInline preload="metadata" />
+            <HoverScrub src={`/api/formats/${id}/video`} />
+          </div>
         </div>
         <div className="col" style={{ gap: 12, minWidth: 0 }}>
           {meta.status === "analyzing" && (

@@ -11,6 +11,7 @@ import { ClipCard } from "../components/ClipCard";
 import { PostForm } from "../components/PostForm";
 import { UploadFootage } from "../components/Upload";
 import { ago, Empty, ListEdit, Panel, PostBadge, Stat } from "../components/ui";
+import { StoryboardScrub } from "../components/Scrub";
 import { go, useApp } from "../store";
 
 export function CampaignView({ id, tab }: { id: string; tab: string }) {
@@ -536,6 +537,7 @@ function FootageTab({ c }: { c: CampaignWithStats }) {
                       {f.moments?.length ? ` · ${f.moments.length} moments` : ""}
                       {f.storageKey ? " · your copy" : ""}
                     </div>
+                    {f.kind === "video" && f.durationSec ? <StoryboardScrub url={`/api/campaigns/${c.id}/footage/${f.id}/storyboard`} /> : null}
                     {f.analysisError && <div className="small warn-text">{f.analysisError}</div>}
                     {f.moments && f.moments.length > 0 && (
                       <details>

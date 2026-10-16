@@ -167,6 +167,7 @@ describe.skipIf(!ffmpegAvailable())("render pipeline", () => {
     expect(prev.status).toBe(200);
     expect(prev.body.ass).toMatch(/Style: Cap,/);
     expect(prev.body.fonts["Anton"]).toBe("/fonts/Anton-Regular.ttf");
+    expect(prev.body.sameAsVideo).toBe(true); // byte-identical to the ASS that was burned in
     const proxy = await fetch(base + prev.body.proxyUrl, { headers: { cookie } });
     expect(proxy.status).toBe(200);
     expect(proxy.headers.get("content-type")).toBe("video/mp4");
@@ -176,10 +177,22 @@ describe.skipIf(!ffmpegAvailable())("render pipeline", () => {
     expect(prev2.body.ass).not.toBe(prev.body.ass);
     expect(await renders()).toBe(before);
 
+    // A recompose that's cancelled (or fails) leaves the finished video in place.
+    const kept = (await api("/api/state")).body.clips.find((x: { id: string }) => x.id === clip.id).render.videoKey;
+    expect((await api(`/api/clips/${clip.id}/recompose`, "POST", {})).status).toBe(202);
+    await api(`/api/clips/${clip.id}/render/cancel`, "POST", {});
+    let afterCancel: { status: string; videoKey?: string } | undefined;
+    for (let i = 0; i < 60; i++) {
+      afterCancel = (await api("/api/state")).body.clips.find((x: { id: string }) => x.id === clip.id).render;
+      if (afterCancel?.status === "done") break;
+      await new Promise((r) => setTimeout(r, 250)); // a running recompose stops at its next step
+    }
+    expect(afterCancel).toMatchObject({ status: "done", videoKey: kept });
+
     // A recompose applies it to the video from the stored steps: every shot reused, nothing paid.
     const rc = await api(`/api/clips/${clip.id}/recompose`, "POST", {});
     expect(rc.status).toBe(202);
-    let re: { status: string; steps?: Record<string, { reused?: boolean }>; cost: number; recompose?: boolean } | undefined;
+    let re: { status: string; steps?: Record<string, { reused?: boolean }>; cost: number; recompose?: boolean; previous?: unknown } | undefined;
     for (let i = 0; i < 240 && !re; i++) {
       await new Promise((r) => setTimeout(r, 500));
       const rr = (await api("/api/state")).body.clips.find((x: { id: string }) => x.id === clip.id).render;
@@ -189,6 +202,17 @@ describe.skipIf(!ffmpegAvailable())("render pipeline", () => {
     expect(re?.recompose).toBe(true);
     expect(Object.values(re?.steps ?? {}).every((x) => x.reused)).toBe(true);
     expect(re?.cost).toBe(0);
+    expect((await api(`/api/clips/${clip.id}/preview`)).body.sameAsVideo).toBe(true);
+    expect(re?.previous).toBeUndefined();
+
+    // Footage gets a storyboard atlas for hover-scrubbing: built once, then served from storage.
+    const fid = camp.footage[0].id;
+    const sb = await api(`/api/campaigns/${id}/footage/${fid}/storyboard`);
+    expect(sb.status).toBe(200);
+    expect(sb.body).toMatchObject({ cached: false, interval: 1, count: 40, cols: 20, rows: 2 });
+    expect((await api(`/api/campaigns/${id}/footage/${fid}/storyboard`)).body.cached).toBe(true);
+    const img = await fetch(base + sb.body.image, { headers: { cookie } });
+    expect(img.headers.get("content-type")).toBe("image/jpeg");
 
     // A rendered clip's cuts are its shot boundaries, even when the shots look alike.
     const cuts = await api("/api/scene-cuts", "POST", { clipId: clip.id });

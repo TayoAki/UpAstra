@@ -26,7 +26,7 @@ export interface Preflight {
   ok: boolean;
   blockers: Blocker[];
   warnings: string[];
-  footage: { id: string; name: string; cached: boolean; momentsPending: boolean }[];
+  footage: { id: string; name: string; cached: boolean; momentsPending: boolean; opened: boolean }[];
   voice: { id: VoiceOption; takeCached: boolean };
   /** voiceUsd is one take; a take that goes off script is recorded once more (up to voiceUsdMax). */
   estimate: { voiceUsd: number; voiceUsdMax: number; momentsUsd: number; totalUsd: number; paidCalls: number };
@@ -52,7 +52,8 @@ export function budgetRule(o: { live: boolean; voiceCalls: number; momentCalls: 
 const fin = (n: number) => (Number.isFinite(n) ? n : null);
 const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
 
-export async function preflightRender(workspaceId: string, clip: Clip, voice: VoiceOption, override = false): Promise<Preflight> {
+/** `scope`: also count a take kept only for that run (a recompose of it reuses it). */
+export async function preflightRender(workspaceId: string, clip: Clip, voice: VoiceOption, override = false, scope?: string): Promise<Preflight> {
   const blockers: Blocker[] = [];
   const warnings: string[] = [];
   const block = (status: number, message: string) => blockers.push({ status, message });
@@ -70,10 +71,11 @@ export async function preflightRender(workspaceId: string, clip: Clip, voice: Vo
   else {
     const shots = clip.shots.length ? clip.shots : [{ footageId: undefined }];
     const files = [...new Map(shots.map((s, i) => footageFor(c, s.footageId, i)).map((f) => [f.id, f])).values()];
-    for (const f of files) footage.push({ id: f.id, name: f.name, cached: !!f.storageKey || (await isCached(f).catch(() => false)), momentsPending: !(f.analyzedAt && f.durationSec) });
+    for (const f of files) footage.push({ id: f.id, name: f.name, cached: !!f.storageKey || (await isCached(f).catch(() => false)), momentsPending: !(f.analyzedAt && f.durationSec), opened: !!f.durationSec });
   }
 
-  const takeCached = !!c && voice !== "none" && (await stepStored(workspaceId, "voice", VOICE_STEP, voiceStepParams(c, clip, voice)));
+  const params = c ? voiceStepParams(c, clip, voice) : undefined;
+  const takeCached = !!c && voice !== "none" && ((await stepStored(workspaceId, "voice", VOICE_STEP, params)) || (!!scope && (await stepStored(workspaceId, "voice", VOICE_STEP, { params, scope }))));
   const voiceCalls = voice !== "none" && !takeCached ? 1 : 0;
   const momentCalls = footage.filter((f) => f.momentsPending).length;
   const voiceUsd = voiceCalls * averageCost("voice", DEFAULT_COST.voice);

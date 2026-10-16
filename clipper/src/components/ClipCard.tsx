@@ -23,7 +23,17 @@ export function ClipCard({ clip, campaign, showCampaign }: { clip: Clip; campaig
 
   const save = () =>
     run(
-      () => api.editClip(clip, { hook: d.hook, narration: d.narration, onScreenText: d.onScreenText.split("\n").map((s) => s.trim()).filter(Boolean), caption: d.caption, lengthSec: Number(d.lengthSec) }),
+      () => {
+        // Only what was changed in the form, so it can't put back a value that changed meanwhile (e.g. the rendered length).
+        const onScreenText = d.onScreenText.split("\n").map((s) => s.trim()).filter(Boolean);
+        const patch: Partial<Clip> = {};
+        if (d.hook !== clip.hook) patch.hook = d.hook;
+        if (d.narration !== clip.narration) patch.narration = d.narration;
+        if (onScreenText.join("\n") !== clip.onScreenText.join("\n")) patch.onScreenText = onScreenText;
+        if (d.caption !== clip.caption) patch.caption = d.caption;
+        if (Number(d.lengthSec) !== clip.lengthSec) patch.lengthSec = Number(d.lengthSec);
+        return api.editClip(clip, patch);
+      },
       "Saved — rules re-checked",
     ).then((r) => r && setEdit(false));
   const approve = () => {

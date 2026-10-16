@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,7 +20,7 @@ import { analyzeFootage } from "./moments";
 import { buildClipAss, cancelRender, enqueueRender, renderAvailable } from "./render";
 import { cancelJob, isPending, waitingCount } from "./jobs";
 import { footageSource, isCached, saveStream, saveTo, saveUpload } from "./footage-cache";
-import { contactSheets, frameTimes, grabFrames, MAX_CUTS_WINDOW, MAX_WINDOW, phraseWindow, sceneCutsIn, workDir } from "./frames";
+import { buildStoryboard, type Storyboard, contactSheets, frameTimes, grabFrames, MAX_CUTS_WINDOW, MAX_WINDOW, phraseWindow, sceneCutsIn, workDir } from "./frames";
 import { Readable } from "node:stream";
 import { applyEdits, enqueueCaptionJob } from "./caption-jobs";
 import { transcriptionAvailable } from "./transcribe";
@@ -123,6 +124,12 @@ async function lookSource(workspaceId: string, b: Record<string, unknown>, maxWi
   if (!(end > start)) throw new HttpError(400, "The window is empty (end must be after start)");
   if (end - start > maxWindow) throw new HttpError(400, `Look at ${maxWindow} s or less at a time`);
   return { src, start, end, label, shotCuts, rendered };
+}
+
+async function readStoreText(key: string) {
+  const chunks: Buffer[] = [];
+  for await (const c of (await videoStore().read(key)).stream) chunks.push(Buffer.from(c as Buffer));
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 const b64 = (file: string) => fs.readFileSync(file).toString("base64");
@@ -1412,9 +1419,10 @@ export function createApp() {
     if (!p?.timing || !p.proxyKey) throw new HttpError(409, "Render this clip once more to preview caption and overlay changes here.");
     const c = findCampaign(clip.campaignId);
     const brand = getDoc().brand;
-    const { ass, missed } = buildClipAss({ clip, campaign: c, brand, words: p.timing.words, moments: p.timing.moments, duration: p.duration, ctaFrom: p.cta.from, ctaText: p.cta.text, language: p.timing.language });
+    const { ass, missed } = buildClipAss({ clip, campaign: c, brand, words: p.timing.words, moments: p.timing.moments, duration: p.duration, ctaFrom: p.timing.ctaFrom ?? p.cta.from, ctaText: p.cta.text, language: p.timing.language });
+    const sha = createHash("sha256").update(ass).digest("hex").slice(0, 16);
     const fonts: Record<string, string> = Object.fromEntries([...BUNDLED_FONTS.map((f) => [f.family, `/fonts/${f.file}`]), ...(brand?.fonts ?? []).map((f) => [f.family, `/api/brand/fonts/${f.id}/file`])]);
-    res.json({ proxyUrl: `/api/clips/${clip.id}/parts/${encodeURIComponent(p.proxyKey.split("/").pop()!)}`, ass, fonts, duration: p.duration, missed: missed.map((o) => o.cue ?? o.text), revision: clip.revision ?? 0 });
+    res.json({ proxyUrl: `/api/clips/${clip.id}/parts/${encodeURIComponent(p.proxyKey.split("/").pop()!)}`, ass, fonts, duration: p.duration, missed: missed.map((o) => o.cue ?? o.text), revision: clip.revision ?? 0, sameAsVideo: sha === clip.render!.assSha });
   });
 
   // Apply caption and overlay changes to the video: only the final compose runs,
@@ -1425,9 +1433,11 @@ export function createApp() {
       const clip = findClip(String(req.params.id));
       const r = clip.render;
       if (r?.status !== "done") throw new HttpError(409, "Render this clip first");
-      const pre = await preflightRender(req.workspaceId!, clip, r.voice, true);
+      const pre = await preflightRender(req.workspaceId!, clip, r.voice, true, r.scope ?? r.requestedAt);
       if (pre.blockers.length) throw new HttpError(pre.blockers[0].status, `${pre.blockers[0].message} Nothing was charged.`);
       if (r.voice !== "none" && !pre.voice.takeCached) throw new HttpError(409, "The voiceover would have to be recorded again (the script changed). Render instead.");
+      // Footage that has never been opened would have to be fetched and watched (paid): render instead.
+      if (pre.footage.some((f) => !f.opened)) throw new HttpError(409, "This clip now uses footage that hasn't been opened yet. Render instead.");
       if (isPending(clip.id)) throw new HttpError(409, "This clip is already rendering. Nothing was charged.");
       enqueueRender(req.workspaceId!, clip, r.voice, req.actor, true);
       log({ campaignId: clip.campaignId, kind: "clip", message: `Re-composing "${clip.title}" with the current captions and overlays.` });
@@ -1469,6 +1479,7 @@ export function createApp() {
       const old = clip.render.videoKey;
       Object.assign(clip.render, { videoKey: key, sizeBytes: size, durationSec: Math.round(meta.duration * 100) / 100, editedAt: now() });
       clip.lengthSec = Math.round(meta.duration);
+      clip.revision = (clip.revision ?? 0) + 1;
       clip.qa = checkClip(clip, findCampaign(clip.campaignId).brief);
       clip.updatedAt = now();
       if (old && old !== key && old.startsWith(`${req.workspaceId}/clips/`)) await videoStore().deletePrefix(old).catch(() => undefined);
@@ -1607,6 +1618,51 @@ export function createApp() {
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }
+    }),
+  );
+
+  // A storyboard atlas per footage file, for hover-scrubbing: built once, kept in storage.
+  const boards = new Map<string, Promise<Storyboard>>();
+  const storyboardOf = async (workspaceId: string, campaignId: string, footageId: string) => {
+    const f = findCampaign(campaignId).footage.find((x) => x.id === footageId && x.kind === "video");
+    if (!f) throw new HttpError(404, "Footage not found");
+    if (!f.durationSec) throw new HttpError(409, "This footage hasn't been opened yet; it gets a storyboard after a clip uses it.");
+    if (!(await isCached(f).catch(() => false))) throw new HttpError(409, "This footage isn't downloaded yet.");
+    const key = `${workspaceId}/storyboards/${f.id}-${Math.round(f.durationSec)}`;
+    const store = videoStore();
+    if (await store.exists(`${key}.json`).catch(() => false)) return { key, board: JSON.parse((await readStoreText(`${key}.json`)) || "{}") as Storyboard, cached: true };
+    let p = boards.get(key);
+    if (!p) {
+      p = (async () => {
+        const dir = workDir();
+        try {
+          const board = await buildStoryboard(await footageSource(f), f.durationSec!, path.join(dir, "board.jpg"));
+          await store.put(`${key}.jpg`, path.join(dir, "board.jpg"), "image/jpeg");
+          fs.writeFileSync(path.join(dir, "board.json"), JSON.stringify(board));
+          await store.put(`${key}.json`, path.join(dir, "board.json"), "application/json");
+          return board;
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      })().finally(() => boards.delete(key));
+      boards.set(key, p);
+    }
+    return { key, board: await p, cached: false };
+  };
+
+  api.get(
+    "/campaigns/:id/footage/:fid/storyboard",
+    wrap(async (req, res) => {
+      const { board, cached } = await storyboardOf(req.workspaceId!, String(req.params.id), String(req.params.fid));
+      res.json({ ...board, cached, image: `/api/campaigns/${req.params.id}/footage/${req.params.fid}/storyboard.jpg` });
+    }),
+  );
+
+  api.get(
+    "/campaigns/:id/footage/:fid/storyboard.jpg",
+    wrap(async (req, res) => {
+      const { key } = await storyboardOf(req.workspaceId!, String(req.params.id), String(req.params.fid));
+      await streamKey(req, res, `${key}.jpg`, "image/jpeg", "storyboard");
     }),
   );
 
@@ -1782,6 +1838,21 @@ export function createApp() {
   }
 
   // ---- Web app -------------------------------------------------------------
+  // Third-party notices (the LGPL parts of the caption preview, fonts, editor).
+  app.get("/licenses", (_req, res) => {
+    const dir = path.resolve(process.cwd(), "licenses");
+    const read = (f: string) => (fs.existsSync(path.join(dir, f)) ? fs.readFileSync(path.join(dir, f), "utf8") : "");
+    const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const section = (title: string, body: string) => `<h2>${esc(title)}</h2><pre>${esc(body)}</pre>`;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(
+      `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Open-source licenses — UGCMediaClips</title><style>body{font:15px/1.5 system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#111;background:#fff}pre{white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px;font-size:13px}</style><h1>Open-source licenses</h1>` +
+        section("Third-party notices", read("THIRD-PARTY-NOTICES.md")) +
+        section("JASSUB — MIT License", read("jassub-MIT.txt")) +
+        section("GNU Lesser General Public License, version 2.1", read("LGPL-2.1.txt")),
+    );
+  });
+
   const dist = process.env.DIST_DIR ?? path.resolve(process.cwd(), "dist");
   if (fs.existsSync(dist)) {
     app.use(express.static(dist, { index: false, maxAge: "1h" }));

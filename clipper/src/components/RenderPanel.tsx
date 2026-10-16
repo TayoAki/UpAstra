@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState } from "react";
 import { AlertTriangle, CalendarClock, Clapperboard, Download, Eye, Loader2, RotateCcw, Scissors, X } from "lucide-react";
 import { ScheduleModal } from "./ScheduleModal";
+import { HoverScrub } from "./Scrub";
 import type { Clip, VoiceOption } from "../../shared/types";
 import { VOICES } from "../../shared/types";
 import { api } from "../api";
@@ -70,7 +71,10 @@ export function RenderPanel({ clip }: { clip: Clip }) {
   if (r?.status === "done" && r.videoKey)
     return (
       <div className="render-box done">
-        <video className="clip-video" src={`${api.videoUrl(clip.id, r.videoKey)}#t=0.8`} controls playsInline preload="metadata" />
+        <div>
+          <video className="clip-video" src={`${api.videoUrl(clip.id, r.videoKey)}#t=0.8`} controls playsInline preload="metadata" />
+          <HoverScrub src={api.videoUrl(clip.id, r.videoKey)} duration={r.durationSec} />
+        </div>
         <div className="col grow" style={{ minWidth: 220 }}>
           <div className="small">
             <strong>{Math.round(r.durationSec ?? 0)}s</strong> · {r.voice === "none" ? "no voice (captions only)" : `${r.voice} voice`} · {((r.sizeBytes ?? 0) / 1e6).toFixed(1)} MB

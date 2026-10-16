@@ -127,3 +127,33 @@ export async function sceneCutsIn(src: string, start: number, end: number, o: { 
 }
 
 export const workDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "frames-"));
+
+/** Storyboards: one image of small tiles across a whole file, for hover-scrubbing. */
+export const STORYBOARD = { maxTiles: 360, cols: 20, tileW: 160, tileH: 90 };
+
+export interface Storyboard {
+  /** Seconds between tiles; tile i shows time i × interval. */
+  interval: number;
+  count: number;
+  cols: number;
+  rows: number;
+  tileW: number;
+  tileH: number;
+}
+
+/** The layout for a file of `duration` seconds: one tile a second, or fewer so there are at most 360. */
+export function storyboardPlan(duration: number): Storyboard {
+  const d = Math.max(1, duration);
+  const interval = Math.max(1, Math.ceil((d / STORYBOARD.maxTiles) * 100) / 100);
+  const count = Math.min(STORYBOARD.maxTiles, Math.max(1, Math.ceil(d / interval)));
+  const cols = Math.min(STORYBOARD.cols, count);
+  return { interval, count, cols, rows: Math.ceil(count / cols), tileW: STORYBOARD.tileW, tileH: STORYBOARD.tileH };
+}
+
+/** Draw the storyboard atlas (JPEG) from keyframes only, so even long files are quick. */
+export async function buildStoryboard(src: string, duration: number, out: string): Promise<Storyboard> {
+  const p = storyboardPlan(duration);
+  const fit = `scale=${p.tileW}:${p.tileH}:force_original_aspect_ratio=decrease,pad=${p.tileW}:${p.tileH}:(ow-iw)/2:(oh-ih)/2:color=black`;
+  await run("ffmpeg", [...netArgs(src), "-v", "error", "-y", "-skip_frame", "nokey", "-i", src, "-an", "-vf", `fps=1/${p.interval},${fit},tile=${p.cols}x${p.rows}:color=black`, "-frames:v", "1", "-q:v", "5", out], 5 * 60_000);
+  return p;
+}

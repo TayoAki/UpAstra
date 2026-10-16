@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { cachedStep, canonical, stepKey, type Receipts } from "../server/steps";
+import { cachedStep, canonical, stepKey, stepStored, type Receipts } from "../server/steps";
 
 // B1.1/B1.2: a step runs once per content key; paid steps are never repeated
 // blindly after a crash.
@@ -66,6 +66,20 @@ describe("cachedStep", () => {
     // A different script is a different step: it runs.
     const other = await cachedStep({ workspaceId: ws, receipts, name: "voice", kind: "voice-test", version: 1, params: { script: "bye" }, paid: true, save: () => undefined, run: async () => ++runs });
     expect(other.value).toBe(1);
+  });
+
+  it("keeps a weak result for its own run only, findable by that scope (recompose), and never runs cachedOnly steps", async () => {
+    const params = { script: "weak take" };
+    let runs = 0;
+    const step = (scope: string, cachedOnly = false) =>
+      cachedStep({ workspaceId: ws, receipts: {}, name: "voice", kind: "voice-scope", version: 1, params, paid: true, keep: () => false, scope, cachedOnly, save: () => undefined, run: async () => ++runs });
+    await step("run-1");
+    expect(await stepStored(ws, "voice-scope", 1, params)).toBe(false);
+    expect(await stepStored(ws, "voice-scope", 1, { params, scope: "run-1" })).toBe(true);
+    // A recompose of run 1 reuses it; under any other scope it isn't there, and cachedOnly refuses to run.
+    expect((await step("run-1", true)).reused).toBe(true);
+    await expect(step("run-2", true)).rejects.toThrow(/isn't stored/);
+    expect(runs).toBe(1);
   });
 
   it("records a failed run so it can be tried again", async () => {
