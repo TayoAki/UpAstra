@@ -4,12 +4,13 @@ import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { campaignStats } from "../shared/rules";
 import type { AdminUsage, AgentRun, ReferenceFormat, CaptionJob, Campaign, CampaignBrief, Clip, ClipStatus, Me, Platform, Post, PostStatus, ServiceStatus, SocialAccount, VoiceOption } from "../shared/types";
-import { CLIP_STATUSES, PLATFORMS, POST_STATUSES, VOICES } from "../shared/types";
+import { CLIP_STATUSES, PLATFORMS, POST_STATUSES } from "../shared/types";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { bearerAgentKey, clearSession, clientKey, clearThrottle, hashAgentKey, hashPassword, humansOnly, issueSession, newAgentKey, passwordFingerprint, readToken, requireWorkspace, signToken, signVideoLink, throttle, verifyPassword, verifyVideoLink } from "./auth";
 import { buttonEmail, sendEmail } from "./email";
 import { HttpError, emptyDoc, forgetTenant, getBackend, getDoc, loadedDoc, loadTenant, log, newId, now, runInWorkspace, save, type UserRow } from "./db";
 import { createMcpServer, httpApi } from "./mcp";
+import { preflightBrief, preflightRender } from "./preflight";
 import { extractBrief, normalizeBrief } from "./extract";
 import { aiLive, editorModel, forwardChat, mediaLive, modelFor, spendAI } from "./llm";
 import { emptyMonth, isAdmin, monthCost, monthKey, recordAI, usageReport } from "./usage";
@@ -1190,17 +1191,40 @@ export function createApp() {
   );
 
   // Rendering: approved plan → finished 9:16 video.
-  api.post("/clips/:id/render", (req, res) => {
-    const clip = findClip(String(req.params.id));
-    const voice = String(req.body?.voice ?? "ash") as VoiceOption;
-    if (!VOICES.some((v) => v.id === voice)) throw new HttpError(400, "Unknown voice");
-    if (clip.status === "draft" && !req.body?.override) throw new HttpError(400, "Approve the plan before rendering it");
-    if (voice !== "none") spendAI(req.workspaceId!, 1);
-    enqueueRender(req.workspaceId!, clip, voice, req.actor);
-    log({ campaignId: clip.campaignId, kind: "clip", message: `Render queued for "${clip.title}".` });
-    save();
-    res.status(202).json(stateFor());
+  // With dryRun, only the preflight: costs, blockers and quota, nothing queued or counted.
+  // A real request refuses on any blocker before queuing.
+  api.post(
+    "/clips/:id/render",
+    wrap(async (req, res) => {
+      const clip = findClip(String(req.params.id));
+      const voice = String(req.body?.voice ?? "ash") as VoiceOption;
+      const pre = await preflightRender(req.workspaceId!, clip, voice, !!req.body?.override);
+      if (req.body?.dryRun) return void res.json({ preflight: pre });
+      if (pre.blockers.length) throw new HttpError(pre.blockers[0].status, `${pre.blockers[0].message} Nothing was charged.`);
+      if (voice !== "none") spendAI(req.workspaceId!, 1);
+      enqueueRender(req.workspaceId!, clip, voice, req.actor);
+      log({ campaignId: clip.campaignId, kind: "clip", message: `Render queued for "${clip.title}".` });
+      save();
+      res.status(202).json(stateFor());
+    }),
+  );
+
+  api.post("/preflight/brief", (req, res) => {
+    const count = Math.min(10, Math.max(1, Math.round(Number(req.body?.count) || 3)));
+    res.json(preflightBrief(req.workspaceId!, count, String(req.body?.voice ?? "ash") as VoiceOption, req.body?.render !== false));
   });
+
+  api.post(
+    "/preflight",
+    wrap(async (req, res) => {
+      const ids: unknown = req.body?.clipIds;
+      if (!Array.isArray(ids) || !ids.length || ids.length > 50) throw new HttpError(400, "Give clipIds (1–50)");
+      const voice = String(req.body?.voice ?? "ash") as VoiceOption;
+      const clips = await Promise.all(ids.map((id) => preflightRender(req.workspaceId!, findClip(String(id)), voice, !!req.body?.override)));
+      const totalUsd = Math.round(clips.reduce((n, c) => n + c.estimate.totalUsd, 0) * 1e4) / 1e4;
+      res.json({ clips, totalUsd, ok: clips.every((c) => c.ok) });
+    }),
+  );
 
   api.get(
     "/clips/:id/video",

@@ -107,3 +107,17 @@ export const isAdmin = (email: string) =>
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean)
     .includes(email.toLowerCase());
+
+/** What one call of a kind has cost this workspace on average (its own history), else `fallback`. */
+export function averageCost(kind: AIKind, fallback: number) {
+  const months = Object.values(usage()?.months ?? {});
+  const usd = months.reduce((s, m) => s + (m.ai[kind]?.usd ?? 0), 0);
+  const calls = months.reduce((s, m) => s + (m.ai[kind]?.calls ?? 0), 0);
+  return calls ? round(usd / calls) : fallback;
+}
+
+/** AI dollars left in today's budget (Infinity with no budget set). */
+export function budgetLeft() {
+  const budget = dailyBudget();
+  return budget > 0 ? Math.max(0, round(budget - (usage()?.dayUsd ?? 0))) : Infinity;
+}

@@ -66,7 +66,7 @@ describe("agent access", () => {
     expect(made.plans).toHaveLength(2);
     expect(made.renderQueued).toEqual([]);
     expect(made.note).toMatch(/No plan passed/);
-    expect(made.next.map((n: { tool: string }) => n.tool)).toEqual(["review_clip", "review_clip"]);
+    expect(made.next.map((n: { tool: string }) => n.tool)).toEqual(["edit_clip", "edit_clip"]);
 
     const clipId = made.plans[0].id;
     const failed = await client.callTool({ name: "review_clip", arguments: { clipId, decision: "approve" } });

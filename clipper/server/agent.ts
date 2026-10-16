@@ -142,7 +142,10 @@ async function loop(ctx: AgentContext, runId: string, resume?: "approve" | "decl
       const server = createMcpServer(httpApi(ctx.baseUrl, "", { Cookie: ctx.cookie, "X-Clip-Agent": "in-app" }, true));
       await server.connect(a);
       await client.connect(b);
-      const tools = (await client.listTools()).tools.map((t) => ({ type: "function" as const, function: { name: t.name, description: t.description ?? "", parameters: flattenToolSchema(t.inputSchema) as Record<string, unknown> } }));
+      const listed = (await client.listTools()).tools;
+      // The tools take strict arguments; models often send null for "not given" or a stray key, so tidy those here.
+      const known = new Map(listed.map((t) => [t.name, new Set(Object.keys((t.inputSchema as { properties?: object }).properties ?? {}))]));
+      const tools = listed.map((t) => ({ type: "function" as const, function: { name: t.name, description: t.description ?? "", parameters: flattenToolSchema(t.inputSchema) as Record<string, unknown> } }));
 
       const exec = async (call: ToolCall, step: AgentStep) => {
         let args: Record<string, unknown> = {};
@@ -151,6 +154,8 @@ async function loop(ctx: AgentContext, runId: string, resume?: "approve" | "decl
         } catch {
           /* empty */
         }
+        const keep = known.get(call.function.name);
+        args = Object.fromEntries(Object.entries(args && typeof args === "object" ? args : {}).filter(([k, v]) => v !== null && (!keep || keep.has(k))));
         const r = await client.callTool({ name: call.function.name, arguments: args }, undefined, { timeout: 10 * 60_000, signal: ctrl.signal });
         const text = ((r.content as { type: string; text?: string }[]) ?? []).map((c) => c.text ?? "").join("\n");
         step.result = summary(text);

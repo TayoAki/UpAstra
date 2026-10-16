@@ -49,6 +49,12 @@ export const stepKey = (kind: string, version: number, params: unknown) =>
 
 const base = (workspaceId: string, key: string) => `steps/${workspaceId}/${key}`;
 
+/** Whether a step's result is stored for reuse (without running it). */
+export const stepStored = (workspaceId: string, kind: string, version: number, params: unknown) =>
+  videoStore()
+    .exists(`${base(workspaceId, stepKey(kind, version, params))}.json`)
+    .catch(() => false);
+
 export class StepNeedsAttention extends Error {}
 
 /**

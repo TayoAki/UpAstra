@@ -185,7 +185,7 @@ export function createMcpServer(api: ApiCall): McpServer {
       try {
         const value = await run(args);
         const format = `ugc.${name}@1`;
-        return text(isPlain(value) ? { format, ...value } : { format, result: value });
+        return text(isPlain(value) ? { ...value, format } : { format, result: value });
       } catch (err) {
         return fail(err);
       }
@@ -232,7 +232,7 @@ export function createMcpServer(api: ApiCall): McpServer {
       next.push(
         c.qa.pass
           ? { tool: "review_clip", args: { clipId: c.id, decision: "approve" }, why: "This plan follows the brief; approve it to render." }
-          : { tool: "review_clip", args: { clipId: c.id }, why: `Fails: ${failing(c).join("; ")}. Fix it with edit_clip, or approve with override only if the user accepts the risk.` },
+          : { tool: "edit_clip", args: { clipId: c.id }, why: `Fails: ${failing(c).join("; ")}. Fix it with edit_clip (or review_clip with decision "approve" and override: true, only if the user accepts the risk).` },
       );
     return next;
   }
@@ -262,9 +262,14 @@ export function createMcpServer(api: ApiCall): McpServer {
       count: z.number().int().min(1).max(6).default(3),
       voice: VOICE.default("ash"),
       render: z.boolean().default(true).describe("Approve passing plans and queue their renders (false: plans only, for review)"),
+      dryRun: z.boolean().default(false).describe("Only estimate the cost and check for blockers; nothing is created or charged"),
     },
-    async ({ briefUrl, briefText, count, voice, render }) => {
+    async ({ briefUrl, briefText, count, voice, render, dryRun }) => {
       if (!briefUrl && !briefText) throw new ToolError("INVALID_ARGUMENT", "Give briefUrl or briefText");
+      if (dryRun) {
+        const pre = await api<{ ok: boolean }>("POST", "/preflight/brief", { count, voice, render });
+        return { dryRun: true, ...pre, next: pre.ok ? [{ tool: "brief_to_shorts", args: { ...(briefUrl ? { briefUrl } : { briefText }), count, voice, render }, why: "Nothing blocks it; run it for real." }] : [] };
+      }
       const { campaign } = await api<{ campaign: Campaign }>("POST", "/campaigns", briefUrl ? { url: briefUrl } : { text: briefText });
       const r = await planAndRender(campaign.id, count, voice, render);
       const s = await state();
@@ -429,12 +434,27 @@ export function createMcpServer(api: ApiCall): McpServer {
 
   tool(
     "render_clip",
-    "Render an approved plan into a finished 1080×1920 MP4 (footage cut at the best moments, hook, word-timed captions, CTA card, optional AI voiceover). Queued; follow with wait_for_renders.",
-    { clipId: z.string(), voice: VOICE.default("ash") },
-    async ({ clipId, voice }) => {
+    "Render an approved plan into a finished 1080×1920 MP4 (footage cut at the best moments, hook, word-timed captions, CTA card, optional AI voiceover). Queued; follow with wait_for_renders. With dryRun, only the preflight (cost estimate, blockers, quota); nothing is queued or charged. A render that's blocked is refused before anything is charged.",
+    { clipId: z.string(), voice: VOICE.default("ash"), dryRun: z.boolean().default(false) },
+    async ({ clipId, voice, dryRun }) => {
+      if (dryRun) {
+        const { preflight } = await api<{ preflight: { ok: boolean } }>("POST", `/clips/${encodeURIComponent(clipId)}/render`, { voice, dryRun: true });
+        return { dryRun: true, ...preflight, next: preflight.ok ? [{ tool: "render_clip", args: { clipId, voice }, why: "Nothing blocks it; render it for real." }] : [] };
+      }
       const s = await api<State>("POST", `/clips/${encodeURIComponent(clipId)}/render`, { voice });
       return { ...clipLine(clipIn(s, clipId)), next: [{ tool: "wait_for_renders", args: { clipIds: [clipId] }, why: "Returns the video link when the render finishes." }] satisfies Next[] };
     },
+  );
+
+  tool(
+    "preflight_render",
+    "Before rendering: for each clip, whether its footage is stored and watched, whether its voiceover is already recorded, the estimated AI cost (from this workspace's own history), its place in the queue, quota left, and anything that would block it. Nothing is queued or charged.",
+    { clipIds: z.array(z.string()).min(1).max(50), voice: VOICE.default("ash") },
+    async ({ clipIds, voice }) => {
+      const r = await api<{ ok: boolean; clips: { clipId: string; ok: boolean }[] }>("POST", "/preflight", { clipIds, voice });
+      return { ...r, next: r.clips.filter((c) => c.ok).map((c) => ({ tool: "render_clip", args: { clipId: c.clipId, voice }, why: "Nothing blocks this render." })) };
+    },
+    true,
   );
 
   tool(

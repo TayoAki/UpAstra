@@ -58,8 +58,17 @@ describe("MCP contract", () => {
     expect(parse(await client.callTool({ name: "overview", arguments: {} })).format).toBe("ugc.overview@1");
     const made = parse(await client.callTool({ name: "brief_to_shorts", arguments: { briefText: brief, count: 1, render: false } }));
     expect(made.format).toBe("ugc.brief_to_shorts@1");
-    expect(made.next[0]).toMatchObject({ tool: "review_clip", args: { clipId: made.plans[0].id }, why: expect.any(String) });
+    expect(made.next[0]).toMatchObject({ tool: "edit_clip", args: { clipId: made.plans[0].id }, why: expect.any(String) });
     const approved = parse(await client.callTool({ name: "review_clip", arguments: { clipId: made.plans[0].id, decision: "approve", override: true } }));
     expect(approved.next[0]).toMatchObject({ tool: "render_clip", args: { clipId: made.plans[0].id } });
+    // Dry runs: nothing created, queued or charged.
+    const dry = parse(await client.callTool({ name: "render_clip", arguments: { clipId: made.plans[0].id, voice: "none", dryRun: true } }));
+    expect(dry).toMatchObject({ format: "ugc.render_clip@1", dryRun: true, clipId: made.plans[0].id });
+    const pre = parse(await client.callTool({ name: "preflight_render", arguments: { clipIds: [made.plans[0].id], voice: "none" } }));
+    expect(pre.clips[0].clipId).toBe(made.plans[0].id);
+    const before = parse(await client.callTool({ name: "overview", arguments: {} })).campaigns.length;
+    const dryBrief = parse(await client.callTool({ name: "brief_to_shorts", arguments: { briefText: brief, dryRun: true } }));
+    expect(dryBrief.estimate.totalUsd).toBeGreaterThan(0);
+    expect(parse(await client.callTool({ name: "overview", arguments: {} })).campaigns.length).toBe(before);
   });
 });

@@ -50,6 +50,14 @@ export function spendAI(workspaceId: string, n = 1) {
   aiCalls.set(workspaceId, { day, n: used + n });
 }
 
+/** AI calls a workspace has left today (Infinity when AI is off: nothing is counted). */
+export function aiCallsLeft(workspaceId: string) {
+  if (!aiLive()) return Infinity;
+  const c = aiCalls.get(workspaceId);
+  const used = c?.day === new Date().toISOString().slice(0, 10) ? c.n : 0;
+  return Math.max(0, Number(process.env.AI_DAILY_LIMIT ?? 150) - used);
+}
+
 const costOf = (data: { usage?: { cost?: unknown } }) => (typeof data.usage?.cost === "number" ? data.usage.cost : 0);
 
 /**

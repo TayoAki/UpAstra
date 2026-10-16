@@ -107,6 +107,11 @@ async function process_(job: Job) {
   }, job.actor);
 }
 
+const glossaryOf = (c: Campaign) => [c.brief.product, c.brief.brand, ...c.brief.requiredPhrases].filter(Boolean);
+export const VOICE_STEP = 1;
+/** What the voiceover step reads: the same script, voice, model and timing reuse its take. */
+export const voiceStepParams = (c: Campaign, clip: Clip, voice: string) => ({ narration: clip.narration, voice, model: modelFor("voice"), glossary: glossaryOf(c), timing: transcriptionAvailable() ? path.basename(whisperModel()) : null });
+
 /** Show progress, keep a timed log of the steps, and stop here if the render was cancelled. */
 const step = (r: RenderInfo, status: RenderInfo["status"], text: string) => {
   checkCancelled();
@@ -118,7 +123,7 @@ const step = (r: RenderInfo, status: RenderInfo["status"], text: string) => {
 };
 
 /** The footage file each shot should use: its own, or the next video in the campaign. */
-function footageFor(c: Campaign, id: string | undefined, i: number): FootageFile {
+export function footageFor(c: Campaign, id: string | undefined, i: number): FootageFile {
   const videos = c.footage.filter((f) => f.kind === "video");
   if (!videos.length) throw new Error("This campaign has no video footage to cut from");
   return videos.find((f) => f.id === id) ?? videos[i % videos.length];
@@ -195,7 +200,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     let duration = clip.lengthSec;
     if (r.voice !== "none") {
       if (!mediaLive()) throw new Error("AI voice needs OPENROUTER_API_KEY — render with “No voice” instead");
-      const glossary = [c.brief.product, c.brief.brand, ...c.brief.requiredPhrases].filter(Boolean);
+      const glossary = glossaryOf(c);
       // Voice models sometimes talk around the script ("Sure, here it is…").
       // Each take is transcribed and checked against the script; a take that
       // strays inside the script is recorded once more.
@@ -207,8 +212,8 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
         receipts: (r.steps ??= {}),
         name: "voiceover",
         kind: "voice",
-        version: 1,
-        params: { narration: clip.narration, voice: r.voice, model: modelFor("voice"), glossary, timing: transcriptionAvailable() ? path.basename(whisperModel()) : null },
+        version: VOICE_STEP,
+        params: voiceStepParams(c, clip, r.voice),
         file: takeFile,
         paid: true,
         save: saveNow,
