@@ -3,7 +3,9 @@ import type { AddressInfo } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createApp } from "../server/app";
+import { createMcpServer, type ApiCall } from "../server/mcp";
 import { initAuth } from "../server/auth";
 import { useMemoryBackend } from "../server/db";
 import { setAISimulated } from "../server/llm";
@@ -70,5 +72,27 @@ describe("MCP contract", () => {
     const dryBrief = parse(await client.callTool({ name: "brief_to_shorts", arguments: { briefText: brief, dryRun: true } }));
     expect(dryBrief.estimate.totalUsd).toBeGreaterThan(0);
     expect(parse(await client.callTool({ name: "overview", arguments: {} })).campaigns.length).toBe(before);
+  });
+
+  it("returns pictures as image content, and refuses frames of an unrendered clip", async () => {
+    const calls: unknown[] = [];
+    const fake: ApiCall = async (method, path, body) => {
+      calls.push({ method, path, body });
+      return { source: "clip", window: { start: 0, end: 2 }, times: [0.5, 1.5], images: [{ mimeType: "image/jpeg", data: "AAAA" }, { mimeType: "image/jpeg", data: "BBBB" }] } as never;
+    };
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await createMcpServer(fake).connect(a);
+    const local = new Client({ name: "t", version: "1" });
+    await local.connect(b);
+    const r = await local.callTool({ name: "get_frames", arguments: { clipId: "clip_1", aroundPhrase: "car league", occurrence: 2 } });
+    const content = r.content as { type: string; text?: string; data?: string }[];
+    expect(content.map((c) => c.type)).toEqual(["text", "image", "image"]);
+    expect(JSON.parse(content[0].text!)).toMatchObject({ format: "ugc.get_frames@1", times: [0.5, 1.5], images: 2 });
+    expect(calls[0]).toMatchObject({ method: "POST", path: "/frames", body: { clipId: "clip_1", aroundPhrase: "car league", occurrence: 2, sheet: false } });
+    await local.close();
+
+    const made = parse(await client.callTool({ name: "brief_to_shorts", arguments: { briefText: brief, count: 1, render: false } }));
+    const no = await client.callTool({ name: "contact_sheet", arguments: { clipId: made.plans[0].id } });
+    expect(parse(no).error.code).toBe("CONFLICT");
   });
 });

@@ -148,6 +148,20 @@ describe.skipIf(!ffmpegAvailable())("render pipeline", () => {
     const pack = await api(`/api/clips/${clip.id}/edit-pack`);
     expect(pack.status).toBe(200);
     expect(pack.body).toMatchObject({ width: 1080, height: 1920, fps: 30, saveUrl: `/api/clips/${clip.id}/edited` });
+
+    // Agents can look at the render: a contact sheet, frames around a phrase, scene cuts.
+    const sheet = await api("/api/frames", "POST", { clipId: clip.id, start: 0, end: 6, sheet: true });
+    expect(sheet.status).toBe(200);
+    expect(sheet.body.times).toHaveLength(9);
+    expect(sheet.body.images).toHaveLength(1);
+    const words = pack.body.captions.flatMap((c: { words: { text: string }[] }) => c.words.map((w) => w.text));
+    const near = await api("/api/frames", "POST", { clipId: clip.id, aroundPhrase: words.find((w: string) => /\p{L}{3}/u.test(w)), count: 2, width: 160 });
+    expect(near.status).toBe(200);
+    expect(near.body.images).toHaveLength(2);
+    expect((await api("/api/frames", "POST", { clipId: clip.id, aroundPhrase: "zebra quantum" })).status).toBe(404);
+    expect((await api("/api/frames", "POST", { clipId: clip.id, aroundPhrase: "—" })).status).toBe(400);
+    const cuts = await api("/api/scene-cuts", "POST", { clipId: clip.id });
+    expect(Array.isArray(cuts.body.cuts)).toBe(true);
     expect(pack.body.shots.length).toBeGreaterThan(0);
     expect(pack.body.voice).toBeUndefined(); // rendered with no voice
     expect(pack.body.captions[0].words.length).toBeGreaterThan(0);

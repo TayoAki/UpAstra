@@ -28,9 +28,25 @@ export interface Preflight {
   warnings: string[];
   footage: { id: string; name: string; cached: boolean; momentsPending: boolean }[];
   voice: { id: VoiceOption; takeCached: boolean };
-  estimate: { voiceUsd: number; momentsUsd: number; totalUsd: number; paidCalls: number };
+  /** voiceUsd is one take; a take that goes off script is recorded once more (up to voiceUsdMax). */
+  estimate: { voiceUsd: number; voiceUsdMax: number; momentsUsd: number; totalUsd: number; paidCalls: number };
   queue: { ahead: number };
   quota: { aiUsdLeft: number | null; aiCallsLeft: number | null; renderSlotsLeft: number };
+}
+
+/**
+ * Budget and call limits. Only the voice needs them: footage that can't be
+ * watched for moments is still cut (evenly), as the render has always done.
+ */
+export function budgetRule(o: { live: boolean; voiceCalls: number; momentCalls: number; totalUsd: number; usdLeft: number; callsLeft: number }) {
+  const blockers: Blocker[] = [];
+  const warnings: string[] = [];
+  if (!o.live) return { blockers, warnings };
+  if (o.voiceCalls && o.usdLeft <= 0) blockers.push({ status: 429, message: "Today's AI budget is used up. It resets at midnight UTC." });
+  else if (o.momentCalls && o.usdLeft <= 0) warnings.push("Today's AI budget is used up, so footage won't be watched for moments; shots will be cut evenly.");
+  else if (o.totalUsd > o.usdLeft) warnings.push(`This render is estimated at $${r4(o.totalUsd)}, more than the $${r4(o.usdLeft)} left in today's AI budget; it may stop partway.`);
+  if (o.voiceCalls && o.callsLeft < 1) blockers.push({ status: 429, message: "Daily AI limit reached. It resets at midnight UTC." });
+  return { blockers, warnings };
 }
 
 const fin = (n: number) => (Number.isFinite(n) ? n : null);
@@ -70,9 +86,9 @@ export async function preflightRender(workspaceId: string, clip: Clip, voice: Vo
   const max = Number(process.env.MAX_QUEUED_RENDERS ?? 20);
   const slots = Math.max(0, max - waitingCount(workspaceId, "render"));
   const paid = voiceCalls + momentCalls;
-  if (aiLive() && paid > 0 && usdLeft <= 0) block(429, "Today's AI budget is used up. It resets at midnight UTC.");
-  else if (aiLive() && totalUsd > usdLeft) warnings.push(`This render is estimated at $${r4(totalUsd)}, more than the $${r4(usdLeft)} left in today's AI budget; it may stop partway.`);
-  if (voice !== "none" && callsLeft < 1) block(429, "Daily AI limit reached. It resets at midnight UTC.");
+  const rule = budgetRule({ live: aiLive(), voiceCalls, momentCalls, totalUsd, usdLeft, callsLeft });
+  blockers.push(...rule.blockers);
+  warnings.push(...rule.warnings);
   if (!slots) block(429, `You already have ${max} clips waiting to render. Try again when some finish.`);
   if (takeCached) warnings.push("The voiceover for this script is already recorded and will be reused (not charged again).");
 
@@ -83,7 +99,7 @@ export async function preflightRender(workspaceId: string, clip: Clip, voice: Vo
     warnings,
     footage,
     voice: { id: voice, takeCached },
-    estimate: { voiceUsd: r4(voiceUsd), momentsUsd: r4(momentsUsd), totalUsd: r4(totalUsd), paidCalls: paid },
+    estimate: { voiceUsd: r4(voiceUsd), voiceUsdMax: r4(2 * voiceUsd), momentsUsd: r4(momentsUsd), totalUsd: r4(totalUsd), paidCalls: paid },
     queue: { ahead: pendingCount("render") },
     quota: { aiUsdLeft: fin(usdLeft), aiCallsLeft: fin(callsLeft), renderSlotsLeft: slots },
   };

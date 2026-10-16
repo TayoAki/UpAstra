@@ -185,6 +185,11 @@ export function createMcpServer(api: ApiCall): McpServer {
       try {
         const value = await run(args);
         const format = `ugc.${name}@1`;
+        // Pictures go out as image content after the JSON.
+        if (isPlain(value) && Array.isArray(value.images)) {
+          const { images, ...rest } = value as { images: { mimeType: string; data: string }[] };
+          return { content: [...text({ ...rest, format, images: images.length }).content, ...images.map((i) => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }))] };
+        }
         return text(isPlain(value) ? { ...value, format } : { format, result: value });
       } catch (err) {
         return fail(err);
@@ -384,6 +389,40 @@ export function createMcpServer(api: ApiCall): McpServer {
       const f = await api<ReferenceFormat>("GET", `/formats/${encodeURIComponent(formatId)}`);
       return { id: f.id, name: f.name, status: f.status, step: f.step, error: f.error, durationSec: f.durationSec, breakdown: f.breakdown };
     },
+    true,
+  );
+
+  const LOOK = {
+    clipId: z.string().optional().describe("A rendered clip (times are in the finished video)"),
+    campaignId: z.string().optional().describe("With footageId: a footage file instead"),
+    footageId: z.string().optional(),
+    start: z.number().min(0).optional().describe("Seconds"),
+    end: z.number().positive().optional().describe("Seconds"),
+    aroundPhrase: z.string().optional().describe("A rendered clip only: look at when these words are said"),
+    occurrence: z.number().int().min(1).default(1).describe("Which time the phrase is said (1 = first)"),
+  };
+
+  tool(
+    "get_frames",
+    "Look at a rendered clip or footage file: frames from a window (up to 60 s; 1.5 a second, 4 to 9), each with its real time. Use aroundPhrase to see what's on screen when words are said.",
+    { ...LOOK, count: z.number().int().min(1).max(9).optional(), width: z.number().int().min(160).max(720).default(480) },
+    async (a) => api("POST", "/frames", { ...a, sheet: false }),
+    true,
+  );
+
+  tool(
+    "contact_sheet",
+    "One image of a window of a rendered clip or footage: up to 9 frames in a 3-column grid (1440 px wide), each labelled underneath with its time. Cheaper than get_frames for a quick look.",
+    { ...LOOK, count: z.number().int().min(1).max(9).optional() },
+    async (a) => api("POST", "/frames", { ...a, sheet: true }),
+    true,
+  );
+
+  tool(
+    "scene_cuts",
+    "Times (seconds) where the picture cuts to a new shot, in a rendered clip or footage file (up to 10 minutes at a time).",
+    LOOK,
+    async (a) => api("POST", "/scene-cuts", a),
     true,
   );
 

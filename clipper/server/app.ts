@@ -16,8 +16,9 @@ import { aiLive, editorModel, forwardChat, mediaLive, modelFor, spendAI } from "
 import { emptyMonth, isAdmin, monthCost, monthKey, recordAI, usageReport } from "./usage";
 import { analyzeFootage } from "./moments";
 import { cancelRender, enqueueRender, renderAvailable } from "./render";
-import { cancelJob } from "./jobs";
-import { saveStream, saveTo, saveUpload } from "./footage-cache";
+import { cancelJob, isPending, waitingCount } from "./jobs";
+import { footageSource, saveStream, saveTo, saveUpload } from "./footage-cache";
+import { contactSheets, frameTimes, grabFrames, MAX_WINDOW, phraseWindow, sceneCutsIn, workDir } from "./frames";
 import { Readable } from "node:stream";
 import { applyEdits, enqueueCaptionJob } from "./caption-jobs";
 import { transcriptionAvailable } from "./transcribe";
@@ -72,6 +73,47 @@ const findPost = (id: string) => {
   if (!p) throw new HttpError(404, "Post not found");
   return p;
 };
+
+/**
+ * What to look at for frames and scene cuts: a rendered clip (with its timed
+ * words, for aroundPhrase) or a campaign's footage file, and the window.
+ */
+async function lookSource(workspaceId: string, b: Record<string, unknown>, maxWindow: number) {
+  let src: string;
+  let duration: number;
+  let words: { text: string; start: number; end: number }[] | undefined;
+  let label: string;
+  if (b.clipId) {
+    const clip = findClip(String(b.clipId));
+    const key = clip.render?.videoKey;
+    if (clip.render?.status !== "done" || !key || !key.startsWith(`${workspaceId}/`)) throw new HttpError(409, "Render this clip first");
+    src = await videoStore().readUrl(key);
+    duration = clip.render.durationSec ?? 0;
+    words = clip.render.parts?.captions.flatMap((c) => c.words);
+    label = `clip "${clip.title}"`;
+  } else if (b.campaignId && b.footageId) {
+    const f = findCampaign(String(b.campaignId)).footage.find((x) => x.id === String(b.footageId) && x.kind === "video");
+    if (!f) throw new HttpError(404, "Footage not found");
+    src = await footageSource(f);
+    duration = f.durationSec ?? 0;
+    label = `footage "${f.name}"`;
+  } else throw new HttpError(400, "Give clipId, or campaignId and footageId");
+  let start = Math.max(0, Number(b.start) || 0);
+  let end = Number(b.end) || (duration ? Math.min(duration, start + maxWindow) : start + Math.min(maxWindow, 10));
+  if (typeof b.aroundPhrase === "string" && b.aroundPhrase.trim()) {
+    if (!words?.length) throw new HttpError(400, "aroundPhrase needs a rendered clip with timed words");
+    if (!/[\p{L}\p{N}]/u.test(b.aroundPhrase)) throw new HttpError(400, "aroundPhrase needs words");
+    const w = phraseWindow(words, b.aroundPhrase, Math.max(1, Math.round(Number(b.occurrence) || 1)));
+    if (!w) throw new HttpError(404, `"${b.aroundPhrase}" isn't said${Number(b.occurrence) > 1 ? ` ${b.occurrence} times` : ""} in this clip`);
+    ({ start, end } = w);
+  }
+  if (duration) end = Math.min(end, duration);
+  if (!(end > start)) throw new HttpError(400, "The window is empty (end must be after start)");
+  if (end - start > maxWindow) throw new HttpError(400, `Look at ${maxWindow} s or less at a time`);
+  return { src, start, end, label };
+}
+
+const b64 = (file: string) => fs.readFileSync(file).toString("base64");
 
 const count = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
@@ -1201,7 +1243,12 @@ export function createApp() {
       const pre = await preflightRender(req.workspaceId!, clip, voice, !!req.body?.override);
       if (req.body?.dryRun) return void res.json({ preflight: pre });
       if (pre.blockers.length) throw new HttpError(pre.blockers[0].status, `${pre.blockers[0].message} Nothing was charged.`);
-      if (voice !== "none") spendAI(req.workspaceId!, 1);
+      // The preflight awaited storage; re-check what may have changed meanwhile before counting anything.
+      if (isPending(clip.id)) throw new HttpError(409, "This clip is already rendering. Nothing was charged.");
+      const maxQueued = Number(process.env.MAX_QUEUED_RENDERS ?? 20);
+      if (waitingCount(req.workspaceId!, "render") >= maxQueued) throw new HttpError(429, `You already have ${maxQueued} clips waiting to render. Try again when some finish. Nothing was charged.`);
+      // A recorded take is reused, so it isn't counted as an AI call.
+      if (voice !== "none" && !pre.voice.takeCached) spendAI(req.workspaceId!, 1);
       enqueueRender(req.workspaceId!, clip, voice, req.actor);
       log({ campaignId: clip.campaignId, kind: "clip", message: `Render queued for "${clip.title}".` });
       save();
@@ -1423,6 +1470,39 @@ export function createApp() {
       }
       save();
       res.status(201).json(stateFor());
+    }),
+  );
+
+  // Frames and contact sheets of a rendered clip or footage, for agents to look at.
+  api.post(
+    "/frames",
+    wrap(async (req, res) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const { src, start, end, label } = await lookSource(req.workspaceId!, b, MAX_WINDOW);
+      const sheet = b.sheet === true;
+      const n = b.count ? Math.min(9, Math.max(1, Math.round(Number(b.count)))) : undefined;
+      const times = frameTimes(start, end, n);
+      const dir = workDir();
+      try {
+        if (sheet) {
+          const { pages, frames } = await contactSheets(src, times, dir);
+          res.json({ source: label, window: { start, end }, times: frames.map((f) => f.t), images: pages.map((p) => ({ mimeType: "image/jpeg", data: b64(p) })) });
+        } else {
+          const width = Math.min(720, Math.max(160, Math.round(Number(b.width) || 480)));
+          const frames = await grabFrames(src, times, width, dir);
+          res.json({ source: label, window: { start, end }, times: frames.map((f) => f.t), images: frames.map((f) => ({ mimeType: "image/jpeg", data: b64(f.file) })) });
+        }
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }),
+  );
+
+  api.post(
+    "/scene-cuts",
+    wrap(async (req, res) => {
+      const { src, start, end, label } = await lookSource(req.workspaceId!, (req.body ?? {}) as Record<string, unknown>, 600);
+      res.json({ source: label, window: { start, end }, cuts: await sceneCutsIn(src, start, end) });
     }),
   );
 

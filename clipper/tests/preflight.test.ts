@@ -5,7 +5,7 @@ import { initAuth } from "../server/auth";
 import { useMemoryBackend } from "../server/db";
 import { setAISimulated } from "../server/llm";
 import { ffmpegAvailable } from "../server/media";
-import { DEFAULT_COST } from "../server/preflight";
+import { budgetRule, DEFAULT_COST } from "../server/preflight";
 
 // B6.3: what a render will cost and what blocks it, before anything is charged.
 describe.skipIf(!ffmpegAvailable())("render preflight", () => {
@@ -78,5 +78,21 @@ describe.skipIf(!ffmpegAvailable())("render preflight", () => {
     const b = await api("/api/preflight/brief", "POST", { count: 2, voice: "none", render: true });
     expect(b.body.estimate.perClipRenderUsd).toBe(DEFAULT_COST.moments);
     expect(b.body.blockers[0].message).toMatch(/OPENROUTER_API_KEY/);
+  });
+});
+
+describe("budget rule", () => {
+  const base = { live: true, voiceCalls: 0, momentCalls: 1, totalUsd: 0.01, usdLeft: 0, callsLeft: 0 };
+  it("lets a no-voice render go when the budget is spent, with a warning", () => {
+    const r = budgetRule(base);
+    expect(r.blockers).toEqual([]);
+    expect(r.warnings[0]).toMatch(/cut evenly/);
+  });
+  it("blocks a voice that would be charged, not a reused take", () => {
+    expect(budgetRule({ ...base, voiceCalls: 1 }).blockers.map((b) => b.status)).toEqual([429, 429]);
+    expect(budgetRule({ ...base, voiceCalls: 0, momentCalls: 0 }).blockers).toEqual([]);
+  });
+  it("warns when the estimate is more than what's left", () => {
+    expect(budgetRule({ ...base, voiceCalls: 1, usdLeft: 0.01, totalUsd: 0.03, callsLeft: 5 })).toMatchObject({ blockers: [], warnings: [expect.stringMatching(/more than/)] });
   });
 });
