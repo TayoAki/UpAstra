@@ -7,7 +7,7 @@ import type { Campaign, Clip, EditParts, FootageFile, RenderInfo, VoiceOption } 
 import { buildAss, fitCaptionsFor, groups, HOOK_SECONDS, lastSentenceStart, sentences, timeWords } from "./captions";
 import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, saveNow, tenantLoadHooks } from "./db";
 import { mediaLive, modelFor, speak } from "./llm";
-import { blackSpans, concat, compose, cutSegment, cutSignature, ffmpegAvailable, H, run, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
+import { blackSpans, concat, compose, cutSegment, cutSignature, ffmpegAvailable, H, run, sceneCutNear, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
 import { cacheKey, footageSource, isCached } from "./footage-cache";
 import { cancelJob, cancelWaiting, checkCancelled, currentSignal, errorText, isPending, pendingCount, submitJob, waitingCount } from "./jobs";
 import { cachedStep } from "./steps";
@@ -300,13 +300,15 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
         receipts: (r.steps ??= {}),
         name: `shot${i + 1}`,
         kind: "cut",
-        version: 1,
+        version: 2, // 2: snaps to a nearby scene cut
         params: { source: f.storageKey ?? cacheKey(f), start: requested, len, audio: f.hasAudio !== false, total, cut: cutSignature() },
         file: out,
         save,
         run: async () => {
           const src = await footageSource(f);
           checkCancelled();
+          // Start on a scene cut if there's one within 0.4 s.
+          start = Math.max(0, Math.min(await sceneCutNear(src, start), Math.max(0, total - len - 0.5)));
           await cutSegment(src, start, len, f.hasAudio !== false, out);
           // Goals often fade to black before the replay: if a shot has more than a
           // moment of black, slide it away from the black and cut again.
