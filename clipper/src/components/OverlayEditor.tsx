@@ -23,14 +23,14 @@ export function OverlayEditor({ clip }: { clip: Clip }) {
   const { run, busy } = useApp();
   const overlays = clip.overlays ?? [];
   const [adding, setAdding] = useState(false);
-  const [f, setF] = useState<{ kind: OverlayKind; cue: string; text: string; user: string; emoji: string; tier: string; rank: number; answers: string; correct: number }>({ kind: "emoji", cue: "", text: "", user: "", emoji: "🔥", tier: "S", rank: 1, answers: "", correct: -1 });
+  const [f, setF] = useState<{ kind: OverlayKind; cue: string; text: string; user: string; emoji: string; tier: string; rank: number; answers: string; correct: number; revealCue: string }>({ kind: "emoji", cue: "", text: "", user: "", emoji: "🔥", tier: "S", rank: 1, answers: "", correct: -1, revealCue: "" });
   const answers = f.answers.split("\n").map((a) => a.trim()).filter(Boolean).slice(0, 4);
   const save = (next: Overlay[], msg: string) => run(() => api.editClip(clip, { overlays: next }), `${msg}${clip.render?.status === "done" ? " — render again to see it" : ""}`);
   const cueOk = !f.cue.trim() || cueInScript(f.cue, clip.narration);
   const ready = f.cue.trim() && cueOk && (f.kind === "emoji" ? !!f.emoji : f.kind === "quiz" ? answers.length >= 2 : !!f.text.trim());
 
   const add = () =>
-    save([...overlays, { id: Math.random().toString(36).slice(2, 10), kind: f.kind, cue: f.cue.trim(), text: f.text.trim() || undefined, user: f.kind === "comment" ? f.user.trim() || undefined : undefined, emoji: f.kind === "emoji" ? f.emoji : undefined, tier: f.kind === "tier" ? (f.tier as Overlay["tier"]) : undefined, rank: f.kind === "rank" || f.kind === "podium" ? f.rank : undefined, answers: f.kind === "quiz" ? answers : undefined, correct: f.kind === "quiz" && f.correct >= 0 && f.correct < answers.length ? f.correct : undefined }], "Overlay added").then(
+    save([...overlays, { id: Math.random().toString(36).slice(2, 10), kind: f.kind, cue: f.cue.trim(), text: f.text.trim() || undefined, user: f.kind === "comment" ? f.user.trim() || undefined : undefined, emoji: f.kind === "emoji" ? f.emoji : undefined, tier: f.kind === "tier" ? (f.tier as Overlay["tier"]) : undefined, rank: f.kind === "rank" || f.kind === "podium" ? f.rank : undefined, answers: f.kind === "quiz" ? answers : undefined, correct: f.kind === "quiz" && f.correct >= 0 && f.correct < answers.length ? f.correct : undefined, revealCue: f.kind === "quiz" && f.correct >= 0 && f.revealCue.trim() ? f.revealCue.trim() : undefined }], "Overlay added").then(
       (r) => r && (setAdding(false), setF({ ...f, cue: "", text: "" })),
     );
 
@@ -135,6 +135,13 @@ export function OverlayEditor({ clip }: { clip: Clip }) {
                   ))}
                 </select>
               </label>
+              {f.correct >= 0 && (
+                <label className="field">
+                  Reveal it on the words (optional)
+                  <input className="input" placeholder="e.g. the answer is" value={f.revealCue} onChange={(e) => setF({ ...f, revealCue: e.target.value })} />
+                  {f.revealCue.trim() && !cueInScript(f.revealCue, clip.narration) && <span className="small neg">Those words aren't in the voiceover — copy them exactly.</span>}
+                </label>
+              )}
             </div>
           )}
           {(f.kind === "text" || f.kind === "tier") && (

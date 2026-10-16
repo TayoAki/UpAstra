@@ -353,7 +353,8 @@ export function createMcpServer(api: ApiCall): McpServer {
     tier: z.enum(["S", "A", "B", "C", "D"]).optional(),
     rank: z.number().int().min(1).max(10).optional().describe("rank: place 1–10; podium: 1–3"),
     answers: z.array(z.string().max(32)).min(2).max(4).optional().describe("quiz: the options"),
-    correct: z.number().int().min(0).max(3).optional().describe("quiz: which option is right (0-based); it lights up before the strip goes"),
+    correct: z.number().int().min(0).max(3).optional().describe("quiz: which option is right (0-based)"),
+    revealCue: z.string().optional().describe("quiz: words from the voiceover that reveal the answer; it lights up then (else for the last 40%)"),
     hold: z.number().optional().describe("Seconds on screen"),
   });
 

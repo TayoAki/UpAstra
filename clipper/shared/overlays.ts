@@ -60,6 +60,8 @@ export function sanitizeOverlays(raw: unknown, script?: string, makeId: () => st
       if (q) o.text = q;
       const k = Number(x.correct);
       if (Number.isInteger(k) && k >= 0 && k < answers.length) o.correct = k;
+      const rc = str(x.revealCue, 60);
+      if (rc && o.correct !== undefined && (!script || cueInScript(rc, script))) o.revealCue = rc;
     } else {
       const text = str(x.text, kind === "comment" ? 140 : kind === "tier" || kind === "rank" || kind === "podium" ? 24 : 40);
       if (!text) continue;

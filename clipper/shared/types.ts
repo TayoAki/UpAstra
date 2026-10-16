@@ -218,6 +218,8 @@ export interface Overlay {
   /** Quiz options (2–4) and which one is right (0-based). */
   answers?: string[];
   correct?: number;
+  /** Quiz: words from the voiceover that reveal the answer ("the answer is Octane"); without them it lights up for the last 40%. */
+  revealCue?: string;
 }
 
 // ---- Reference formats ("clone a viral video") ------------------------------------

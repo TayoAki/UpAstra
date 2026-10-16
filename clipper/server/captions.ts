@@ -235,7 +235,7 @@ export function buildAss(o: {
     // A fill sweep (\kf) goes from the secondary colour to the primary: the highlight.
     `Style: Cap,${font},${px(st.size)},${st.animation === "sweep" ? hl : white},${white},${boxed ? back : assColor(st.outline)},${back},${bold},0,0,0,100,100,0,0,${boxed ? 3 : 1},${px(st.outlineWidth)},${px(st.shadow)},5,${px(70)},${px(70)},0,1`,
     `Style: Cta,${font},${px(72)},&H00FFFFFF,&H00FFFFFF,${accent},${accent},${bold},0,0,0,100,100,0,0,3,${px(26)},0,5,${px(90)},${px(90)},0,1`,
-    ...(o.overlays?.placed.length ? overlayStyles(o.overlays.layout) : []),
+    ...(o.overlays?.placed.length ? overlayStyles(o.overlays.layout, new Set(o.overlays.placed.map((p) => p.o.kind))) : []),
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",

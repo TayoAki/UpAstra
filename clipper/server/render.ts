@@ -5,6 +5,7 @@ import path from "node:path";
 import { traitsOf } from "../shared/learning";
 import { calibrate, checkClip, round2, speechLoad } from "../shared/rules";
 import type { Campaign, Clip, EditParts, FootageFile, RenderInfo, VoiceOption } from "../shared/types";
+import { BOARD_KINDS } from "../shared/types";
 import { buildAss, fitCaptionsFor, groups, HOOK_SECONDS, lastSentenceStart, sentences, timeWords, type Timed } from "./captions";
 import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, saveNow, tenantLoadHooks } from "./db";
 import { mediaLive, modelFor, speak } from "./llm";
@@ -139,14 +140,21 @@ export const voiceStepParams = (c: Campaign, clip: Clip, voice: string) => ({ na
  * the same file over a proxy (with the current caption style and overlays).
  */
 export function buildClipAss(o: { clip: Clip; campaign: Campaign; brand: BrandKit | undefined; words: Timed[]; moments: Record<string, number>; duration: number; ctaFrom: number; ctaText: string; language?: string }) {
-  const { clip, duration, ctaFrom } = o;
+  const { clip, duration } = o;
+  let ctaFrom = o.ctaFrom;
   const style = resolveCaptionStyle(o.brand, o.campaign.captions);
   const captionGroups = groups(o.words, style.wordsPerCaption);
   // Overlays land on the words they're cued to (tier items stay until the call to action).
   const layout = { width: W, height: H, bandTop: VIDEO_TOP, bandHeight: VIDEO_H, font: style.font, fontWidths: style.fontWidths, accent: accentOf(o.brand), uppercase: style.uppercase, hook: { text: clip.hook, end: Math.min(HOOK_SECONDS, duration) } };
-  const { placed, missed } = placeOverlays(clip.overlays ?? [], o.words, duration, ctaFrom, o.moments);
+  let { placed, missed } = placeOverlays(clip.overlays ?? [], o.words, duration, ctaFrom, o.moments);
+  // A board item named just before the call to action gets its moment: the CTA waits for the board (if there's room).
+  const boardEnd = Math.max(0, ...placed.filter((p) => BOARD_KINDS.includes(p.o.kind)).map((p) => p.end));
+  if (boardEnd > ctaFrom && boardEnd <= duration - 1.5) {
+    ctaFrom = boardEnd;
+    ({ placed, missed } = placeOverlays(clip.overlays ?? [], o.words, duration, ctaFrom, o.moments));
+  }
   const ass = buildAss({ hook: clip.hook, captions: captionGroups, cta: o.ctaText, ctaFrom, duration, style, accent: accentOf(o.brand), language: o.language, overlays: { placed, layout } });
-  return { ass, style, captionGroups, layout, placed, missed };
+  return { ass, style, captionGroups, layout, placed, missed, ctaFrom };
 }
 
 /** Show progress, keep a timed log of the steps, and stop here if the render was cancelled. */
@@ -408,7 +416,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     const ctaText = c.brief.cta.text || clip.cta;
     const ctaFrom = Math.max(1, Math.min(lastStart, duration - 2.5));
     const brand = getDoc().brand;
-    const { ass: assText, style, captionGroups, layout, placed, missed } = buildClipAss({ clip, campaign: c, brand, words, moments, duration, ctaFrom, ctaText, language: r.language });
+    const { ass: assText, style, captionGroups, layout, placed, missed, ctaFrom: ctaShown } = buildClipAss({ clip, campaign: c, brand, words, moments, duration, ctaFrom, ctaText, language: r.language });
     const crowded = hiddenComments(placed, layout);
     if (crowded.length) log({ campaignId: c.id, kind: "clip", message: `Left out ${crowded.length} comment overlay(s) in "${clip.title}": too many on screen at once (${crowded.map((x) => `@${x.user}`).join(", ")}).` });
     const { stickers, missing } = await emojiStickers(placed, layout, tmp);
@@ -433,7 +441,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     if (!r.recompose) await videoStore().deletePrefix(partsPrefix).catch(() => undefined);
     const stamp = `${partsPrefix}${Date.now()}`;
     const round = (n: number) => Math.round(n * 1000) / 1000;
-    const editParts: EditParts = { shots: [], captions: [], hook: { text: clip.hook, end: Math.min(HOOK_SECONDS, duration) }, cta: { text: ctaText, from: round(ctaFrom) }, duration };
+    const editParts: EditParts = { shots: [], captions: [], hook: { text: clip.hook, end: Math.min(HOOK_SECONDS, duration) }, cta: { text: ctaText, from: round(ctaShown) }, duration };
     for (const [i, file] of parts.entries()) {
       const k = `${stamp}/shot${i + 1}.mp4`;
       await videoStore().put(k, file, "video/mp4");

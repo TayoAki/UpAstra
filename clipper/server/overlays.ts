@@ -16,7 +16,26 @@ export interface Placed {
   o: Overlay;
   start: number;
   end: number;
+  /** A quiz's answer reveal: when its revealCue is said (else the last 40% of its time). */
+  reveal?: number;
 }
+
+/** When `cue` is first said at or after `after` seconds (whole tokens, or joined text for unspaced scripts). */
+function cueAfter(cue: string, words: Timed[], toks: string[], after: number): number | undefined {
+  const c = norm(cue).split(" ").filter(Boolean);
+  if (!c.length) return undefined;
+  for (let i = 0; i <= toks.length - c.length; i++) if (words[i].start >= after && c.every((x, k) => toks[i + k] === x)) return words[i].start;
+  if (UNSPACED.test(c.join(""))) {
+    const stream = toks.map((t) => t.replace(/ /g, ""));
+    const owner = stream.flatMap((t, i) => Array.from(t, () => i));
+    const joined = stream.join("");
+    for (let at = joined.indexOf(c.join("")); at >= 0; at = joined.indexOf(c.join(""), at + 1)) if (words[owner[at]].start >= after) return words[owner[at]].start;
+  }
+  return undefined;
+}
+
+/** When a quiz lights up its right answer. */
+export const quizReveal = (p: Placed) => (p.o.correct === undefined ? undefined : (p.reveal ?? p.start + (p.end - p.start) * 0.6));
 
 const DEFAULT_HOLD: Record<Overlay["kind"], number> = { comment: 2.8, emoji: 1.3, text: 1.1, tier: 0, rank: 0, podium: 0, quiz: 3.5 };
 const norm = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
@@ -65,9 +84,15 @@ export function placeOverlays(overlays: Overlay[], words: Timed[], duration: num
     }
     // The board stays until the call to action (a last item named just before it gets 0.6 s to land).
     let end = BOARD_KINDS.includes(o.kind) ? Math.max(start + 0.6, until) : start + (o.hold && o.hold > 0 ? Math.min(o.hold, 8) : DEFAULT_HOLD[o.kind]);
-    // A quiz (and its answer reveal) is over before the call to action comes up.
+    // A quiz reveals its answer when the revealCue is said (staying 1.2 s after), and is over before the call to action.
+    let reveal: number | undefined;
+    if (o.kind === "quiz" && o.revealCue && o.correct !== undefined) {
+      const r = cueAfter(o.revealCue, words, toks, start + 0.3);
+      if (r !== undefined) [reveal, end] = [r, Math.max(end, r + 1.2)];
+    }
     if (o.kind === "quiz" && start < until) end = Math.max(start + 1, Math.min(end, until));
-    placed.push({ o, start, end: Math.min(end, duration) });
+    if (reveal !== undefined && reveal >= end - 0.2) reveal = undefined;
+    placed.push({ o, start, end: Math.min(end, duration), ...(reveal !== undefined ? { reveal } : {}) });
   }
   return { placed: placed.sort((a, b) => a.start - b.start), missed };
 }
@@ -497,7 +522,7 @@ export function commentLayout(comments: CommentIn[], L: OverlayLayout, board?: {
 }
 
 /** Styles the overlay events use (appended to the [V4+ Styles] section). */
-export function overlayStyles(L: OverlayLayout): string[] {
+export function overlayStyles(L: OverlayLayout, kinds?: Set<Overlay["kind"]>): string[] {
   const k = Math.min(L.width, L.height) / 1080;
   const px = (n: number) => Math.max(1, Math.round(n * k));
   const accent = assColor(L.accent);
@@ -508,10 +533,15 @@ export function overlayStyles(L: OverlayLayout): string[] {
     `Style: OvPop,${L.font},${px(124)},&H00FFFFFF,&H00FFFFFF,${accent},&H64000000,0,0,0,0,100,100,0,0,1,${px(9)},${px(4)},5,0,0,0,1`,
     `Style: OvTierLabel,${L.font},${px(64)},&H00201C1A,&H00201C1A,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1`,
     `Style: OvTierItem,${L.font},${px(48)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,${px(5)},0,4,0,0,0,1`,
-    `Style: OvRankLabel,${L.font},${px(64)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1`,
-    `Style: OvQuizQ,${L.font},${px(52)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,${px(6)},${px(2)},2,0,0,0,1`,
-    `Style: OvQuizLetter,${L.font},${px(30)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1`,
-    `Style: OvQuizText,${L.font},${px(40)},&H00201C1A,&H00201C1A,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,4,0,0,0,1`,
+    // Only the styles a clip uses, so clips without the newer kinds keep the exact same file.
+    ...(!kinds || kinds.has("rank") || kinds.has("podium") ? [`Style: OvRankLabel,${L.font},${px(64)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1`] : []),
+    ...(!kinds || kinds.has("quiz")
+      ? [
+          `Style: OvQuizQ,${L.font},${px(52)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,${px(6)},${px(2)},2,0,0,0,1`,
+          `Style: OvQuizLetter,${L.font},${px(30)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1`,
+          `Style: OvQuizText,${L.font},${px(40)},&H00201C1A,&H00201C1A,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,4,0,0,0,1`,
+        ]
+      : []),
   ];
 }
 
@@ -652,7 +682,7 @@ export function overlayEvents(placed: Placed[], L: OverlayLayout): string[] {
   // Quiz strips: answer chips pop in one after another; the right one lights up for the last 40%.
   for (const p of placed.filter((x) => x.o.kind === "quiz" && (x.o.answers?.length ?? 0) >= 2)) {
     const q = quizLayout(p.o, L, quizAbove(p, placed));
-    const reveal = p.o.correct !== undefined ? p.start + (p.end - p.start) * 0.6 : undefined;
+    const reveal = quizReveal(p);
     if (q.question)
       lines.push(`Dialogue: 8,${ts(p.start)},${ts(p.end)},OvQuizQ,,0,0,0,,{\\an2\\pos(${Math.round(L.width / 2)},${Math.round(q.question.box.y + q.question.box.h)})${q.question.size !== px(52) ? `\\fs${q.question.size}` : ""}\\fad(120,160)}${q.question.lines.join("\\N")}`);
     q.chips.forEach((c, i) => {

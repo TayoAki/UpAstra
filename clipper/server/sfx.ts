@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { layoutComments, tierSchedule, type OverlayLayout, type Placed } from "./overlays";
+import { layoutComments, quizReveal, tierSchedule, type OverlayLayout, type Placed } from "./overlays";
 
 // Opt-in sound design (brief.soundDesign): a short pop when an overlay
 // appears and a whoosh when a tier item glides into its cell, timed from the
@@ -31,7 +31,7 @@ export function sfxEvents(placed: Placed[], L: OverlayLayout, stickers?: { start
     const to = Math.max(...items.map((t) => t.end));
     for (const s of tierSchedule(items.map((t) => t.start), to)) out.push({ at: s.start, kind: "pop" }, { at: s.glideStart, kind: "whoosh" });
   }
-  for (const p of placed) if (p.o.kind === "quiz" && (p.o.answers?.length ?? 0) >= 2) out.push({ at: p.start, kind: "pop" }, ...(p.o.correct !== undefined ? [{ at: p.start + (p.end - p.start) * 0.6, kind: "pop" as const }] : []));
+  for (const p of placed) if (p.o.kind === "quiz" && (p.o.answers?.length ?? 0) >= 2) out.push({ at: p.start, kind: "pop" }, ...(quizReveal(p) !== undefined ? [{ at: quizReveal(p)!, kind: "pop" as const }] : []));
   for (const c of layoutComments(placed, L)) if (c.shown) out.push({ at: c.start, kind: "pop" });
   for (const p of placed) if (p.o.kind === "text" && p.o.text?.trim()) out.push({ at: p.start, kind: "pop" });
   for (const s of stickers ?? placed.filter((p) => p.o.kind === "emoji" && p.o.emoji)) out.push({ at: s.start, kind: "pop" });

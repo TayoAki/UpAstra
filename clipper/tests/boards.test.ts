@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FONT_WIDTHS } from "../server/font-metrics";
-import { overlayEvents, placeOverlays, podiumLayout, quizLayout, rankLayout, textWidth, tierSchedule } from "../server/overlays";
+import { overlayEvents, overlayStyles, placeOverlays, podiumLayout, quizLayout, quizReveal, rankLayout, textWidth, tierSchedule } from "../server/overlays";
+import { buildClipAss } from "../server/render";
 import { sfxEvents } from "../server/sfx";
 import { sanitizeOverlays } from "../shared/overlays";
 import type { Overlay } from "../shared/types";
@@ -125,5 +126,33 @@ describe("drawing and validation", () => {
     expect(ql.box.y + ql.box.h).toBeLessThanOrEqual(Lp.bandTop);
     expect(ql.box.y).toBeGreaterThanOrEqual(0);
     for (const s of g.slots) expect(overlap(s.box, ql.box)).toBe(false);
+  });
+
+  it("reveals a quiz answer when it's said, if the plan gives the words", () => {
+    const quiz: Overlay = { id: "q", kind: "quiz", cue: "number", answers: ["Octane", "Breakout", "Merc"], correct: 1, revealCue: "one breakout", hold: 2 };
+    const { placed } = placeOverlays([quiz], words, 12, 11);
+    const q = placed[0];
+    expect(quizReveal(q)).toBeCloseTo(words.find((w) => w.text === "one")!.start);
+    expect(q.end).toBeGreaterThanOrEqual(quizReveal(q)! + 1.2 - 1e-9); // held long enough to see it
+    // Without the words, the last 40%.
+    const { placed: p2 } = placeOverlays([{ ...quiz, revealCue: undefined }], words, 12, 11);
+    expect(quizReveal(p2[0])).toBeCloseTo(p2[0].start + 0.6 * (p2[0].end - p2[0].start));
+  });
+
+  it("writes only the styles a clip uses", () => {
+    const tierOnly = overlayStyles(L("Poppins Black"), new Set(["tier"]));
+    expect(tierOnly.some((x) => /OvRankLabel|OvQuiz/.test(x))).toBe(false);
+    expect(overlayStyles(L("Poppins Black"), new Set(["quiz"])).some((x) => /OvQuizText/.test(x))).toBe(true);
+  });
+
+  it("holds the call to action for a board's last item named just before it", () => {
+    const clip = { hook: "", overlays: ranks } as never;
+    const campaign = { captions: {} } as never;
+    // #1 named at 6.0 s, CTA due at 6.2 s: the CTA waits until #1 has landed.
+    const r = buildClipAss({ clip, campaign, brand: undefined, words, moments: {}, duration: 12, ctaFrom: 6.2, ctaText: "Play now" });
+    expect(r.ctaFrom).toBeGreaterThanOrEqual(6.0 + 0.6 - 1e-9);
+    expect(r.placed.filter((p) => p.o.kind === "rank").every((p) => p.end <= r.ctaFrom + 1e-9)).toBe(true);
+    // No room before the end: the CTA stays where it was.
+    expect(buildClipAss({ clip, campaign, brand: undefined, words, moments: {}, duration: 7, ctaFrom: 6.2, ctaText: "Play now" }).ctaFrom).toBe(6.2);
   });
 });
