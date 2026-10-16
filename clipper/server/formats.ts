@@ -219,7 +219,6 @@ export function formatForPlanner(f: ReferenceFormat) {
     summary: b.summary,
     recipe: b.recipe,
     hookStyle: b.hook.style,
-    hookPattern: b.hook.text ? `like "${b.hook.text}" (pattern only — write a new hook for this campaign)` : undefined,
     hookSeconds: b.hook.seconds,
     beats: b.beats.map((x) => ({ start: x.start, end: x.end, purpose: x.purpose, visual: x.visual, onScreenText: x.onScreenText ? "yes" : undefined })),
     pacing: b.pacing,

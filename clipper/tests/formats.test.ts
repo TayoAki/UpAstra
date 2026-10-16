@@ -147,7 +147,8 @@ describe("formats", () => {
     // The planner got the format's recipe — and not the reference's transcript.
     const plan = JSON.parse([...seen].reverse().find((x) => !/reusable FORMAT/.test(x.system))!.user);
     expect(plan.format).toMatchObject({ name: "Tier list reply", recipe: BREAKDOWN.recipe, hookStyle: "number" });
-    expect(plan.format.hookPattern).toMatch(/pattern only/);
+    // Not even the reference's hook line: the recipe carries the hook as a fill-in pattern.
+    expect(JSON.stringify(plan.format)).not.toContain(BREAKDOWN.hook.text);
 
     // Usage: the breakdown counts as its own kind of AI work.
     const usage = (await call("/api/usage")).body.months[0].usage.ai;
