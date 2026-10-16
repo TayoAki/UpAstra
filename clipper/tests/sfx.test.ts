@@ -71,9 +71,12 @@ describe("sound design", () => {
     const dense = path.join(dir, "dense.mp4");
     const events = Array.from({ length: 5 }, (_, i) => [{ at: 1.4 + i * 0.35, kind: "pop" as const }, { at: 1.6 + i * 0.35, kind: "whoosh" as const }]).flat();
     await compose({ video, ass, voice, duration: 6, out: dense, workDir: dir, sound: { events } });
-    const r2 = spawnSync("ffmpeg", ["-v", "info", "-i", dense, "-af", "ebur128", "-f", "null", "-"], { encoding: "utf8" });
+    const r2 = spawnSync("ffmpeg", ["-v", "info", "-i", dense, "-af", "ebur128=peak=true", "-f", "null", "-"], { encoding: "utf8" });
     const lufs2 = Number(r2.stderr.match(/Integrated loudness:\s*\n\s*I:\s+(-?[\d.]+)/)?.[1]);
     expect(lufs2).toBeGreaterThan(-15);
     expect(lufs2).toBeLessThan(-13);
+    // True peak of the final (AAC) file, not just the mix, stays under -1.5 dBTP.
+    const peak = Number(r2.stderr.match(/True peak:\s*\n\s*Peak:\s+(-?[\d.]+)/)?.[1]);
+    expect(peak).toBeLessThanOrEqual(-1.5);
   }, 60_000);
 });

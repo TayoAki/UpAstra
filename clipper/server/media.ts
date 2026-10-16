@@ -260,7 +260,8 @@ export function mixFilter(o: { voice: boolean; sound?: { events: SfxEvent[] } })
 
 /** Normalise to -14 LUFS from a measurement of the whole file (a linear gain), not on the fly. */
 async function loudnormTwoPass(input: string, out: string) {
-  const target = "I=-14:TP=-1.5:LRA=11";
+  // TP -2.5: the AAC encode adds up to ~1 dB on sharp effect peaks, so the file stays under -1.5 dBTP.
+  const target = "I=-14:TP=-2.5:LRA=11";
   const { stderr } = await run("ffmpeg", ["-v", "info", "-i", input, "-af", `loudnorm=${target}:print_format=json`, "-f", "null", "-"]);
   const m = JSON.parse(stderr.slice(stderr.lastIndexOf("{"), stderr.lastIndexOf("}") + 1)) as Record<string, string>;
   const measured = `measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}`;
