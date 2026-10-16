@@ -9,6 +9,7 @@ import { prepareFonts } from "./fonts";
 import { probe, run } from "./media";
 import { videoStore } from "./storage";
 import { NO_SPACES, transcribe } from "./transcribe";
+import { recordUsage } from "./usage";
 
 // Captions page jobs: transcribe an uploaded video (any of Whisper's ~99
 // languages), let the user fix words, then burn styled captions in. One job at
@@ -114,6 +115,8 @@ async function renderJob(j: CaptionJob, workspaceId: string) {
     await videoStore().put(key, out, "video/mp4");
     if (j.outputKey) await videoStore().deletePrefix(j.outputKey).catch(() => undefined);
     set(j, { status: "done", step: undefined, outputKey: key, renderedAt: now() });
+    recordUsage("captionJobs", 1);
+    recordUsage("captionSec", j.durationSec ?? 0);
     log({ kind: "clip", message: `Captioned "${j.name}" in the ${style.name} style.` });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

@@ -45,6 +45,8 @@ interface Backend {
   renameWorkspace(id: string, name: string): Promise<void>;
   deleteWorkspace(id: string): Promise<void>;
   loadDoc(id: string): Promise<WorkspaceDoc | undefined>;
+  /** Every workspace with its owner's email and usage record (for the operator's usage view). */
+  listWorkspaceUsage(): Promise<(WorkspaceRow & { email: string; usage?: WorkspaceDoc["usage"] })[]>;
   saveDoc(id: string, doc: WorkspaceDoc): Promise<void>;
 }
 
@@ -114,6 +116,10 @@ class PgBackend implements Backend {
   }
   async deleteWorkspace(id: string) {
     await this.pool.query("DELETE FROM co_workspaces WHERE id=$1", [id]);
+  }
+  async listWorkspaceUsage() {
+    const rows = (await this.pool.query("SELECT w.id, w.owner_id, w.name, w.created_at, u.email, w.data->'usage' AS usage FROM co_workspaces w JOIN co_users u ON u.id = w.owner_id ORDER BY w.created_at")).rows;
+    return rows.map((r) => ({ ...this.ws(r)!, email: r.email as string, usage: (r.usage ?? undefined) as WorkspaceDoc["usage"] }));
   }
   async loadDoc(id: string) {
     return (await this.pool.query("SELECT data FROM co_workspaces WHERE id=$1", [id])).rows[0]?.data as WorkspaceDoc | undefined;
@@ -199,6 +205,11 @@ class FileBackend implements Backend {
     this.docs.delete(id);
     if (this.dir) fs.rmSync(path.join(this.dir, "workspaces", `${id}.json`), { force: true });
     this.persist();
+  }
+  async listWorkspaceUsage() {
+    return Promise.all(
+      this.workspaces.map(async (w) => ({ ...this.row(w)!, email: this.users.find((u) => u.id === w.ownerId)?.email ?? "", usage: (await this.loadDoc(w.id))?.usage })),
+    );
   }
   async loadDoc(id: string) {
     if (this.docs.has(id)) return structuredClone(this.docs.get(id));
@@ -297,6 +308,9 @@ export async function flushAll() {
     }),
   );
 }
+
+/** A workspace document if it's loaded in memory (fresher than the saved copy). */
+export const loadedDoc = (id: string) => tenants.get(id)?.doc;
 
 export function forgetTenant(id: string) {
   const t = tenants.get(id);

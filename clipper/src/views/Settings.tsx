@@ -5,6 +5,7 @@ import { api } from "../api";
 import { Tabs } from "../App";
 import { AgentAccess } from "./AgentAccess";
 import { BrandCaptions } from "./BrandCaptions";
+import { UsageView } from "./UsageView";
 import { ConnectAccounts } from "../components/ConnectAccounts";
 import { Empty, Panel } from "../components/ui";
 import { go, useApp } from "../store";
@@ -23,6 +24,7 @@ export function SettingsView({ tab }: { tab: string }) {
           { id: "brand", label: "Brand & captions" },
           { id: "accounts", label: "Posting accounts", n: state?.accounts.length },
           { id: "agent", label: "Agent access" },
+          { id: "usage", label: "Usage" },
           { id: "account", label: "Your account" },
         ]}
         active={tab}
@@ -33,6 +35,8 @@ export function SettingsView({ tab }: { tab: string }) {
           <BrandCaptions />
         ) : tab === "agent" ? (
           <AgentAccess />
+        ) : tab === "usage" ? (
+          <UsageView />
         ) : tab === "accounts" ? (
           <>
             <div className="page-head">

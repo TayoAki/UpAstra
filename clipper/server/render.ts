@@ -15,6 +15,7 @@ import { accentOf, resolveCaptionStyle } from "../shared/caption-styles";
 import { prepareFonts } from "./fonts";
 import { analyzeFootage, pickMoment } from "./moments";
 import { videoStore } from "./storage";
+import { recordUsage } from "./usage";
 
 // The render queue: approved clip plans → finished 9:16 MP4s.
 //   1. find moments in each footage file the plan uses (cached)
@@ -341,6 +342,8 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     // What the learning system compares once this clip is posted.
     fresh.traits = { ...traitsOf(fresh), voice: r.voice, opening };
     fresh.qa = checkClip(fresh, c.brief);
+    recordUsage("renders", 1);
+    recordUsage("renderSec", duration);
     log({ campaignId: c.id, kind: "clip", message: `Rendered "${fresh.title}" (${Math.round(duration)}s${r.voice !== "none" ? `, ${r.voice} voice` : ", no voice"}).`, cost: r.cost || undefined });
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

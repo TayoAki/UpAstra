@@ -1232,3 +1232,19 @@ tr.clickable:hover td {
     display: none;
   }
 }
+
+/* Usage */
+.usage-bar {
+  height: 8px;
+  border-radius: 99px;
+  background: var(--sunk);
+  overflow: hidden;
+}
+.usage-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--ok);
+}
+.usage-bar > span.hot {
+  background: var(--bad);
+}

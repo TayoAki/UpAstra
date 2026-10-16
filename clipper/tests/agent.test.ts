@@ -6,7 +6,9 @@ import { initAuth } from "../server/auth";
 import { useMemoryBackend } from "../server/db";
 
 // A scripted model: looks at the conversation and decides the next move.
-const seen: { messages: { role: string; content: string | null; tool_call_id?: string }[]; tools: { function: { name: string } }[] }[] = [];
+type Content = string | null | { type: string; text: string; cache_control?: unknown }[];
+const seen: { messages: { role: string; content: Content; tool_call_id?: string }[]; tools: { function: { name: string } }[] }[] = [];
+const text = (c: Content) => (Array.isArray(c) ? c.map((p) => p.text).join("") : (c ?? ""));
 let llm: http.Server;
 let app: http.Server;
 let base = "";
@@ -17,7 +19,7 @@ function reply(body: (typeof seen)[number]) {
   const call = (name: string, args: unknown) => ({ choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: `call_${msgs.length}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }], usage: { cost: 0.002 } });
   const say = (text: string) => ({ choices: [{ message: { role: "assistant", content: text } }], usage: { cost: 0.001 } });
   if (last.role === "user") return call("overview", {});
-  if (last.role === "tool" && /declined/i.test(last.content ?? "")) return say("OK — I won't post it.");
+  if (last.role === "tool" && /declined/i.test(text(last.content))) return say("OK — I won't post it.");
   if (last.role === "tool") return { choices: [{ message: { role: "assistant", content: "Scheduling it for tonight.", tool_calls: [{ id: "call_sched", type: "function", function: { name: "schedule_clip", arguments: JSON.stringify({ clipId: "clip_x", accountIds: ["acct_x"] }) } }] } }], usage: { cost: 0.002 } };
   return say("Done.");
 }
@@ -76,7 +78,12 @@ describe("Clipping Agent", () => {
     expect(overview.result).toContain("campaigns");
     // The tool list it was given is the MCP tool set, and the system prompt has the user's time zone.
     expect(seen[0].tools.map((t) => t.function.name)).toEqual(expect.arrayContaining(["brief_to_shorts", "schedule_clip", "caption_video", "whats_working"]));
-    expect(seen[0].messages[0].content).toContain("America/New_York");
+    expect(text(seen[0].messages[0].content)).toContain("America/New_York");
+    // Anthropic prompt caching: the system prompt and the newest message are marked.
+    const later = seen[1].messages;
+    expect(later[0].content).toEqual([expect.objectContaining({ cache_control: { type: "ephemeral" } })]);
+    expect(later.at(-1)!.content).toEqual([expect.objectContaining({ cache_control: { type: "ephemeral" } })]);
+    expect(later.slice(1, -1).every((m) => !Array.isArray(m.content))).toBe(true);
 
     // Publishing waits for the user.
     expect(run.pending).toMatchObject({ tool: "schedule_clip", args: { clipId: "clip_x" } });
@@ -91,7 +98,30 @@ describe("Clipping Agent", () => {
     expect(done.steps.find((s: { tool?: string }) => s.tool === "schedule_clip").result).toBe("Declined by the user.");
     expect(done.cost).toBeGreaterThan(0);
     const lastAsk = seen[seen.length - 1].messages;
-    expect(lastAsk.find((m) => m.tool_call_id === "call_sched")?.content).toMatch(/declined/);
+    expect(text(lastAsk.find((m) => m.tool_call_id === "call_sched")!.content)).toMatch(/declined/);
+
+    // Every model call was metered against the workspace, in dollars.
+    const usage = (await call("/api/usage")).body;
+    const month = usage.months[0];
+    expect(month.usage.ai.agent.calls).toBe(seen.length);
+    expect(month.usage.ai.agent.usd).toBeCloseTo(done.cost, 6);
+    expect(usage.today.usd).toBeCloseTo(done.cost, 6);
+    expect(month.cost.total).toBeCloseTo(done.cost, 6);
+
+    // Once today's dollar budget is spent, AI work is refused until tomorrow.
+    process.env.AI_DAILY_BUDGET_USD = "0.001";
+    const over = await call("/api/agent/runs", "POST", { message: "again" });
+    delete process.env.AI_DAILY_BUDGET_USD;
+    const blocked = over.status === 429 ? over.body.error : (await until(over.body.id, (r) => r.status !== "running" && !r.working)).error;
+    expect(blocked).toMatch(/AI budget/);
+
+    // Only operators see every workspace.
+    expect((await call("/api/admin/usage")).status).toBe(403);
+    process.env.ADMIN_EMAILS = "someone@else.dev, agent@test.dev";
+    const all = (await call("/api/admin/usage")).body;
+    delete process.env.ADMIN_EMAILS;
+    expect(all.workspaces[0]).toMatchObject({ email: "agent@test.dev" });
+    expect(all.total.ai).toBeCloseTo(done.cost, 6);
 
     // What the agent did through tools shows up as the agent's in Activity (nothing yet here besides reads),
     // and agent keys can't drive the in-app agent.

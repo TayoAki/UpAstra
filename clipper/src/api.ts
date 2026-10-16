@@ -1,5 +1,5 @@
 import type { BrandKit, CaptionOverrides } from "../shared/caption-styles";
-import type { CaptionJob } from "../shared/types";
+import type { AdminUsage, CaptionJob, UsageReport } from "../shared/types";
 import type { Activity, Campaign, CampaignBrief, CampaignStats, Clip, Insights, LearningReport, Me, Post, ServiceStatus, SocialAccount } from "../shared/types";
 
 export type CampaignWithStats = Campaign & { stats: CampaignStats };
@@ -63,6 +63,8 @@ export const api = {
   scheduleClip: (id: string, b: { accountIds: string[]; at?: string; caption: string; tiktok?: { mode: "inbox" | "direct"; privacy?: string }; youtube?: { title?: string; privacy?: string } }) =>
     req<{ posts: string[]; state: State }>(`/clips/${id}/schedule`, "POST", b),
   cancelPost: (id: string) => req<State>(`/posts/${id}/cancel`, "POST", {}),
+  usage: () => req<UsageReport>("/usage"),
+  adminUsage: (month?: string) => req<AdminUsage>(`/admin/usage${month ? `?month=${month}` : ""}`),
   syncMetrics: () => req<{ updated: number; state: State }>("/social/sync-metrics", "POST", {}),
   deleteAgentRun: (id: string) => req<State>(`/agent/runs/${id}`, "DELETE"),
   createAgentKey: () => req<{ key: string; me: Me }>("/workspace/agent-key", "POST", {}),

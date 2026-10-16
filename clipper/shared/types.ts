@@ -297,6 +297,51 @@ export interface WorkspaceDoc {
   captionJobs?: CaptionJob[];
   /** Fonts, colours and default caption style for everything this workspace renders. */
   brand?: BrandKit;
+  /** What this workspace has used: AI spend, renders, captions, posts. */
+  usage?: WorkspaceUsage;
+}
+
+/** Where AI money goes. */
+export type AIKind = "extract" | "script" | "moments" | "voice" | "agent" | "editor";
+
+export interface MonthUsage {
+  /** Dollars and calls per kind of AI work, as billed by the provider. */
+  ai: Partial<Record<AIKind, { usd: number; calls: number }>>;
+  renders: number;
+  renderSec: number;
+  captionJobs: number;
+  captionSec: number;
+  posts: number;
+}
+
+export interface UsageCost {
+  ai: number;
+  compute: number;
+  posts: number;
+  total: number;
+}
+
+/** GET /api/usage */
+export interface UsageReport {
+  today: { usd: number; calls: number; budget: number; callLimit: number };
+  months: { month: string; usage: MonthUsage; cost: UsageCost }[];
+  rates: { renderSec: number; captionSec: number; post: number };
+}
+
+/** GET /api/admin/usage: every workspace, for the operator. */
+export interface AdminUsage {
+  month: string;
+  workspaces: { id: string; name: string; email: string; createdAt: string; usage: MonthUsage; cost: UsageCost }[];
+  total: UsageCost;
+}
+
+export interface WorkspaceUsage {
+  /** Today (UTC): AI dollars and calls, for the daily caps. */
+  day: string;
+  dayUsd: number;
+  dayCalls: number;
+  /** Keyed by "YYYY-MM". */
+  months: Record<string, MonthUsage>;
 }
 
 // ---------------------------------------------------------------------------
@@ -351,7 +396,7 @@ export interface PublicUser {
 }
 
 export interface Me {
-  user: PublicUser;
+  user: PublicUser & { admin?: boolean };
   workspace: { id: string; name: string; hasAgentKey?: boolean };
 }
 

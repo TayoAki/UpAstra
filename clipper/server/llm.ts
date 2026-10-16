@@ -1,4 +1,5 @@
-import { HttpError } from "./db";
+import { currentWorkspaceId, HttpError } from "./db";
+import { checkAIBudget, recordAI } from "./usage";
 // The one place the app talks to a language model (OpenRouter, or any
 // OpenAI-compatible endpoint). Without a key, callers fall back to rules.
 
@@ -33,7 +34,7 @@ function provider() {
 
 export const aiLive = () => provider() !== null;
 
-// AI calls cost money; cap them per workspace per day.
+// AI calls cost money; cap them per workspace per day, by count and by dollars.
 const aiCalls = new Map<string, { day: string; n: number }>();
 export function spendAI(workspaceId: string, n = 1) {
   if (!aiLive()) return;
@@ -42,7 +43,29 @@ export function spendAI(workspaceId: string, n = 1) {
   const used = c?.day === day ? c.n : 0;
   const limit = Number(process.env.AI_DAILY_LIMIT ?? 150);
   if (used + n > limit) throw new HttpError(429, `Daily AI limit reached (${limit}). It resets at midnight UTC.`);
+  if (currentWorkspaceId() === workspaceId) checkAIBudget();
   aiCalls.set(workspaceId, { day, n: used + n });
+}
+
+const costOf = (data: { usage?: { cost?: unknown } }) => (typeof data.usage?.cost === "number" ? data.usage.cost : 0);
+
+/**
+ * Anthropic models only cache prompts at marked breakpoints. Mark the system
+ * prompt (tools are cached with it) and the newest message, so each agent step
+ * re-reads the whole conversation from cache instead of paying for it again.
+ */
+export function withCacheBreakpoints(model: string, messages: unknown[]): unknown[] {
+  if (!model.startsWith("anthropic/") || !messages.length) return messages;
+  const mark = (m: unknown) => {
+    const msg = m as { content?: unknown };
+    if (typeof msg.content !== "string" || !msg.content) return m;
+    return { ...msg, content: [{ type: "text", text: msg.content, cache_control: { type: "ephemeral" } }] };
+  };
+  const out = [...messages];
+  const sys = out.findIndex((m) => (m as { role?: string }).role === "system");
+  if (sys >= 0) out[sys] = mark(out[sys]);
+  if (out.length - 1 !== sys) out[out.length - 1] = mark(out[out.length - 1]);
+  return out;
 }
 
 /** The model behind the Clipping Agent. */
@@ -62,13 +85,14 @@ export async function forwardChatAs(
   const res = await fetch(p.url, {
     method: "POST",
     headers: { Authorization: `Bearer ${p.key}`, "Content-Type": "application/json", ...p.headers },
-    body: JSON.stringify({ ...body, model: agentModel(), ...(p.openrouter ? { usage: { include: true } } : {}) }),
+    body: JSON.stringify({ ...body, messages: withCacheBreakpoints(agentModel(), body.messages), model: agentModel(), ...(p.openrouter ? { usage: { include: true } } : {}) }),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(180_000)]) : AbortSignal.timeout(180_000),
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`AI ${res.status}: ${text.slice(0, 300)}`);
   const data = JSON.parse(text);
-  return { message: data.choices?.[0]?.message ?? {}, cost: typeof data.usage?.cost === "number" ? data.usage.cost : 0, model: data.model ?? agentModel() };
+  recordAI("agent", costOf(data));
+  return { message: data.choices?.[0]?.message ?? {}, cost: costOf(data), model: data.model ?? agentModel() };
 }
 
 /** The model behind the editor's AI chat. */
@@ -117,7 +141,13 @@ export async function forwardChat(body: Record<string, unknown>, signal?: AbortS
   return fetch(p.url, {
     method: "POST",
     headers: { Authorization: `Bearer ${p.key}`, "Content-Type": "application/json", ...p.headers },
-    body: JSON.stringify({ ...rest, model: editorModel(), max_tokens: maxTokens }),
+    body: JSON.stringify({
+      ...rest,
+      ...(Array.isArray(raw.messages) ? { messages: withCacheBreakpoints(editorModel(), raw.messages) } : {}),
+      model: editorModel(),
+      max_tokens: maxTokens,
+      ...(p.openrouter ? { usage: { include: true } } : {}),
+    }),
     signal,
   });
 }
@@ -172,7 +202,8 @@ export async function chatJSON<T>(role: AIRole, system: string, user: unknown, m
   const data = JSON.parse(res.text);
   const msg = data.choices?.[0]?.message?.content ?? "";
   if (data.choices?.[0]?.finish_reason === "length") console.warn(`[ai] ${role} reply hit max_tokens (${maxTokens})`);
-  return { json: parseJSON<T>(typeof msg === "string" ? msg : JSON.stringify(msg)), model: data.model ?? model, cost: typeof data.usage?.cost === "number" ? data.usage.cost : 0 };
+  recordAI(role, costOf(data));
+  return { json: parseJSON<T>(typeof msg === "string" ? msg : JSON.stringify(msg)), model: data.model ?? model, cost: costOf(data) };
 }
 
 /** Read a script aloud. Returns 24 kHz mono 16-bit PCM and the provider's cost. */
@@ -221,6 +252,7 @@ export async function speak(script: string, voice: string): Promise<{ pcm: Buffe
     }
   }
   const pcm = Buffer.concat(chunks);
+  recordAI("voice", cost);
   if (pcm.length < 4800) throw new Error("The voice model returned no audio");
   return { pcm, cost, transcript };
 }

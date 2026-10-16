@@ -107,6 +107,15 @@ The **Agent** page is a chat that runs the whole loop for you: give it a brief a
 - Each model call counts against the daily AI allowance (`AI_DAILY_LIMIT`). Set the model with `AGENT_MODEL`; it defaults to the main AI model.
 - A run stops after 30 steps. A run cut off by a server restart is marked stopped; send a message to continue it.
 
+## Usage and costs
+
+Every AI call is metered against its workspace in dollars, as billed by the provider. Renders, caption jobs and published posts are counted too. **Settings → Usage** shows this month's cost by task, cost per clip, and today's AI budget.
+
+- `AI_DAILY_BUDGET_USD` (default `5`): AI dollars a workspace may spend per UTC day, on top of the `AI_DAILY_LIMIT` call count.
+- `ADMIN_EMAILS`: comma-separated operator emails. These users also see every workspace's usage for the month.
+- Compute and posting are estimated: `COST_RENDER_SEC` (default `0.0001` per second of rendered video), `COST_CAPTION_SEC` (`0.00008`) and `COST_POST` (`0.007`, Outstand per post).
+- The agent and the editor chat mark prompt-cache breakpoints for Anthropic models, so repeated system prompts, tools and history are read from cache (about 1/20 of the price).
+
 ## Headless: MCP and API
 
 Everything in the dashboard can be run by an AI agent or a script. Create a key in **Settings → Agent access** (shown once, stored hashed, one per workspace). It works for every workspace action except account and key management. Agent actions are marked "agent" in Activity.

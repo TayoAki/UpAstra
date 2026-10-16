@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Clip, Post, SocialAccount } from "../shared/types";
 import { getBackend, getDoc, HttpError, loadTenant, log, newId, now, runInWorkspace, save } from "./db";
 import * as outstand from "./outstand";
+import { recordUsage } from "./usage";
 
 // Scheduling and publishing through Outstand, and reading views back so
 // earnings and the learning system update without anyone typing numbers in.
@@ -134,11 +135,13 @@ export async function handleWebhook(e: WebhookEvent): Promise<boolean> {
     await loadTenant(ws);
     await runInWorkspace(ws, undefined, async () => {
       const doc = getDoc();
+      const wasLive = new Set(doc.posts.filter((x) => x.outstand?.postId === postId && x.status === "live").map((x) => x.id));
       for (const r of e.data.socialAccounts ?? []) {
         const p = doc.posts.find((x) => x.outstand?.postId === postId && x.outstand.accountId === r.accountId);
         if (p) applyResult(p, e.event === "post.error" ? { status: "failed", error: r.error } : { status: "published", platformPostUrl: r.platformPostUrl });
       }
       const live = doc.posts.filter((x) => x.outstand?.postId === postId && x.status === "live");
+      recordUsage("posts", live.filter((x) => !wasLive.has(x.id)).length);
       for (const clip of doc.clips.filter((c) => live.some((p) => p.clipId === c.id))) clip.status = "posted";
       log({ kind: "post", message: e.event === "post.published" ? `Published: ${live.map((p) => `${p.platform} @${p.account}`).join(", ") || "post"}.` : `Publishing failed: ${(e.data.socialAccounts ?? []).map((r) => r.error).filter(Boolean).join("; ").slice(0, 200)}` });
       save();

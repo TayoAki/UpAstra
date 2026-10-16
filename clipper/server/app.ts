@@ -3,14 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { campaignStats } from "../shared/rules";
-import type { AgentRun, CaptionJob, Campaign, CampaignBrief, Clip, ClipStatus, Me, Platform, Post, PostStatus, ServiceStatus, SocialAccount, VoiceOption } from "../shared/types";
+import type { AdminUsage, AgentRun, CaptionJob, Campaign, CampaignBrief, Clip, ClipStatus, Me, Platform, Post, PostStatus, ServiceStatus, SocialAccount, VoiceOption } from "../shared/types";
 import { CLIP_STATUSES, PLATFORMS, POST_STATUSES, VOICES } from "../shared/types";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { bearerAgentKey, clearSession, clearThrottle, hashAgentKey, hashPassword, humansOnly, issueSession, newAgentKey, requireWorkspace, signVideoLink, throttle, verifyPassword, verifyVideoLink } from "./auth";
-import { HttpError, emptyDoc, forgetTenant, getBackend, getDoc, loadTenant, log, newId, now, runInWorkspace, save, type UserRow } from "./db";
+import { HttpError, emptyDoc, forgetTenant, getBackend, getDoc, loadedDoc, loadTenant, log, newId, now, runInWorkspace, save, type UserRow } from "./db";
 import { createMcpServer, httpApi } from "./mcp";
 import { extractBrief, normalizeBrief } from "./extract";
 import { aiLive, editorModel, forwardChat, mediaLive, modelFor, spendAI } from "./llm";
+import { emptyMonth, isAdmin, monthCost, monthKey, recordAI, usageReport } from "./usage";
 import { analyzeFootage } from "./moments";
 import { enqueueRender, renderAvailable } from "./render";
 import { saveStream, saveTo, saveUpload } from "./footage-cache";
@@ -214,7 +215,7 @@ export function createApp() {
     const b = getBackend();
     const user = (await b.getUser(userId))!;
     const ws = (await b.workspaceForOwner(userId))!;
-    return { user: { id: user.id, email: user.email, name: user.name }, workspace: { id: ws.id, name: ws.name, hasAgentKey: !!ws.hasAgentKey } };
+    return { user: { id: user.id, email: user.email, name: user.name, ...(isAdmin(user.email) ? { admin: true } : {}) }, workspace: { id: ws.id, name: ws.name, hasAgentKey: !!ws.hasAgentKey } };
   };
 
   app.post(
@@ -341,6 +342,28 @@ export function createApp() {
   api.use(requireWorkspace);
 
   api.get("/state", (_req, res) => res.json(stateFor()));
+
+  // What this workspace has used and what it cost (AI as billed; compute and posts estimated).
+  api.get("/usage", (_req, res) => res.json(usageReport()));
+
+  // Every workspace's usage this month, for operators listed in ADMIN_EMAILS.
+  api.get(
+    "/admin/usage",
+    humansOnly,
+    wrap(async (req, res) => {
+      const b = getBackend();
+      const me = await b.getUser(req.userId!);
+      if (!me || !isAdmin(me.email)) throw new HttpError(403, "Operators only");
+      const month = /^\d{4}-\d{2}$/.test(String(req.query.month)) ? String(req.query.month) : monthKey();
+      const workspaces = (await b.listWorkspaceUsage()).map((w) => {
+        const usage = (loadedDoc(w.id)?.usage ?? w.usage)?.months?.[month] ?? emptyMonth();
+        return { id: w.id, name: w.name, email: w.email, createdAt: w.createdAt, usage, cost: monthCost(usage) };
+      });
+      workspaces.sort((x, y) => y.cost.total - x.cost.total);
+      const total = workspaces.reduce((t, w) => ({ ai: t.ai + w.cost.ai, compute: t.compute + w.cost.compute, posts: t.posts + w.cost.posts, total: t.total + w.cost.total }), { ai: 0, compute: 0, posts: 0, total: 0 });
+      res.json({ month, workspaces, total } satisfies AdminUsage);
+    }),
+  );
 
   api.put(
     "/workspace",
@@ -977,8 +1000,23 @@ export function createApp() {
       res.status(upstream.status);
       res.setHeader("Content-Type", upstream.headers.get("content-type") ?? "application/json");
       if (!upstream.body) return void res.end();
-      const { Readable } = await import("node:stream");
-      Readable.fromWeb(upstream.body as never).pipe(res);
+      // Pass the reply through as is, keeping its tail to read the billed cost from the final usage chunk.
+      const ws = req.workspaceId!;
+      let tail = "";
+      const decoder = new TextDecoder();
+      const { Readable, Transform } = await import("node:stream");
+      const meter = new Transform({
+        transform(chunk, _enc, cb) {
+          tail = (tail + decoder.decode(chunk, { stream: true })).slice(-8192);
+          cb(null, chunk);
+        },
+        flush(cb) {
+          const costs = [...tail.matchAll(/"cost"\s*:\s*([0-9.eE+-]+)/g)];
+          runInWorkspace(ws, undefined, () => recordAI("editor", Number(costs.at(-1)?.[1] ?? 0)));
+          cb();
+        },
+      });
+      Readable.fromWeb(upstream.body as never).pipe(meter).pipe(res);
     }),
   );
 
