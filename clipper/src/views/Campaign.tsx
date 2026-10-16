@@ -202,6 +202,10 @@ function BriefTab({ c }: { c: CampaignWithStats }) {
             </select>
           </span>
         </label>
+        <label className="row mt small" style={{ gap: 8 }}>
+          <input type="checkbox" checked={!!b.soundDesign} onChange={(e) => set("soundDesign", e.target.checked)} />
+          Sound design: a pop when overlays appear, a whoosh as tier items slide in, and game audio that dips under the voice
+        </label>
         <div className="mt">
           <div className="field">Platforms</div>
           <div className="chips" style={{ marginTop: 4 }}>

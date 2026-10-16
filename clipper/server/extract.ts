@@ -80,6 +80,7 @@ export function normalizeBrief(raw: Partial<Record<keyof CampaignBrief, unknown>
       return n === undefined ? f?.minEngagementRate : n > 1 ? n / 100 : n;
     })(),
     lengthSec: { min: Math.min(min, max), max: Math.max(min, max) },
+    soundDesign: typeof raw.soundDesign === "boolean" ? raw.soundDesign : f?.soundDesign,
     payout: {
       budget: num(payout.budget) ?? f?.payout.budget,
       cpm: num(payout.cpm) ?? f?.payout.cpm,

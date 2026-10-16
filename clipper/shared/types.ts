@@ -58,6 +58,8 @@ export interface CampaignBrief {
   /** e.g. 0.01 for "at least 1% engagement". */
   minEngagementRate?: number;
   lengthSec: { min: number; max: number };
+  /** Opt-in: pop and whoosh effects on overlays, and game audio ducked under the voice. */
+  soundDesign?: boolean;
   payout: Payout;
   footage: LinkRef[];
   otherLinks: LinkRef[];

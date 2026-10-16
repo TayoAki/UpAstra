@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { abortReason, currentSignal } from "./jobs";
 import { stickerGraph, type Sticker } from "./overlays";
+import { sfxFiles, SFX_GAIN, type SfxEvent } from "./sfx";
 
 // ffmpeg plumbing. Footage is read straight from its public link: ffmpeg
 // seeks with HTTP range requests, so a 1.5 GB source never lands on disk —
@@ -233,21 +234,43 @@ export async function concat(listFile: string, out: string) {
  * the final encode never sees mismatched audio formats (older ffmpeg builds
  * refuse to change filter inputs mid-stream).
  */
-export async function compose(opts: { video: string; ass: string; voice?: string; duration: number; out: string; fontsDir?: string; workDir: string; stickers?: Sticker[] }) {
+/**
+ * The audio mix: game audio under the voiceover, normalised to -14 LUFS.
+ * With sound design, game audio ducks under the voice (sidechain) instead of
+ * sitting at a flat level, and effects (inputs 2…) are mixed in at their times.
+ */
+export function mixFilter(o: { voice: boolean; sound?: { events: SfxEvent[] } }): string {
+  const norm = "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=44100[a]";
+  if (!o.sound) return o.voice ? `[0:a]volume=0.22[g];[1:a]volume=1.6,apad[v];[g][v]amix=inputs=2:duration=first:dropout_transition=0,volume=2,${norm}` : `[0:a]${norm}`;
+  const first = o.voice ? 2 : 1;
+  const parts: string[] = [];
+  const mix: string[] = [];
+  if (o.voice) {
+    parts.push("[0:a]volume=0.5[g0]", "[1:a]volume=1.6,apad,asplit=2[v][vk]", "[g0][vk]sidechaincompress=threshold=0.02:ratio=8:attack=15:release=350[g]");
+    mix.push("[g]", "[v]");
+  } else mix.push("[0:a]");
+  o.sound.events.forEach((e, i) => {
+    const ms = Math.max(0, Math.round(e.at * 1000));
+    parts.push(`[${first + i}:a]adelay=${ms}|${ms},volume=${SFX_GAIN[e.kind]}[s${i}]`);
+    mix.push(`[s${i}]`);
+  });
+  return `${parts.join(";")}${parts.length ? ";" : ""}${mix.join("")}amix=inputs=${mix.length}:duration=first:dropout_transition=0:normalize=0,${norm}`;
+}
+
+export async function compose(opts: { video: string; ass: string; voice?: string; duration: number; out: string; fontsDir?: string; workDir: string; stickers?: Sticker[]; sound?: { events: SfxEvent[] } }) {
   const wav = (name: string) => `${opts.workDir}/${name}.wav`;
   const pcm = ["-vn", "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le"];
   await run("ffmpeg", ["-v", "error", "-y", "-i", opts.video, ...pcm, "-t", opts.duration.toFixed(2), wav("game")]);
-  if (opts.voice) {
-    await run("ffmpeg", ["-v", "error", "-y", "-i", opts.voice, ...pcm, wav("voice")]);
-    await run("ffmpeg", [
-      "-v", "error", "-y",
-      "-i", wav("game"), "-i", wav("voice"),
-      "-filter_complex", "[0:a]volume=0.22[g];[1:a]volume=1.6,apad[v];[g][v]amix=inputs=2:duration=first:dropout_transition=0,volume=2,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=44100[a]",
-      "-map", "[a]", "-ac", "2", "-c:a", "pcm_s16le", wav("mix"),
-    ]);
-  } else {
-    await run("ffmpeg", ["-v", "error", "-y", "-i", wav("game"), "-af", "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=44100", "-ac", "2", "-c:a", "pcm_s16le", wav("mix")]);
-  }
+  if (opts.voice) await run("ffmpeg", ["-v", "error", "-y", "-i", opts.voice, ...pcm, wav("voice")]);
+  const files = opts.sound ? sfxFiles(opts.workDir) : undefined;
+  await run("ffmpeg", [
+    "-v", "error", "-y",
+    "-i", wav("game"),
+    ...(opts.voice ? ["-i", wav("voice")] : []),
+    ...(opts.sound?.events ?? []).flatMap((e) => ["-i", files![e.kind]]),
+    "-filter_complex", mixFilter({ voice: !!opts.voice, sound: opts.sound }),
+    "-map", "[a]", "-ac", "2", "-c:a", "pcm_s16le", wav("mix"),
+  ]);
   const assEsc = opts.ass.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
   const fonts = opts.fontsDir ? `:fontsdir=${opts.fontsDir.replace(/:/g, "\\:")}` : "";
   // Emoji stickers are images laid over the subtitled video, each with its own pop.
