@@ -119,9 +119,7 @@ async function analyze(t: Task) {
       try {
         const tr = await transcribe(src, {});
         const joiner = tr.joiner ?? " ";
-        // How fast it's spoken: words and syllables (or characters/morae) a second, first word to last.
-        const span = tr.words.length > 3 ? tr.words[tr.words.length - 1].end - tr.words[0].start : 0;
-        if (span > 2) speech = { wordsPerSec: Math.round((tr.words.length / span) * 10) / 10, unitsPerSec: Math.round((speechLoad(tr.words.map((w) => w.text).join(joiner)) / span) * 10) / 10 };
+        speech = speechRate(tr.words, joiner);
         set(f, { language: tr.language, transcript: tr.words.map((w) => w.text).join(joiner).trim().slice(0, 6000) });
         // Words grouped into short timed lines for the model.
         const lines: string[] = [];
@@ -176,6 +174,26 @@ async function analyze(t: Task) {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+/**
+ * How fast the reference is spoken: words and syllables (characters/morae for
+ * unspaced scripts) per second of actual speech. Pauses over 0.7 s (music,
+ * B-roll) don't count, symbol-only tokens ("♪") aren't words, and a video
+ * that's mostly not talking isn't measured.
+ */
+export function speechRate(words: { text: string; start: number; end: number }[], joiner = " "): FormatBreakdown["speech"] {
+  const spoken = words.filter((w) => /[\p{L}\p{N}]/u.test(w.text) && w.end > w.start);
+  if (spoken.length < 4) return undefined;
+  let talking = 0;
+  spoken.forEach((w, i) => {
+    talking += w.end - w.start;
+    const gap = i ? w.start - spoken[i - 1].end : 0;
+    if (gap > 0 && gap < 0.7) talking += gap;
+  });
+  const span = spoken[spoken.length - 1].end - spoken[0].start;
+  if (talking < 2 || talking < span * 0.25) return undefined;
+  return { wordsPerSec: Math.round((spoken.length / talking) * 10) / 10, unitsPerSec: Math.round((speechLoad(spoken.map((w) => w.text).join(joiner)) / talking) * 10) / 10 };
 }
 
 // ---- Cleaning the model's answer ---------------------------------------------------

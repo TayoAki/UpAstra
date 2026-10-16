@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanBreakdown, formatForPlanner } from "../server/formats";
+import { cleanBreakdown, formatForPlanner, speechRate } from "../server/formats";
 import type { ReferenceFormat } from "../shared/types";
 
 // B8.3: a breakdown records what each beat is for and what runs through the
@@ -58,5 +58,16 @@ describe("format structure", () => {
     expect(old.speech).toBeUndefined();
     const p = formatForPlanner({ id: "f", name: "x", breakdown: old } as ReferenceFormat);
     expect(p.lenses).toHaveLength(3);
+  });
+
+  it("measures the speech rate over speaking time only", () => {
+    const talk = (from: number, n: number) => Array.from({ length: n }, (_, i) => ({ text: "word", start: from + i * 0.4, end: from + i * 0.4 + 0.35 }));
+    const steady = speechRate(talk(0, 20))!;
+    expect(steady.wordsPerSec).toBeCloseTo(2.5, 1);
+    // 5 s of talk, 20 s of music, 5 s of talk: the same rate, not a fifth of it.
+    const music = speechRate([...talk(0, 12), { text: "♪", start: 5, end: 25 }, ...talk(25, 12)])!;
+    expect(music.wordsPerSec).toBeCloseTo(2.5, 1);
+    // Mostly not talking: no measurement.
+    expect(speechRate([...talk(0, 4), ...talk(40, 4)])).toBeUndefined();
   });
 });
