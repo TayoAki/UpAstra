@@ -46,6 +46,18 @@ export async function fontInfo(file: string): Promise<{ family: string; fullName
  * uploaded brand font so captions and overlays in it fit tightly.
  */
 export async function measureFont(fontsDir: string, family: string): Promise<Record<string, number> | undefined> {
+  const widths = await measureFamily(fontsDir, family);
+  if (!widths) return undefined;
+  // If libass couldn't find the family by name, fontconfig substituted another
+  // font: those widths aren't this font's (and the render won't use it either).
+  substitute ??= measureFamily(fontsDir, "UGC No Such Font Family");
+  const sub = await substitute;
+  if (sub && Object.keys(widths).every((c) => Math.abs(widths[c] - (sub[c] ?? -1)) < 0.002)) return undefined;
+  return widths;
+}
+let substitute: Promise<Record<string, number> | undefined> | undefined;
+
+async function measureFamily(fontsDir: string, family: string): Promise<Record<string, number> | undefined> {
   const chars = Array.from({ length: 94 }, (_, i) => String.fromCharCode(32 + i)); // space … "}"
   const REP = 10, FS = 100, ROW = 140, W = 2400;
   const H = ROW * (chars.length + 1);
@@ -57,7 +69,8 @@ export async function measureFont(fontsDir: string, family: string): Promise<Rec
     const ass = [
       "[Script Info]", "ScriptType: v4.00+", `PlayResX: ${W}`, `PlayResY: ${H}`, "WrapStyle: 2", "", "[V4+ Styles]",
       "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-      `Style: M,${family.replace(/,/g, "")},${FS},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,4,0,0,0,1`, "", "[Events]",
+      // Bold exactly as captions draw it (DejaVu faces are drawn bold, see buildAss).
+      `Style: M,${family.replace(/,/g, "")},${FS},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,${/^DejaVu/i.test(family) ? -1 : 0},0,0,0,100,100,0,0,1,0,0,4,0,0,0,1`, "", "[Events]",
       "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
       ...chars.map((c, i) => row(i, escape(c).repeat(REP))),
       row(chars.length, ""),

@@ -265,19 +265,25 @@ export function buildAss(o: {
               const k = i++;
               const sep = q ? sepBetween(line[q - 1].text, x.text) : "";
               const t = esc(cased(x.text));
-              if (st.animation === "sweep") return `${sep}{\\kf${sweepCs(k)}}${t}`;
+              if (st.animation === "sweep") return `${sep}{\\kf${sweepCs(k)}}${t}${sweepGap(k) ? `{\\k${sweepGap(k)}}` : ""}`;
               if (st.animation === "accumulate") return active !== undefined && k === active + 1 ? `{\\alpha&HFF&}${sep}${t}` : `${sep}${t}`;
-              if (k !== active) return `${sep}${t}`;
-              if (st.animation === "box") return `${sep}{\\3c${hl}\\bord${Math.max(4, Math.round(px(st.size) * 0.16))}\\shad0}${t}{\\r}`;
-              if (st.animation === "underline") return `${sep}{\\c${hl}\\u1}${t}{\\r}`;
+              // A word broken across two lines is two pieces said together: light both.
+              const lit = active !== undefined && (k === active || (x.start === words[active].start && x.end === words[active].end));
+              if (!lit) return `${sep}${t}`;
+              // Close with the style's own values (not \r, which would also cancel the pop on later words).
+              if (st.animation === "box") return `${sep}{\\3c${hl}\\bord${Math.max(4, Math.round(px(st.size) * 0.16))}\\shad0}${t}{\\3c${boxed ? back : assColor(st.outline)}\\bord${px(st.outlineWidth)}\\shad${px(st.shadow)}}`;
+              if (st.animation === "underline") return `${sep}{\\c${hl}\\u1}${t}{\\c${white}\\u0}`;
               return `${sep}{\\c${hl}}${t}{\\c${white}}`;
             })
             .join(""),
         )
         .join("\\N");
     };
-    // How long each word takes to fill (centiseconds), from its start to the next word's.
-    const sweepCs = (k: number) => Math.max(1, Math.round(((k < words.length - 1 ? words[k + 1].start : Math.min(words[k].end, end)) - Math.max(words[k].start, g.start)) * 100));
+    // How long each word takes to fill (centiseconds): until the next word,
+    // or, before a pause, until it's said and then a wait (an empty \k).
+    const pauseAfter = (k: number) => (k < words.length - 1 && words[k + 1].start - words[k].end > PAUSE ? words[k + 1].start - words[k].end : 0);
+    const sweepCs = (k: number) => Math.max(1, Math.round(((k < words.length - 1 && !pauseAfter(k) ? words[k + 1].start : Math.min(words[k].end, end)) - Math.max(words[k].start, g.start)) * 100));
+    const sweepGap = (k: number) => Math.round(pauseAfter(k) * 100);
     if (st.animation === "sweep") {
       const lead = Math.max(0, Math.round((words[0].start - g.start) * 100));
       lines.push(`Dialogue: 0,${ts(g.start)},${ts(end)},Cap,,0,0,0,,{${place}${size}${pop}}${lead ? `{\\k${lead}}` : ""}${render()}`);
@@ -300,7 +306,8 @@ export function buildAss(o: {
         const rest = Math.max(from + 0.2, w.end + 0.05);
         const lit = to - w.end > PAUSE && rest < to ? rest : to;
         lines.push(`Dialogue: 0,${ts(from)},${ts(lit)},Cap,,0,0,0,,{${place}${size}${first ? pop : ""}}${render(k)}`);
-        if (lit < to) lines.push(`Dialogue: 0,${ts(lit)},${ts(to)},Cap,,0,0,0,,{${place}${size}}${render()}`);
+        // Resting: nothing lit, but "build up" keeps hiding the words not said yet.
+        if (lit < to) lines.push(`Dialogue: 0,${ts(lit)},${ts(to)},Cap,,0,0,0,,{${place}${size}}${render(st.animation === "accumulate" ? k : undefined)}`);
         first = false;
         shownUntil = to;
       });

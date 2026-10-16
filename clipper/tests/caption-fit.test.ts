@@ -159,12 +159,12 @@ describe("caption presets", () => {
   it("box highlight: the spoken word sits on a thick accent outline", () => {
     const ev = caps("box-highlight").filter((l) => l.startsWith("Dialogue"));
     expect(ev).toHaveLength(3);
-    expect(ev[1]).toMatch(/\{\\3c&H[0-9A-F]+\\bord\d+\\shad0\}TWO\{\\r\}/);
+    expect(ev[1]).toMatch(/\{\\3c&H[0-9A-F]+\\bord\d+\\shad0\}TWO\{\\3c&H[0-9A-F]+\\bord\d+\\shad\d+\}/);
   });
 
   it("underline: the spoken word is underlined", () => {
     const ev = caps("underline").filter((l) => l.startsWith("Dialogue"));
-    expect(ev[2]).toMatch(/\{\\c&H[0-9A-F]+\\u1\}THREE\{\\r\}/);
+    expect(ev[2]).toMatch(/\{\\c&H[0-9A-F]+\\u1\}THREE\{\\c&H[0-9A-F]+\\u0\}/);
   });
 
   it("fill sweep: one event per caption, each word filling over its own time", () => {
@@ -187,5 +187,31 @@ describe("caption presets", () => {
   it("pops with a spring: 72% → 105% → 100%", () => {
     const [e] = caps("bold-pop").filter((l) => l.startsWith("Dialogue"));
     expect(e).toContain("\\fscx72\\fscy72\\t(0,90,\\fscx105\\fscy105)\\t(90,170,\\fscx100\\fscy100)");
+  });
+
+  it("build up never shows a word before it's said, even across a pause", () => {
+    const ws = [{ text: "Build", start: 0, end: 0.3 }, { text: "it", start: 0.3, end: 0.5 }, { text: "up", start: 1.5, end: 1.8 }];
+    const ev = buildAss({ hook: "", captions: [{ text: "Build it up", start: 0, end: 1.8, words: ws }], cta: "", ctaFrom: 9, duration: 2, style: resolveCaptionStyle(undefined, { style: "accumulate" }) })
+      .split("\n")
+      .filter((l) => l.startsWith("Dialogue: 0,"));
+    const t0 = (l: string) => { const [h, m, sec] = l.split(",")[1].split(":"); return +h * 3600 + +m * 60 + +sec; };
+    // Before "up" is said, it's always behind the transparency tag.
+    for (const e of ev) if (t0(e) < 1.5) expect(e.split("\\alpha&HFF&}")[0], e).not.toMatch(/\bup\b/);
+    expect(ev.filter((e) => t0(e) < 1.5).length).toBeGreaterThanOrEqual(3); // including the rest in the pause
+  });
+
+  it("keeps the pop on the words after a boxed or underlined word", () => {
+    for (const id of ["box-highlight", "underline"]) {
+      const [, second] = caps(id).filter((l) => l.startsWith("Dialogue"));
+      expect(second, id).not.toContain("\\r");
+    }
+  });
+
+  it("fill sweep finishes a word before a long pause and waits", () => {
+    const ws = [{ text: "fast", start: 0, end: 0.4 }, { text: "now", start: 1.6, end: 1.9 }];
+    const [e] = buildAss({ hook: "", captions: [{ text: "fast now", start: 0, end: 1.9, words: ws }], cta: "", ctaFrom: 9, duration: 2, style: resolveCaptionStyle(undefined, { style: "fill-sweep" }) })
+      .split("\n")
+      .filter((l) => l.startsWith("Dialogue: 0,"));
+    expect(e).toContain("{\\kf40}FAST{\\k120} {\\kf30}NOW");
   });
 });

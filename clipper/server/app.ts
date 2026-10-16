@@ -994,7 +994,7 @@ export function createApp() {
         // Measured once here, so captions and overlays in this font fit tightly.
         const widths = await measureFont(dir, family);
         doc.brand = { ...(doc.brand ?? {}), fonts: [...(doc.brand?.fonts ?? []).filter((f) => f.family !== family), { id, family, key, file: `${id}.${ext}`, widths }] };
-        log({ kind: "account", message: `Brand font "${family}" uploaded.` });
+        log({ kind: "account", message: widths ? `Brand font "${family}" uploaded.` : `Brand font "${family}" uploaded, but the video renderer doesn't recognise it by that name, so captions would fall back to another font. Try a different file of this font (e.g. the static .ttf rather than a variable font).` });
         save();
         res.status(201).json(stateFor());
       } finally {
