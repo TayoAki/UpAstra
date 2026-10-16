@@ -68,3 +68,38 @@ describe("whisper.cpp output", () => {
     expect(zh.map((x) => x.text)).toEqual(["你好", "世界"]);
   });
 });
+
+// B5.2: words the recogniser merged or split ("website" / "web site",
+// "CarLeague") are matched as groups, and their times split by length.
+describe("M:N alignment", () => {
+  it("matches a script word the recogniser split in two", () => {
+    const al = alignScript("Visit our website today", spoken("visit our web site today"));
+    expect(al.matched).toBe(1);
+    expect(al.extra.inside).toBe(0);
+    expect(al.words[2]).toMatchObject({ text: "website", start: 0.8 });
+    expect(al.words[2].end).toBeCloseTo(1.55); // the end of "site"
+    expect(al.words[3].start).toBeCloseTo(1.6);
+  });
+
+  it("splits a merged spoken word between the script words by length", () => {
+    const al = alignScript("Play Car League now", spoken("play carleague now"));
+    expect(al.matched).toBe(1);
+    const [, car, league] = al.words;
+    expect(car.start).toBeCloseTo(0.4);
+    expect(league.end).toBeCloseTo(0.75);
+    // "Car" gets 3/9 of the time, "League" 6/9.
+    expect((car.end - car.start) / (league.end - league.start)).toBeCloseTo(3 / 6, 1);
+  });
+
+  it("keeps times in order when the recogniser's windows overlap or nest", () => {
+    const words: Word[] = [
+      { text: "one", start: 0.1, end: 0.5 },
+      { text: "two", start: 0.4, end: 0.8 },
+      { text: "three", start: 0.3, end: 1.2 },
+      { text: "four", start: 1.1, end: 1.5 },
+    ];
+    const al = alignScript("one big two three four", words);
+    for (let i = 1; i < al.words.length; i++) expect(al.words[i].start).toBeGreaterThanOrEqual(al.words[i - 1].start);
+    for (const w of al.words) expect(w.end).toBeGreaterThan(w.start);
+  });
+});
