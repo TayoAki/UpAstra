@@ -210,6 +210,22 @@ export interface Box {
  */
 const MAX_PER_TIER = 12;
 
+/**
+ * When each tier item reveals, glides and settles. Its window runs from its
+ * cue to the next item's cue (at most 2 s): the pop takes up to a quarter of
+ * it (≤ 0.18 s), the glide up to a third (≤ 0.35 s), the hold the rest, so a
+ * fast-talking ranking compresses the motion instead of overlapping it.
+ */
+export function tierSchedule(starts: number[], boardEnd: number) {
+  return starts.map((start, i) => {
+    const next = i < starts.length - 1 ? Math.max(start, starts[i + 1]) : Math.min(boardEnd, start + 2);
+    const w = Math.max(0.05, Math.min(next, boardEnd) - start);
+    const glide = Math.min(0.35, w * 0.35);
+    const glideEnd = start + w;
+    return { start, glideStart: glideEnd - glide, glideEnd, end: Math.max(glideEnd, boardEnd) };
+  });
+}
+
 export function tierLayout(items: { text: string; tier: Tier }[], L: OverlayLayout) {
   const px = scaleOf(L);
   const left = px(40);
@@ -434,10 +450,23 @@ export function overlayEvents(placed: Placed[], L: OverlayLayout): string[] {
       tiers.map((p) => ({ text: esc(p.o.text!.trim()), tier: (TIERS as readonly string[]).includes(p.o.tier ?? "") ? (p.o.tier as Tier) : "C" })),
       L,
     );
-    tiers.forEach((p, i) => {
+    // Each item pops in large at the board's centre on its cue, holds while it's
+    // talked about, then glides and shrinks into its cell before the next one.
+    const plan = tierSchedule(tiers.map((p) => p.start), to);
+    const stageX = left + width / 2;
+    const stageY = top + (rowH * TIERS.length) / 2;
+    tiers.forEach((_, i) => {
       const it = grid.items[i];
       if (!it.text) return;
-      lines.push(`Dialogue: 6,${ts(p.start)},${ts(to)},OvTierItem,,0,0,0,,{\\an4\\move(${Math.round(it.x)},${Math.round(it.cy - px(40))},${Math.round(it.x)},${Math.round(it.cy)},0,180)\\fs${it.size}\\fad(120,0)}${it.text}`);
+      const s = plan[i];
+      const stage = fitText(it.text, { font: L.font, widths: L.fontWidths, size: px(96), minSize: it.size, maxWidth: width - px(60), maxLines: 1 }).size;
+      const cellX = Math.round(it.x + textWidth(it.text, it.size, L.font, L.fontWidths) / 2);
+      const cellY = Math.round(it.cy);
+      const ms = (a: number, b: number) => Math.max(1, Math.round((b - a) * 1000));
+      const popMs = Math.round(Math.min(180, (s.glideStart - s.start) * 1000 * 0.5));
+      lines.push(`Dialogue: 7,${ts(s.start)},${ts(s.glideStart)},OvTierItem,,0,0,0,,{\\an5\\pos(${Math.round(stageX)},${Math.round(stageY)})\\fs${stage}\\fscx40\\fscy40\\t(0,${popMs},\\fscx100\\fscy100)\\fad(${Math.min(100, popMs)},0)}${it.text}`);
+      lines.push(`Dialogue: 7,${ts(s.glideStart)},${ts(s.glideEnd)},OvTierItem,,0,0,0,,{\\an5\\move(${Math.round(stageX)},${Math.round(stageY)},${cellX},${cellY},0,${ms(s.glideStart, s.glideEnd)})\\fs${stage}\\t(0,${ms(s.glideStart, s.glideEnd)},\\fs${it.size})}${it.text}`);
+      lines.push(`Dialogue: 6,${ts(s.glideEnd)},${ts(s.end)},OvTierItem,,0,0,0,,{\\an5\\pos(${cellX},${cellY})\\fs${it.size}}${it.text}`);
     });
   }
   return lines;
