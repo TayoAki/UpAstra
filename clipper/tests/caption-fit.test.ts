@@ -71,3 +71,38 @@ describe("caption line budget", () => {
     expect(e).not.toMatch(/\\fs\d/);
   });
 });
+
+// B2.3: bottom-anchored captions (a second line grows upward), outline and
+// shadow that scale with size, and a highlight that rests during real pauses.
+describe("caption placement and pauses", () => {
+  const caps = (ass: string) => ass.split("\n").filter((l) => l.startsWith("Dialogue: 0,"));
+  it("anchors at the bottom, with a single line exactly where it was", () => {
+    const style = resolveCaptionStyle(undefined, { style: "bold-pop" });
+    const ass = buildAss({ hook: "", captions: [{ text: "PLAY NOW", start: 0, end: 1 }], cta: "", ctaFrom: 9, duration: 2, style });
+    const y = Math.round(style.position * 1920 + style.size / 2);
+    expect(caps(ass)[0]).toContain(`\\an2\\pos(540,${y})`);
+  });
+
+  it("scales outline and shadow with a size override", () => {
+    const base = resolveCaptionStyle(undefined, { style: "minimal" });
+    const big = resolveCaptionStyle(undefined, { style: "minimal", size: base.size * 2 });
+    expect(big.outlineWidth).toBe(base.outlineWidth * 2);
+    expect(big.shadow).toBe(base.shadow * 2);
+  });
+
+  it("rests the karaoke highlight during a pause longer than 0.35 s", () => {
+    const style = resolveCaptionStyle(undefined, { style: "karaoke" });
+    const words = [
+      { text: "one", start: 0, end: 0.4 },
+      { text: "two", start: 0.45, end: 0.8 },
+      { text: "three", start: 2.0, end: 2.4 }, // a 1.2 s pause before "three"
+    ];
+    const ev = caps(buildAss({ hook: "", captions: [{ text: "one two three", start: 0, end: 2.4, words }], cta: "", ctaFrom: 9, duration: 3, style }));
+    const at = (t: number) => ev.find((l) => { const [s, e] = l.split(",").slice(1, 3).map((x) => { const [h, m, sec] = x.split(":"); return +h * 3600 + +m * 60 + +sec; }); return s <= t && t < e; })!;
+    expect(at(0.6)).toMatch(/\\c&H[0-9A-F]+&?}TWO/); // "two" lit while it's said
+    expect(at(1.5)).not.toMatch(/\\c&H[0-9A-F]+&?}(ONE|TWO|THREE)/); // nothing lit in the pause
+    expect(at(2.1)).toMatch(/\\c&H[0-9A-F]+&?}THREE/);
+    // No gap: the line stays on screen through the pause.
+    for (let t = 0; t < 2.4; t += 0.05) expect(at(t), `t=${t}`).toBeDefined();
+  });
+});

@@ -9,6 +9,9 @@ import { overlayEvents, overlayStyles, textWidth, type OverlayLayout, type Place
 // top, the voiceover in 2–3 word punches under the footage, and a call to
 // action card at the end.
 
+/** A gap between words longer than this (seconds) is a pause: the karaoke highlight rests. */
+const PAUSE = 0.35;
+
 /** How long the hook stays on screen. */
 export const HOOK_SECONDS = 3.2;
 
@@ -189,8 +192,10 @@ export function buildAss(o: {
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
   ];
   if (o.hook) lines.push(`Dialogue: 1,${ts(0)},${ts(hookEnd)},Hook,,0,0,0,,{\\fad(120,200)}${esc(o.hook)}`);
-  const y = Math.round(st.position * FH);
-  const place = `\\an5\\pos(${Math.round(FW / 2)},${y})${st.glow ? "\\blur4" : ""}`;
+  // Bottom-anchored: a single line sits centred on `position` as before, and
+  // a second line grows upward, away from the platform's buttons and text.
+  const y = Math.round(st.position * FH + px(st.size) / 2);
+  const place = `\\an2\\pos(${Math.round(FW / 2)},${y})${st.glow ? "\\blur4" : ""}`;
   const pop = "\\fscx86\\fscy86\\t(0,90,\\fscx100\\fscy100)";
   const cased = (t: string) => (st.uppercase ? t.toLocaleUpperCase(o.language || undefined) : t);
   const fitted = fitCaptions(o.captions, { size: px(st.size), outline: px(st.outlineWidth), font, maxWidth: FW - 2 * px(70), cased });
@@ -207,12 +212,16 @@ export function buildAss(o: {
         .join("\\N");
     };
     if (st.animation === "karaoke" && words.length > 1) {
-      // One event per word: the whole caption, with the spoken word in the highlight colour.
+      // One event per word: the whole caption, with the spoken word in the
+      // highlight colour. In a pause longer than PAUSE the highlight rests
+      // (the line stays, nothing lit) until the next word is said.
       words.forEach((w, k) => {
         const from = k === 0 ? g.start : w.start;
-        const to = k < words.length - 1 ? words[k + 1].start : end;
+        const to = Math.min(k < words.length - 1 ? words[k + 1].start : end, o.duration);
         if (to <= from || from >= o.duration) return;
-        lines.push(`Dialogue: 0,${ts(from)},${ts(Math.min(to, o.duration))},Cap,,0,0,0,,{${place}${size}${k === 0 ? pop : ""}}${render(k)}`);
+        const lit = to - w.end > PAUSE ? Math.max(from + 0.05, w.end + 0.05) : to;
+        lines.push(`Dialogue: 0,${ts(from)},${ts(lit)},Cap,,0,0,0,,{${place}${size}${k === 0 ? pop : ""}}${render(k)}`);
+        if (lit < to) lines.push(`Dialogue: 0,${ts(lit)},${ts(to)},Cap,,0,0,0,,{${place}${size}}${render()}`);
       });
       continue;
     }

@@ -83,6 +83,7 @@ export function resolveCaptionStyle(brand: BrandKit | undefined, overrides: Capt
   const c = brand?.colors ?? {};
   const pick = (v: string | undefined, fallback: string) => (v && HEX.test(v) ? v : fallback);
   const clamp = (v: number | undefined, lo: number, hi: number, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fallback);
+  const size = Math.round(clamp(overrides.size, 24, 220, base.size));
   return {
     ...base,
     font: brand?.font?.trim() || base.font,
@@ -92,7 +93,10 @@ export function resolveCaptionStyle(brand: BrandKit | undefined, overrides: Capt
     uppercase: brand?.uppercase ?? base.uppercase,
     wordsPerCaption: Math.round(clamp(overrides.wordsPerCaption, 1, 12, base.wordsPerCaption)),
     position: clamp(overrides.position, 0.05, 0.95, base.position),
-    size: Math.round(clamp(overrides.size, 24, 220, base.size)),
+    size,
+    // Outline and shadow keep their proportion to the text when the size changes.
+    outlineWidth: Math.round(base.outlineWidth * (size / base.size) * 10) / 10,
+    shadow: Math.round(base.shadow * (size / base.size) * 10) / 10,
   };
 }
 
