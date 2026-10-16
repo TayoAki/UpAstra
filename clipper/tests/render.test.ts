@@ -160,8 +160,11 @@ describe.skipIf(!ffmpegAvailable())("render pipeline", () => {
     expect(near.body.images).toHaveLength(2);
     expect((await api("/api/frames", "POST", { clipId: clip.id, aroundPhrase: "zebra quantum" })).status).toBe(404);
     expect((await api("/api/frames", "POST", { clipId: clip.id, aroundPhrase: "—" })).status).toBe(400);
+    // A rendered clip's cuts are its shot boundaries, even when the shots look alike.
     const cuts = await api("/api/scene-cuts", "POST", { clipId: clip.id });
-    expect(Array.isArray(cuts.body.cuts)).toBe(true);
+    let at = 0;
+    const bounds = pack.body.shots.slice(0, -1).map((x: { seconds: number }) => Math.round((at += x.seconds) * 1000) / 1000);
+    expect(cuts.body).toMatchObject({ method: "render", cuts: bounds });
     expect(pack.body.shots.length).toBeGreaterThan(0);
     expect(pack.body.voice).toBeUndefined(); // rendered with no voice
     expect(pack.body.captions[0].words.length).toBeGreaterThan(0);

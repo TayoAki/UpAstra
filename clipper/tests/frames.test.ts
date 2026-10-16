@@ -59,6 +59,17 @@ describe.skipIf(!ffmpegAvailable())("frames from a video", () => {
     expect(h).toBe(3 * (854 + 44));
   }, 120_000);
 
+  it("reports times from the file's start when its timestamps don't start at 0", async () => {
+    const off = path.join(dir, "offset.mp4");
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-i", src, "-c", "copy", "-output_ts_offset", "2", off]);
+    const frames = await grabFrames(off, [1, 4.01], 120, dir);
+    expect(frames[0].t).toBeCloseTo(1, 1);
+    expect(Math.abs(frames[1].t - 4.01)).toBeLessThan(0.04);
+    const px = execFileSync("ffmpeg", ["-v", "error", "-i", frames[0].file, "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]);
+    expect(px[0]).toBeGreaterThan(px[2]); // still red: 1 s into the file, not 3 s
+    expect((await sceneCutsIn(off, 0, 6))[0]).toBeCloseTo(3, 1); // the same timeline as the frames
+  }, 60_000);
+
   it("finds the scene cut", async () => {
     const cuts = await sceneCutsIn(src, 0, 6);
     expect(cuts).toHaveLength(1);

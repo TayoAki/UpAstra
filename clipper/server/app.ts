@@ -17,8 +17,8 @@ import { emptyMonth, isAdmin, monthCost, monthKey, recordAI, usageReport } from 
 import { analyzeFootage } from "./moments";
 import { cancelRender, enqueueRender, renderAvailable } from "./render";
 import { cancelJob, isPending, waitingCount } from "./jobs";
-import { footageSource, saveStream, saveTo, saveUpload } from "./footage-cache";
-import { contactSheets, frameTimes, grabFrames, MAX_WINDOW, phraseWindow, sceneCutsIn, workDir } from "./frames";
+import { footageSource, isCached, saveStream, saveTo, saveUpload } from "./footage-cache";
+import { contactSheets, frameTimes, grabFrames, MAX_CUTS_WINDOW, MAX_WINDOW, phraseWindow, sceneCutsIn, workDir } from "./frames";
 import { Readable } from "node:stream";
 import { applyEdits, enqueueCaptionJob } from "./caption-jobs";
 import { transcriptionAvailable } from "./transcribe";
@@ -29,7 +29,7 @@ import { isRunning, resolvePending, sendToAgent, stopAgent } from "./agent";
 import { cancelScheduled, handleWebhook, scheduleClip, syncAccounts, syncMetrics, type WebhookEvent } from "./publishing";
 import { bundledFontsDir, fontInfo, measureFont } from "./fonts";
 import { accentOf, BUNDLED_FONTS, CAPTION_STYLES, resolveCaptionStyle, type BrandKit, type CaptionOverrides } from "../shared/caption-styles";
-import { probe, run } from "./media";
+import { probe, run, VIDEO_H, VIDEO_TOP } from "./media";
 import { storageKind, videoStore } from "./storage";
 import { checkClip, speechLoad, speechSeconds, UNITS_PER_SECOND } from "../shared/rules";
 import { spokenText } from "../shared/markup";
@@ -84,6 +84,8 @@ async function lookSource(workspaceId: string, b: Record<string, unknown>, maxWi
   let duration: number;
   let words: { text: string; start: number; end: number }[] | undefined;
   let label: string;
+  let shotCuts: number[] | undefined;
+  let rendered = false;
   if (b.clipId) {
     const clip = findClip(String(b.clipId));
     const key = clip.render?.videoKey;
@@ -92,9 +94,17 @@ async function lookSource(workspaceId: string, b: Record<string, unknown>, maxWi
     duration = clip.render.durationSec ?? 0;
     words = clip.render.parts?.captions.flatMap((c) => c.words);
     label = `clip "${clip.title}"`;
+    rendered = true;
+    // The render knows where its shots change (unless it was re-cut in the editor since).
+    if (clip.render.parts && !clip.render.editedAt) {
+      let t = 0;
+      shotCuts = clip.render.parts.shots.slice(0, -1).map((x) => Math.round((t += x.seconds) * 1000) / 1000);
+    }
   } else if (b.campaignId && b.footageId) {
     const f = findCampaign(String(b.campaignId)).footage.find((x) => x.id === String(b.footageId) && x.kind === "video");
     if (!f) throw new HttpError(404, "Footage not found");
+    // A look shouldn't start a multi-gigabyte download inside the request.
+    if (!(await isCached(f).catch(() => false))) throw new HttpError(409, "This footage isn't downloaded yet. Run find_moments on it (or render a clip from it) first.");
     src = await footageSource(f);
     duration = f.durationSec ?? 0;
     label = `footage "${f.name}"`;
@@ -111,7 +121,7 @@ async function lookSource(workspaceId: string, b: Record<string, unknown>, maxWi
   if (duration) end = Math.min(end, duration);
   if (!(end > start)) throw new HttpError(400, "The window is empty (end must be after start)");
   if (end - start > maxWindow) throw new HttpError(400, `Look at ${maxWindow} s or less at a time`);
-  return { src, start, end, label };
+  return { src, start, end, label, shotCuts, rendered };
 }
 
 const b64 = (file: string) => fs.readFileSync(file).toString("base64");
@@ -1502,8 +1512,11 @@ export function createApp() {
   api.post(
     "/scene-cuts",
     wrap(async (req, res) => {
-      const { src, start, end, label } = await lookSource(req.workspaceId!, (req.body ?? {}) as Record<string, unknown>, 600);
-      res.json({ source: label, window: { start, end }, cuts: await sceneCutsIn(src, start, end) });
+      const { src, start, end, label, shotCuts, rendered } = await lookSource(req.workspaceId!, (req.body ?? {}) as Record<string, unknown>, MAX_CUTS_WINDOW);
+      if (shotCuts) return void res.json({ source: label, window: { start, end }, cuts: shotCuts.filter((t) => t > start && t < end), method: "render" });
+      // In a finished clip the blurred background and captions carry over a cut, so look at the footage band only, more sensitively.
+      const cuts = await sceneCutsIn(src, start, end, rendered ? { threshold: 0.1, crop: { y: VIDEO_TOP, h: VIDEO_H } } : undefined);
+      res.json({ source: label, window: { start, end }, cuts, method: "detected" });
     }),
   );
 
