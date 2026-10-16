@@ -1,4 +1,5 @@
 import { checkClip, speechSeconds, WORDS_PER_SECOND } from "../shared/rules";
+import { spokenText } from "../shared/markup";
 import { getDoc } from "./db";
 import { classifyHook, formatOf } from "../shared/learning";
 import type { Campaign, Clip, FootageFile, HookStyle, Playbook } from "../shared/types";
@@ -61,7 +62,7 @@ export function toDraft(raw: Record<string, unknown>, c: Campaign): Draft {
     return { footageId: f?.id, footageName: f?.name ?? (toStr(s.footageName) || undefined), moment: toStr(s.moment), seconds: Math.max(1, Math.round(Number(s.seconds) || 4)), ...(phrase && cueInScript(phrase, toStr(raw.narration)) ? { phrase } : {}) };
   });
   const narration = toStr(raw.narration);
-  const lengthSec = Math.round(Number(raw.lengthSec) || Math.max(c.brief.lengthSec.min, Math.ceil(speechSeconds(narration, pace())) + 2));
+  const lengthSec = Math.round(Number(raw.lengthSec) || Math.max(c.brief.lengthSec.min, Math.ceil(speechSeconds(spokenText(narration), pace())) + 2));
   const style = toStr(raw.hookStyle) as HookStyle;
   return {
     hookStyle: HOOK_STYLES.some((h) => h.id === style) ? style : undefined,
@@ -153,7 +154,7 @@ function simulatedDrafts(c: Campaign, n: number, offset: number, plan?: (k: numb
       const f = video[(i * 3 + s) % Math.max(video.length, 1)];
       return { footageId: f?.id, footageName: f?.name, moment: ["Strongest moment for the hook", "Gameplay that shows the feature", "Big finish under the call to action"][s], seconds: s === 1 ? 10 : 6 };
     });
-    const lengthSec = Math.min(b.lengthSec.max, Math.max(b.lengthSec.min, Math.ceil(speechSeconds(narration, pace())) + 3));
+    const lengthSec = Math.min(b.lengthSec.max, Math.max(b.lengthSec.min, Math.ceil(speechSeconds(spokenText(narration), pace())) + 3));
     return {
       title: `${a.angle}: ${product}`,
       angle: a.angle,

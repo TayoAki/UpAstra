@@ -1,4 +1,5 @@
 import { checkClip, speechSeconds } from "../shared/rules";
+import { spokenText } from "../shared/markup";
 import { pace } from "./scripts";
 import { classifyHook } from "../shared/learning";
 import type { Campaign, Clip, HookStyle } from "../shared/types";
@@ -94,7 +95,7 @@ export async function makeVariants(c: Campaign, base: Clip, siblings: Clip[], n:
     const style = HOOK_STYLES.some((h) => h.id === v.hookStyle) ? (v.hookStyle as HookStyle) : undefined;
     const d = applyVariant(base, { hook: v.hook!.trim(), title: v.title?.trim(), ctaLine: newCta ? v.ctaLine?.trim() : undefined, hookStyle: style });
     // A longer opening needs a little more time, within the brief's limit.
-    d.lengthSec = Math.min(c.brief.lengthSec.max || 600, Math.max(d.lengthSec, Math.ceil(speechSeconds(d.narration, pace())) + 2));
+    d.lengthSec = Math.min(c.brief.lengthSec.max || 600, Math.max(d.lengthSec, Math.ceil(speechSeconds(spokenText(d.narration), pace())) + 2));
     const label = LABELS.find((l) => !taken.has(l) && l !== "A") ?? `#${i + 2}`;
     taken.add(label);
     return { ...d, id: newId("clip"), variantGroup: group, variantLabel: label, qa: checkClip(d, c.brief), model, cost: fresh.length ? cost / fresh.length : 0, createdAt: at, updatedAt: at };

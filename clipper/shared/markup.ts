@@ -30,7 +30,9 @@ export const displayText = (narration: string) => tidy(parseNarration(narration)
 export const momentNames = (narration: string) => parseNarration(narration).flatMap((p) => (p.moment ? [p.moment] : []));
 export const hasMarkup = (narration: string) => /<[^|<>]*\|[^<>]*>|@\{[\w-]+\}/.test(narration);
 
-const count = (s: string) => tidy(s).split(" ").filter(Boolean).length;
+/** How text splits into words: on spaces, unless a segmenter is given (Chinese, Japanese…). */
+export type Splitter = (text: string) => string[];
+const bySpaces: Splitter = (s) => tidy(s).split(" ").filter(Boolean);
 
 interface Timed {
   text: string;
@@ -42,10 +44,12 @@ interface Timed {
  * The shown words, timed from the spoken words they stand for: a marked-up
  * display word takes the span of its spoken words; plain words take their
  * own. `said` are the spoken words in order (as aligned). Moments land at
- * the start of the next spoken word.
+ * the start of the next spoken word. `split` must split the same way the
+ * aligner did (its word segmenter for unspaced languages).
  */
-export function displayTimed(pieces: Piece[], said: Timed[]): { words: Timed[]; moments: Record<string, number> } {
-  const shown = tidy(pieces.map((p) => p.display).join("")).split(" ").filter(Boolean);
+export function displayTimed(pieces: Piece[], said: Timed[], split: Splitter = bySpaces): { words: Timed[]; moments: Record<string, number> } {
+  const count = (s: string) => split(s).length;
+  const shown = split(pieces.map((p) => p.display).join(""));
   const spokenCount = count(pieces.map((p) => p.spoken).join(""));
   const moments: Record<string, number> = {};
   // If the aligned words don't line up with the spoken tokens (a segmenter

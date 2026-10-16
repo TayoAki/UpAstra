@@ -1,4 +1,4 @@
-import { displayText, momentNames, spokenText } from "./markup";
+import { displayText, momentNames } from "./markup";
 import { OVERLAY_KINDS, TIERS, type Overlay, type Tier } from "./types";
 
 // Overlay validation shared by the server (plans, edits) and the UI (warnings).
@@ -7,13 +7,14 @@ export const MAX_OVERLAYS = 12;
 
 const norm = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
-/** Whether a cue's words are spoken, in order, in the voiceover. */
+/** Whether a cue's words are in the narration, in order, as shown in the captions. */
 export const cueInScript = (cue: string, script: string) => {
   // "@name" cues a moment marked in the narration with @{name}.
   if (cue.trim().startsWith("@")) return momentNames(script).includes(cue.trim().slice(1));
   const c = norm(cue);
-  // Either what's shown or what's said counts.
-  return !!c && [displayText(script), spokenText(script)].some((t) => ` ${norm(t)} `.includes(` ${c} `));
+  // Cues and phrases are found in the shown words (what render matches them
+  // against): with <$5|five dollars>, cue "$5", not "five dollars".
+  return !!c && ` ${norm(displayText(script))} `.includes(` ${c} `);
 };
 
 const EMOJI = /\p{Extended_Pictographic}/u;

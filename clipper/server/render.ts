@@ -14,7 +14,7 @@ import { displayText, displayTimed, hasMarkup, parseNarration, spokenText } from
 import { shotTimes } from "./shots";
 import { sfxEvents } from "./sfx";
 import { cachedStep } from "./steps";
-import { alignScript, type Alignment } from "./align";
+import { alignScript, scriptLanguage, scriptWords, type Alignment } from "./align";
 import { transcribe, transcriptionAvailable, whisperModel, type Word } from "./transcribe";
 import { accentOf, resolveCaptionStyle } from "../shared/caption-styles";
 import { prepareFonts } from "./fonts";
@@ -188,6 +188,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
 
     // 2. Voiceover.
     let voicePath: string | undefined;
+    let freshTake = false;
     let spans: { start: number; end: number }[] | undefined;
     // Word-perfect timing: the script's words, timed from the voiceover itself.
     let timed: Word[] | undefined;
@@ -245,6 +246,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
           return { seconds: best!.seconds, al: best!.al, language: r.language };
         },
       });
+      freshTake = !take.reused;
       if (take.reused) {
         r.language = take.value.language;
         log({ campaignId: c.id, kind: "clip", message: `Reused the recorded voiceover for "${clip.title}" (nothing charged).` });
@@ -280,7 +282,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     const speechEnd = timed?.length ? timed[timed.length - 1].end : spans?.length ? spans[spans.length - 1].end : duration - 3.2;
     const saidTimes = timed ?? timeWords(said, voicePath ? speechEnd : Math.max(3, duration - 3.2), voicePath ? spans : undefined);
     // (Plain narration passes through untouched, keeping its own segmentation, e.g. for Chinese.)
-    const { words, moments } = hasMarkup(clip.narration) ? displayTimed(parseNarration(clip.narration), saidTimes) : { words: saidTimes, moments: {} as Record<string, number> };
+    const { words, moments } = hasMarkup(clip.narration) ? displayTimed(parseNarration(clip.narration), saidTimes, (t) => scriptWords(t, r.language ?? scriptLanguage(clip.narration))) : { words: saidTimes, moments: {} as Record<string, number> };
 
     // 3. Cut the shots: each starts when its phrase is said (else shares the time by planned seconds).
     step(r, "rendering", "Cutting shots from the footage");
@@ -429,9 +431,11 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     // What the learning system compares once this clip is posted.
     fresh.traits = { ...traitsOf(fresh), voice: r.voice, opening };
     // Learn this voice's pace, so plans for it are timed better next time.
-    if (voicePath && r.voice !== "none") {
+    // Only from a fresh, word-timed take, measured first word to last (a reused
+    // take was learned from when it was recorded; leading silence isn't speech).
+    if (voicePath && r.voice !== "none" && freshTake && timed?.length) {
       const doc = getDoc();
-      const rate = calibrate(doc.voiceRates?.[r.voice], speechLoad(said), speechEnd);
+      const rate = calibrate(doc.voiceRates?.[r.voice], speechLoad(said), timed[timed.length - 1].end - timed[0].start);
       if (rate) doc.voiceRates = { ...doc.voiceRates, [r.voice]: rate };
     }
     fresh.qa = checkClip(fresh, c.brief);

@@ -51,6 +51,14 @@ export function scriptWords(script: string, language?: string): string[] {
   return out;
 }
 
+/** A best guess at an unspaced script's language from its characters (for when none was detected). */
+export function scriptLanguage(text: string): string | undefined {
+  if (/[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(text)) return "ja";
+  if (/\p{Script=Han}/u.test(text)) return "zh";
+  if (/\p{Script=Thai}/u.test(text)) return "th";
+  return undefined;
+}
+
 export function alignScript(script: string, spoken: Word[], language?: string): Alignment {
   const sw = scriptWords(script, language);
   const a = sw.map(norm);
@@ -82,7 +90,9 @@ export function alignScript(script: string, spoken: Word[], language?: string): 
     // Within 20% of each other, two joins share their first or last letter (a cheap rejection).
     if (A[0] !== B[0] && A[A.length - 1] !== B[B.length - 1]) return Infinity;
     if (Math.abs(A.length - B.length) > 0.2 * Math.max(A.length, B.length)) return Infinity;
-    return distance(A, B) <= 0.2 ? 0.5 + 0.1 * (g1 + g2 - 2) : Infinity;
+    // A near-miss that adds spoken words pays for them like any extra word,
+    // so an inserted filler ("awesome a") isn't absorbed into its neighbour.
+    return distance(A, B) <= 0.2 ? 0.5 + 0.1 * (g1 + g2 - 2) + EXTRA_SPOKEN * Math.max(0, g2 - g1) : Infinity;
   };
   const D: Float64Array[] = Array.from({ length: n + 1 }, () => new Float64Array(m + 1));
   // How each cell was reached: 1 = pair, 2 = script word skipped, 3 = extra spoken word, 10·g1+g2 = group.

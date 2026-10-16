@@ -127,4 +127,13 @@ describe("confidence and speech bounds", () => {
     expect(w[0].p).toBeCloseTo(0.9);
     expect(w[1].p).toBeCloseTo(0.4);
   });
+
+  it("counts a filler word the voice inserted instead of absorbing it", () => {
+    const a = alignScript("This game is awesome play it now", spoken("this game is awesome a play it now"));
+    expect(a.extra.inside).toBe(1);
+    const b = alignScript("This game is so good play it now", spoken("this game is so good uh play it now"));
+    expect(b.extra.inside).toBe(1);
+    expect(b.words[5].text).toBe("play");
+    expect(b.words[5].start).toBeCloseTo(spoken("this game is so good uh play it now")[6].start);
+  });
 });
