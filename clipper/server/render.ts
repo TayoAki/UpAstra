@@ -4,7 +4,7 @@ import path from "node:path";
 import { traitsOf } from "../shared/learning";
 import { checkClip, round2 } from "../shared/rules";
 import type { Campaign, Clip, EditParts, FootageFile, RenderInfo, VoiceOption } from "../shared/types";
-import { buildAss, groups, HOOK_SECONDS, sentences, timeWords } from "./captions";
+import { buildAss, groups, HOOK_SECONDS, lastSentenceStart, sentences, timeWords } from "./captions";
 import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, tenantLoadHooks } from "./db";
 import { mediaLive, speak } from "./llm";
 import { blackSpans, concat, compose, cutSegment, ffmpegAvailable, H, run, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
@@ -303,12 +303,10 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     const speechEnd = timed?.length ? timed[timed.length - 1].end : spans?.length ? spans[spans.length - 1].end : duration - 3.2;
     const words = timed ?? timeWords(clip.narration, voicePath ? speechEnd : Math.max(3, duration - 3.2), voicePath ? spans : undefined);
     const sents = sentences(clip.narration);
-    const lastSentenceWords = sents.length ? sents[sents.length - 1].split(" ").length : 0;
-    const lastSentenceStart = timed && lastSentenceWords && lastSentenceWords <= timed.length
-      ? timed[timed.length - lastSentenceWords].start
-      : voicePath && spans && spans.length === sents.length ? spans[spans.length - 1].start : duration - 3;
+    const lastStart = (timed && lastSentenceStart(clip.narration, timed, r.language))
+      ?? (voicePath && spans && spans.length === sents.length ? spans[spans.length - 1].start : duration - 3);
     const ctaText = c.brief.cta.text || clip.cta;
-    const ctaFrom = Math.max(1, Math.min(lastSentenceStart, duration - 2.5));
+    const ctaFrom = Math.max(1, Math.min(lastStart, duration - 2.5));
     const brand = getDoc().brand;
     const style = resolveCaptionStyle(brand, c.captions);
     const captionGroups = groups(words, style.wordsPerCaption);

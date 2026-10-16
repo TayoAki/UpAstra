@@ -47,7 +47,18 @@ export function campaignStats(brief: CampaignBrief, clips: Clip[], posts: Post[]
 // Clip QA
 
 export const WORDS_PER_SECOND = 2.6;
-export const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
+// Scripts written without spaces (Chinese, Japanese, Thai, …) count about two
+// characters per spoken "word", so length estimates work for them too.
+const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/gu;
+export const words = (s: string) =>
+  s
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .reduce((n, tok) => {
+      const c = tok.match(UNSPACED)?.length ?? 0;
+      return n + (c ? Math.ceil(c / 2) : 1);
+    }, 0);
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 const STOP = new Set(["the", "a", "an", "to", "on", "in", "and", "or", "of", "for", "it", "now", "your", "you", "this", "that", "with", "at", "go", "is"]);
 const significant = (s: string) => norm(s).split(" ").filter((w) => w.length > 2 && !STOP.has(w));
