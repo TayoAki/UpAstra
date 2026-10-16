@@ -30,7 +30,7 @@ describe("overlays", () => {
     expect(tiers).toHaveLength(2);
     expect(tiers[1].start).toBeGreaterThan(tiers[0].start + 3); // the second "the Octane"
     expect(tiers[0].end).toBe(8);
-    expect(tiers[1].end).toBeCloseTo(Math.max(8, tiers[1].start + 1), 5); // on screen at least a second
+    expect(tiers[1].end).toBeCloseTo(Math.max(8, tiers[1].start + 0.6), 5); // on screen at least 0.6 s
     expect(placed.some((p) => p.o.at === 9 && p.start === 9)).toBe(true); // fallback time
     expect(missed.map((m) => m.cue ?? m.text)).toEqual(["not said", "WOW"]); // no time / past the end
   });
@@ -53,6 +53,8 @@ describe("overlays", () => {
     ]);
     // Edits keep cues that aren't spoken yet (the UI warns), so people can fix the script after.
     expect(sanitizeOverlays(raw, undefined, () => "id")).toHaveLength(4);
+    // A comment with no named commenter stays nameless (never "viewer").
+    expect(sanitizeOverlays([{ kind: "comment", cue: "car", text: "hi" }, { kind: "comment", cue: "car", text: "hi", user: "" }], undefined, () => "id").map((o) => o.user)).toEqual([undefined, undefined]);
     expect(cueInScript("S TIER, no", script)).toBe(true);
     expect(cueInScript("question no", script)).toBe(false);
     expect(cueInScript("oct", script)).toBe(false); // whole words only

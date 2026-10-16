@@ -18,6 +18,12 @@ describe("tier schedule", () => {
     expect(s[2].glideEnd).toBeLessThanOrEqual(3 + 2); // the last one takes at most 2 s
   });
 
+  it("settles the last item well before the board goes", () => {
+    const s = tierSchedule([1, 2, 2.8], 3.4);
+    expect(s[2].glideEnd).toBeLessThanOrEqual(3.4 - 0.3 + 1e-9);
+    expect(s[2].end - s[2].glideEnd).toBeGreaterThanOrEqual(0.3 - 1e-9);
+  });
+
   it("compresses the motion into a short window", () => {
     const [a] = tierSchedule([1, 1.3], 9);
     expect(a.glideEnd).toBeLessThanOrEqual(1.3 + 1e-9);

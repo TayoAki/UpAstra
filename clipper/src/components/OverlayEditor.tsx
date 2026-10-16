@@ -26,7 +26,7 @@ export function OverlayEditor({ clip }: { clip: Clip }) {
   const ready = f.cue.trim() && cueOk && (f.kind === "emoji" ? !!f.emoji : !!f.text.trim());
 
   const add = () =>
-    save([...overlays, { id: Math.random().toString(36).slice(2, 10), kind: f.kind, cue: f.cue.trim(), text: f.text.trim() || undefined, user: f.kind === "comment" ? f.user.trim() || "viewer" : undefined, emoji: f.kind === "emoji" ? f.emoji : undefined, tier: f.kind === "tier" ? (f.tier as Overlay["tier"]) : undefined }], "Overlay added").then(
+    save([...overlays, { id: Math.random().toString(36).slice(2, 10), kind: f.kind, cue: f.cue.trim(), text: f.text.trim() || undefined, user: f.kind === "comment" ? f.user.trim() || undefined : undefined, emoji: f.kind === "emoji" ? f.emoji : undefined, tier: f.kind === "tier" ? (f.tier as Overlay["tier"]) : undefined }], "Overlay added").then(
       (r) => r && (setAdding(false), setF({ ...f, cue: "", text: "" })),
     );
 
@@ -84,7 +84,7 @@ export function OverlayEditor({ clip }: { clip: Clip }) {
             <div className="form-grid">
               <label className="field">
                 From
-                <input className="input" placeholder="viewer" value={f.user} onChange={(e) => setF({ ...f, user: e.target.value })} />
+                <input className="input" placeholder="optional" value={f.user} onChange={(e) => setF({ ...f, user: e.target.value })} />
               </label>
               <label className="field">
                 Comment

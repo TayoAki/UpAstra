@@ -63,8 +63,17 @@ describe("sound design", () => {
     expect(onset).toBeGreaterThan(0.99);
     expect(onset).toBeLessThan(1.02);
     const r = spawnSync("ffmpeg", ["-v", "info", "-i", out, "-af", "ebur128", "-f", "null", "-"], { encoding: "utf8" });
-    const lufs = Number(r.stderr.match(/I:\s+(-?[\d.]+) LUFS\s*\n\s*Threshold[\s\S]*$/)?.[1] ?? r.stderr.match(/Integrated loudness:\s*\n\s*I:\s+(-?[\d.]+)/)?.[1]);
-    expect(lufs).toBeGreaterThan(-15.5);
-    expect(lufs).toBeLessThan(-12.5);
+    const lufs = Number(r.stderr.match(/Integrated loudness:\s*\n\s*I:\s+(-?[\d.]+)/)?.[1]);
+    expect(lufs).toBeGreaterThan(-15);
+    expect(lufs).toBeLessThan(-13);
+
+    // A dense schedule (a fast tier list: 10 effects in 2 s) still lands at -14 ±1 LUFS.
+    const dense = path.join(dir, "dense.mp4");
+    const events = Array.from({ length: 5 }, (_, i) => [{ at: 1.4 + i * 0.35, kind: "pop" as const }, { at: 1.6 + i * 0.35, kind: "whoosh" as const }]).flat();
+    await compose({ video, ass, voice, duration: 6, out: dense, workDir: dir, sound: { events } });
+    const r2 = spawnSync("ffmpeg", ["-v", "info", "-i", dense, "-af", "ebur128", "-f", "null", "-"], { encoding: "utf8" });
+    const lufs2 = Number(r2.stderr.match(/Integrated loudness:\s*\n\s*I:\s+(-?[\d.]+)/)?.[1]);
+    expect(lufs2).toBeGreaterThan(-15);
+    expect(lufs2).toBeLessThan(-13);
   }, 60_000);
 });

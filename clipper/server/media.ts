@@ -254,7 +254,17 @@ export function mixFilter(o: { voice: boolean; sound?: { events: SfxEvent[] } })
     parts.push(`[${first + i}:a]adelay=${ms}|${ms},volume=${SFX_GAIN[e.kind]}[s${i}]`);
     mix.push(`[s${i}]`);
   });
-  return `${parts.join(";")}${parts.length ? ";" : ""}${mix.join("")}amix=inputs=${mix.length}:duration=first:dropout_transition=0:normalize=0,${norm}`;
+  // Normalised separately, in two passes (see compose): dense effects made one-pass loudnorm undershoot.
+  return `${parts.join(";")}${parts.length ? ";" : ""}${mix.join("")}amix=inputs=${mix.length}:duration=first:dropout_transition=0:normalize=0[a]`;
+}
+
+/** Normalise to -14 LUFS from a measurement of the whole file (a linear gain), not on the fly. */
+async function loudnormTwoPass(input: string, out: string) {
+  const target = "I=-14:TP=-1.5:LRA=11";
+  const { stderr } = await run("ffmpeg", ["-v", "info", "-i", input, "-af", `loudnorm=${target}:print_format=json`, "-f", "null", "-"]);
+  const m = JSON.parse(stderr.slice(stderr.lastIndexOf("{"), stderr.lastIndexOf("}") + 1)) as Record<string, string>;
+  const measured = `measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}`;
+  await run("ffmpeg", ["-v", "error", "-y", "-i", input, "-af", `loudnorm=${target}:${measured}:linear=true,aresample=44100`, "-ac", "2", "-c:a", "pcm_s16le", out]);
 }
 
 export async function compose(opts: { video: string; ass: string; voice?: string; duration: number; out: string; fontsDir?: string; workDir: string; stickers?: Sticker[]; sound?: { events: SfxEvent[] } }) {
@@ -269,8 +279,9 @@ export async function compose(opts: { video: string; ass: string; voice?: string
     ...(opts.voice ? ["-i", wav("voice")] : []),
     ...(opts.sound?.events ?? []).flatMap((e) => ["-i", files![e.kind]]),
     "-filter_complex", mixFilter({ voice: !!opts.voice, sound: opts.sound }),
-    "-map", "[a]", "-ac", "2", "-c:a", "pcm_s16le", wav("mix"),
+    "-map", "[a]", "-ac", "2", "-c:a", "pcm_s16le", wav(opts.sound ? "premix" : "mix"),
   ]);
+  if (opts.sound) await loudnormTwoPass(wav("premix"), wav("mix"));
   const assEsc = opts.ass.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
   const fonts = opts.fontsDir ? `:fontsdir=${opts.fontsDir.replace(/:/g, "\\:")}` : "";
   // Emoji stickers are images laid over the subtitled video, each with its own pop.

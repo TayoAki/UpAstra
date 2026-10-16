@@ -52,7 +52,8 @@ export function placeOverlays(overlays: Overlay[], words: Timed[], duration: num
       missed.push(o);
       continue;
     }
-    const end = o.kind === "tier" ? Math.max(start + 1, until) : start + (o.hold && o.hold > 0 ? Math.min(o.hold, 8) : DEFAULT_HOLD[o.kind]);
+    // The board stays until the call to action (a last item named just before it gets 0.6 s to land).
+    const end = o.kind === "tier" ? Math.max(start + 0.6, until) : start + (o.hold && o.hold > 0 ? Math.min(o.hold, 8) : DEFAULT_HOLD[o.kind]);
     placed.push({ o, start, end: Math.min(end, duration) });
   }
   return { placed: placed.sort((a, b) => a.start - b.start), missed };
@@ -220,8 +221,9 @@ const MAX_PER_TIER = 12;
  */
 export function tierSchedule(starts: number[], boardEnd: number) {
   return starts.map((start, i) => {
-    const next = i < starts.length - 1 ? Math.max(start, starts[i + 1]) : Math.min(boardEnd, start + 2);
-    const w = Math.max(0.05, Math.min(next, boardEnd) - start);
+    // Every item, the last one included, is settled at least 0.3 s before the board goes.
+    const next = i < starts.length - 1 ? Math.max(start, starts[i + 1]) : start + 2;
+    const w = Math.max(0.05, Math.min(next, boardEnd - 0.3) - start);
     const glide = Math.min(0.35, w * 0.35);
     const glideEnd = start + w;
     return { start, glideStart: glideEnd - glide, glideEnd, end: Math.max(glideEnd, boardEnd) };

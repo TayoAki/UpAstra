@@ -49,7 +49,11 @@ export function sanitizeOverlays(raw: unknown, script?: string, makeId: () => st
       if (!text) continue;
       o.text = text;
     }
-    if (kind === "comment") o.user = str(x.user, 24).replace(/^@/, "").replace(/[^\w.]/g, "") || "viewer";
+    if (kind === "comment") {
+      // Only a commenter the plan or editor named; never a made-up one.
+      const user = str(x.user, 24).replace(/^@/, "").replace(/[^\w.]/g, "");
+      if (user) o.user = user;
+    }
     if (kind === "tier") o.tier = (TIERS as readonly string[]).includes(str(x.tier, 1).toUpperCase()) ? (str(x.tier, 1).toUpperCase() as Tier) : "C";
     if (!o.cue && o.at === undefined) continue;
     if (script && o.cue && !cueInScript(o.cue, script) && o.at === undefined) continue;

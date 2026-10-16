@@ -401,7 +401,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     }
     editParts.overlays = placed.map((p) => ({
       kind: p.o.kind,
-      text: p.o.kind === "emoji" ? p.o.emoji ?? "" : p.o.kind === "comment" ? `@${p.o.user ?? "viewer"}: ${p.o.text ?? ""}` : (p.o.text ?? ""),
+      text: p.o.kind === "emoji" ? p.o.emoji ?? "" : p.o.kind === "comment" ? `${p.o.user ? `@${p.o.user}: ` : ""}${p.o.text ?? ""}` : (p.o.text ?? ""),
       start: round(p.start),
       end: round(p.end),
       tier: p.o.tier,
