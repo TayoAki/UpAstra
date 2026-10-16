@@ -256,7 +256,7 @@ We already render this card (`clipper/server/overlays.ts:150-169`), and it is on
 | Timing | absolute window from upstream | cue word + `hold` (default 2.8 s) (`clipper/server/overlays.ts:19`, `:52`) |
 | Placement | explicit Frame per sticker | band top + 40 px; stacks below a still-visible previous comment; moves above the footage while a tier board is up (`overlays.ts:157-158`) |
 | Card | rounded rect, **−2.5° tilt**, soft blurred shadow, speech tail | rounded rect (`roundedRect` Bézier, `overlays.ts:71-85`), hard ASS shadow (`OvShape` shadow 4, `overlays.ts:125`) |
-| Avatar | image or initial disc with ring | accent disc with initial (`overlays.ts:165-166`) |
+| Avatar | image or initial disc with ring | accent disc with initial (`overlays.ts:164-166`) |
 | Header | "Reply to @x's comment" (header overridable) | "Reply to @x" (`overlays.ts:167`) |
 | Body | measured word wrap, maxLines, ellipsis, −0.02 em tracking | char-count wrap 27 chars × 3 lines + "…" (`overlays.ts:88-104`, `:152`) |
 | Enter | pop 0.78→1 + rotation unwind, 17 f | slide-up 28 px in 160 ms + 140 ms fade (`overlays.ts:162`) |
@@ -300,7 +300,7 @@ A top-of-frame "answer strip". There is a row of fixed-size slots. Each slot sta
 ### Reveal recipe
 - `revealAnimation` (`program.ts:140-152`): invisible until `atFrame−1`, then visible at scale 0.72 at `atFrame`. It goes to **1.14** at +34% of `revealFrames`, **0.95** at +68%, and **1.0** at +100%. Default `revealFrames` is 6.
 - The placeholder hard-cuts to opacity 0 at the same frame (`:154-162`).
-- Defaults (`packages/interview-emoji-reveal/src/style.ts:33-44`): `centerX 0.5`, `topY 0.07`, slot 72, gap 10, pad 18/14, board `#FFFDF7`, 4 px `#161616` border, radius 22, **hard shadow 9/10/0 `#000000B8`** ("meme-style", `manifest.ts:333` relative to `manifest.ts` file), icon 48, z 66.
+- Defaults (`packages/interview-emoji-reveal/src/style.ts:33-44`): `centerX 0.5`, `topY 0.07`, slot 72, gap 10, pad 18/14, board `#FFFDF7`, 4 px `#161616` border, radius 22, **hard shadow 9/10/0 `#000000B8`** ("meme-style", `packages/interview-emoji-reveal/src/manifest.ts:91`), icon 48, z 66.
 
 ### Tests
 **None.** The package has no `test/` directory. Its only consumer in the repo is `examples/interview/*.svml`.
