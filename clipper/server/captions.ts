@@ -3,7 +3,7 @@ import { sentences } from "../shared/sentences";
 import { joinWords, sepBetween } from "../shared/words";
 import { scriptWords } from "./align";
 import { H, VIDEO_TOP, W } from "./media";
-import { overlayEvents, overlayStyles, type OverlayLayout, type Placed } from "./overlays";
+import { overlayEvents, overlayStyles, textWidth, type OverlayLayout, type Placed } from "./overlays";
 
 // Captions as an ASS subtitle file burned in by ffmpeg: the hook across the
 // top, the voiceover in 2–3 word punches under the footage, and a call to
@@ -96,6 +96,48 @@ export function assColor(hex: string): string {
 
 export type CaptionGroup = Timed & { words?: Timed[] };
 
+/** A caption as drawn: 1–2 lines of words, and a smaller size only for a single word too wide alone. */
+interface FittedCaption {
+  start: number;
+  end: number;
+  lines: Timed[][];
+  size?: number;
+}
+
+/**
+ * Fit caption groups to the frame width. A group too wide for one line is
+ * broken into two balanced lines; one too wide for two is split in time at
+ * its best word boundary (each half keeps its words' own times), and so on.
+ * Only a single word too wide on its own is drawn smaller.
+ */
+export function fitCaptions(groups: CaptionGroup[], o: { size: number; outline: number; font: string; maxWidth: number; cased: (t: string) => string }): FittedCaption[] {
+  const width = (ws: Timed[]) => textWidth(o.cased(joinWords(ws.map((w) => w.text))), o.size, o.font) + 2 * o.outline;
+  const fits = (ws: Timed[]) => width(ws) <= o.maxWidth;
+  // Where to break a run of words so its widest part is as narrow as possible.
+  const bestBreak = (ws: Timed[]) => {
+    let best = 1;
+    let bestW = Infinity;
+    for (let b = 1; b < ws.length; b++) {
+      const w = Math.max(width(ws.slice(0, b)), width(ws.slice(b)));
+      if (w < bestW) [best, bestW] = [b, w];
+    }
+    return best;
+  };
+  const fit = (ws: Timed[], start: number, end: number): FittedCaption[] => {
+    if (fits(ws)) return [{ start, end, lines: [ws] }];
+    if (ws.length === 1) {
+      // The outline doesn't shrink with the text, so size the text to the room left inside it.
+      const text = width(ws) - 2 * o.outline;
+      return [{ start, end, lines: [ws], size: Math.max(Math.round(o.size * 0.5), Math.floor((o.size * (o.maxWidth - 2 * o.outline)) / text)) }];
+    }
+    const b = bestBreak(ws);
+    if (fits(ws.slice(0, b)) && fits(ws.slice(b))) return [{ start, end, lines: [ws.slice(0, b), ws.slice(b)] }];
+    // Too long for two lines: show it as two captions, one after the other.
+    return [...fit(ws.slice(0, b), start, ws[b].start), ...fit(ws.slice(b), ws[b].start, end)];
+  };
+  return groups.flatMap((g) => fit(g.words?.length ? g.words : [g], g.start, g.end));
+}
+
 /**
  * The full caption track: hook across the top, captions in the chosen style,
  * and the call-to-action card at the end. Words are spaced by script
@@ -151,24 +193,31 @@ export function buildAss(o: {
   const place = `\\an5\\pos(${Math.round(FW / 2)},${y})${st.glow ? "\\blur4" : ""}`;
   const pop = "\\fscx86\\fscy86\\t(0,90,\\fscx100\\fscy100)";
   const cased = (t: string) => (st.uppercase ? t.toLocaleUpperCase(o.language || undefined) : t);
-  for (const g of o.captions) {
+  const fitted = fitCaptions(o.captions, { size: px(st.size), outline: px(st.outlineWidth), font, maxWidth: FW - 2 * px(70), cased });
+  for (const g of fitted) {
     if (g.start >= o.duration) break;
     const end = Math.min(g.end, o.duration);
-    const words = g.words?.length ? g.words : [g];
+    const words = g.lines.flat();
+    const size = g.size ? `\\fs${g.size}` : "";
+    // Words (one optionally highlighted), spaced by script, lines broken with \N.
+    const render = (active?: number) => {
+      let i = 0;
+      return g.lines
+        .map((line) => line.map((x, q) => (q ? sepBetween(line[q - 1].text, x.text) : "") + (i++ === active ? `{\\c${hl}}${esc(cased(x.text))}{\\c${white}}` : esc(cased(x.text)))).join(""))
+        .join("\\N");
+    };
     if (st.animation === "karaoke" && words.length > 1) {
-      // One event per word: the whole line, with the spoken word in the highlight colour.
+      // One event per word: the whole caption, with the spoken word in the highlight colour.
       words.forEach((w, k) => {
         const from = k === 0 ? g.start : w.start;
         const to = k < words.length - 1 ? words[k + 1].start : end;
         if (to <= from || from >= o.duration) return;
-        const text = words.map((x, q) => (q ? sepBetween(words[q - 1].text, x.text) : "") + (q === k ? `{\\c${hl}}${esc(cased(x.text))}{\\c${white}}` : esc(cased(x.text)))).join("");
-        lines.push(`Dialogue: 0,${ts(from)},${ts(Math.min(to, o.duration))},Cap,,0,0,0,,{${place}${k === 0 ? pop : ""}}${text}`);
+        lines.push(`Dialogue: 0,${ts(from)},${ts(Math.min(to, o.duration))},Cap,,0,0,0,,{${place}${size}${k === 0 ? pop : ""}}${render(k)}`);
       });
       continue;
     }
     const anim = st.animation === "pop" || st.animation === "karaoke" ? pop : st.animation === "fade" ? "\\fad(70,70)" : "";
-    const text = esc(cased(joinWords(words.map((x) => x.text))));
-    lines.push(`Dialogue: 0,${ts(g.start)},${ts(end)},Cap,,0,0,0,,{${place}${anim}}${text}`);
+    lines.push(`Dialogue: 0,${ts(g.start)},${ts(end)},Cap,,0,0,0,,{${place}${size}${anim}}${render()}`);
   }
   if (o.overlays?.placed.length) lines.push(...overlayEvents(o.overlays.placed, o.overlays.layout));
   if (o.cta) lines.push(`Dialogue: 9,${ts(o.ctaFrom)},${ts(o.duration)},Cta,,0,0,0,,{\\fad(150,0)}${esc(o.cta)}`);
