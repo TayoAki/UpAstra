@@ -46,4 +46,11 @@ describe("after a restart", () => {
       expect(getDoc().captionJobs![0]).toMatchObject({ status: "ready", error: expect.stringMatching(/server restart/) });
     });
   });
+
+  it("finds interrupted format breakdowns at boot, not just renders and caption jobs", async () => {
+    useMemoryBackend();
+    await workspace("ws_fmt", { formats: [{ id: "fmt_x", name: "x", status: "analyzing", sourceKey: "k", source: { kind: "upload" }, cost: 0, createdAt: "", updatedAt: "" } as never] });
+    await workspace("ws_idle", { formats: [{ id: "fmt_y", name: "y", status: "ready", sourceKey: "k", source: { kind: "upload" }, cost: 0, createdAt: "", updatedAt: "" } as never] });
+    expect(await getBackend().workspacesWithPendingWork()).toEqual(["ws_fmt"]);
+  });
 });

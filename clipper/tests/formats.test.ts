@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../server/app";
 import { initAuth } from "../server/auth";
 import { useMemoryBackend } from "../server/db";
-import { cleanBreakdown, sceneCuts } from "../server/formats";
+import { cleanBreakdown, enqueueFormat, sceneCuts } from "../server/formats";
 import { ffmpegAvailable } from "../server/media";
 
 const brief = fs.readFileSync(new URL("./fixtures/car-league-brief.txt", import.meta.url), "utf8").replace(/\(https:\/\/drive[^)]+\)/g, "");
@@ -153,6 +153,20 @@ describe("formats", () => {
     // Usage: the breakdown counts as its own kind of AI work.
     const usage = (await call("/api/usage")).body.months[0].usage.ai;
     expect(usage.format.calls).toBe(1);
+    // Analysing the same reference again (a resume after a restart) reuses the paid breakdown.
+    const visionCalls = () => seen.filter((x) => /reusable FORMAT/.test(x.system)).length;
+    const before = visionCalls();
+    const ws = (await call("/api/auth/me")).body.workspace.id as string;
+    enqueueFormat({ workspaceId: ws, formatId: id });
+    for (let i = 0; i < 100; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      f = (await call(`/api/formats/${id}`)).body;
+      if (f.status === "ready" && f.steps?.breakdown?.reused) break;
+    }
+    expect(f.status).toBe("ready");
+    expect(f.steps.breakdown).toMatchObject({ status: "done", reused: true });
+    expect(visionCalls()).toBe(before);
+
     // Not ready → refused; unknown id → refused.
     expect((await call(`/api/campaigns/${camp.id}/clips`, "POST", { count: 1, formatId: "fmt_nope" })).status).toBe(400);
     expect((await call(`/api/formats/${id}`, "DELETE")).body.formats).toHaveLength(0);

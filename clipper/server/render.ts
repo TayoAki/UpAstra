@@ -6,16 +6,17 @@ import { checkClip, round2 } from "../shared/rules";
 import type { Campaign, Clip, EditParts, FootageFile, RenderInfo, VoiceOption } from "../shared/types";
 import { buildAss, groups, HOOK_SECONDS, lastSentenceStart, sentences, timeWords } from "./captions";
 import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, tenantLoadHooks } from "./db";
-import { mediaLive, speak } from "./llm";
-import { blackSpans, concat, compose, cutSegment, ffmpegAvailable, H, run, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
-import { footageSource, isCached } from "./footage-cache";
+import { mediaLive, modelFor, speak } from "./llm";
+import { blackSpans, concat, compose, cutSegment, ffmpegAvailable, FPS, H, run, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
+import { cacheKey, footageSource, isCached } from "./footage-cache";
+import { cachedStep } from "./steps";
 import { alignScript, type Alignment } from "./align";
 import { NO_SPACES, transcribe, transcriptionAvailable, type Word } from "./transcribe";
 import { accentOf, resolveCaptionStyle } from "../shared/caption-styles";
 import { prepareFonts } from "./fonts";
 import { analyzeFootage, pickMoment } from "./moments";
 import { videoStore } from "./storage";
-import { recordUsage } from "./usage";
+import { checkAIBudget, recordUsage } from "./usage";
 import { alert, isUserError } from "./alerts";
 import { emojiStickers, placeOverlays } from "./overlays";
 
@@ -197,34 +198,58 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
       // Voice models sometimes talk around the script ("Sure, here it is…").
       // Each take is transcribed and checked against the script; a take that
       // strays inside the script is recorded once more.
-      let best: { wav: string; seconds: number; al?: Alignment } | undefined;
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        step(r, "voicing", attempt === 1 ? `Recording the voiceover (${r.voice})` : "Re-recording the voiceover (the first take went off script)");
-        const v = await speak(clip.narration, r.voice);
-        r.cost = round2((r.cost + v.cost) * 1000) / 1000;
-        const pcm = path.join(tmp, `vo${attempt}.pcm`);
-        const wav = path.join(tmp, `vo${attempt}.wav`);
-        fs.writeFileSync(pcm, v.pcm);
-        await run("ffmpeg", ["-v", "error", "-y", "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", pcm, wav]);
-        let al: Alignment | undefined;
-        if (transcriptionAvailable()) {
-          step(r, "voicing", "Timing every word of the voiceover");
-          try {
-            const tr = await transcribe(wav, { glossary });
-            al = alignScript(clip.narration, tr.words, tr.language);
-            r.language = tr.language;
-          } catch (err) {
-            console.error(`[render] transcription failed for ${clip.id}:`, (err as Error).message);
+      // The take (and its word timings) is kept per script and voice, so a
+      // resume or a re-render with the same narration doesn't pay again.
+      const takeFile = path.join(tmp, "take.wav");
+      const take = await cachedStep({
+        workspaceId,
+        receipts: (r.steps ??= {}),
+        name: "voiceover",
+        kind: "voice",
+        version: 1,
+        params: { narration: clip.narration, voice: r.voice, model: modelFor("voice"), glossary, timed: transcriptionAvailable() },
+        file: takeFile,
+        paid: true,
+        save,
+        run: async () => {
+          let best: { wav: string; seconds: number; al?: Alignment } | undefined;
+          for (let attempt = 1; attempt <= 2; attempt++) {
+            step(r, "voicing", attempt === 1 ? `Recording the voiceover (${r.voice})` : "Re-recording the voiceover (the first take went off script)");
+            checkAIBudget();
+            const v = await speak(clip.narration, r.voice);
+            r.cost = round2((r.cost + v.cost) * 1000) / 1000;
+            const pcm = path.join(tmp, `vo${attempt}.pcm`);
+            const wav = path.join(tmp, `vo${attempt}.wav`);
+            fs.writeFileSync(pcm, v.pcm);
+            await run("ffmpeg", ["-v", "error", "-y", "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", pcm, wav]);
+            let al: Alignment | undefined;
+            if (transcriptionAvailable()) {
+              step(r, "voicing", "Timing every word of the voiceover");
+              try {
+                const tr = await transcribe(wav, { glossary });
+                al = alignScript(clip.narration, tr.words, tr.language);
+                r.language = tr.language;
+              } catch (err) {
+                console.error(`[render] transcription failed for ${clip.id}:`, (err as Error).message);
+              }
+            }
+            const take = { wav, seconds: v.pcm.length / 48000, al };
+            const score = (t: { al?: Alignment }) => (t.al ? t.al.matched - t.al.extra.inside / 20 : 0);
+            if (!best || score(take) > score(best)) best = take;
+            if (!al || (al.matched >= 0.85 && al.extra.inside <= 3)) break;
           }
-        }
-        const take = { wav, seconds: v.pcm.length / 48000, al };
-        const score = (t: { al?: Alignment }) => (t.al ? t.al.matched - t.al.extra.inside / 20 : 0);
-        if (!best || score(take) > score(best)) best = take;
-        if (!al || (al.matched >= 0.85 && al.extra.inside <= 3)) break;
+          fs.copyFileSync(best!.wav, takeFile);
+          return { seconds: best!.seconds, al: best!.al, language: r.language };
+        },
+      });
+      if (take.reused) {
+        r.language = take.value.language;
+        log({ campaignId: c.id, kind: "clip", message: `Reused the recorded voiceover for "${clip.title}" (nothing charged).` });
       }
-      voicePath = best!.wav;
-      let spoken = best!.seconds;
-      const al = best!.al;
+      const best = { wav: takeFile, seconds: take.value.seconds, al: take.value.al };
+      voicePath = best.wav;
+      let spoken = best.seconds;
+      const al = best.al;
       if (al && al.matched >= 0.6) {
         let shift = 0;
         if (al.extra.before || al.extra.after) {
@@ -273,21 +298,37 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
       start = Math.max(0, Math.min(start, Math.max(0, total - len - 0.5)));
       step(r, "rendering", `Cutting shot ${i + 1} of ${shots.length} from "${f.name}"`);
       const out = path.join(tmp, `seg${i}.mp4`);
-      const src = await footageSource(f);
-      await cutSegment(src, start, len, f.hasAudio !== false, out);
-      // Goals often fade to black before the replay: if a shot has more than a
-      // moment of black, slide it away from the black and cut again.
-      const black = (await blackSpans(out)).reduce((t, b) => t + (b.end - b.start), 0);
-      if (black > 0.5 && total > len + 2) {
-        const first = (await blackSpans(out))[0];
-        const shift = first.start < len / 2 ? first.end + 0.3 : -(len - first.start + 0.3);
-        const moved = Math.max(0, Math.min(start + shift, total - len - 0.5));
-        if (Math.abs(moved - start) > 0.2) {
-          await cutSegment(src, moved, len, f.hasAudio !== false, out);
-          if ((await blackSpans(out)).reduce((t, b) => t + (b.end - b.start), 0) < black) start = moved;
-          else await cutSegment(src, start, len, f.hasAudio !== false, out);
-        }
-      }
+      const requested = start;
+      // Kept per source, start and length: re-renders and variants reuse the cut.
+      const cut = await cachedStep({
+        workspaceId,
+        receipts: (r.steps ??= {}),
+        name: `shot${i + 1}`,
+        kind: "cut",
+        version: 1,
+        params: { source: f.storageKey ?? cacheKey(f), start: requested, len, audio: f.hasAudio !== false, total, frame: [W, H, FPS] },
+        file: out,
+        save,
+        run: async () => {
+          const src = await footageSource(f);
+          await cutSegment(src, start, len, f.hasAudio !== false, out);
+          // Goals often fade to black before the replay: if a shot has more than a
+          // moment of black, slide it away from the black and cut again.
+          const black = (await blackSpans(out)).reduce((t, b) => t + (b.end - b.start), 0);
+          if (black > 0.5 && total > len + 2) {
+            const first = (await blackSpans(out))[0];
+            const shift = first.start < len / 2 ? first.end + 0.3 : -(len - first.start + 0.3);
+            const moved = Math.max(0, Math.min(start + shift, total - len - 0.5));
+            if (Math.abs(moved - start) > 0.2) {
+              await cutSegment(src, moved, len, f.hasAudio !== false, out);
+              if ((await blackSpans(out)).reduce((t, b) => t + (b.end - b.start), 0) < black) start = moved;
+              else await cutSegment(src, start, len, f.hasAudio !== false, out);
+            }
+          }
+          return { start };
+        },
+      });
+      start = cut.value.start;
       parts.push(out);
       shotLens.push(len);
       const swapped = substitutes.find((x) => x.endsWith(`→ ${f.name}`) && x.startsWith(s.footageName ?? "\u0000"));

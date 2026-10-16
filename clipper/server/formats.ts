@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,8 +6,9 @@ import { CAPTION_STYLES } from "../shared/caption-styles";
 import { HOOK_STYLES, OVERLAY_KINDS, type FormatBreakdown, type HookStyle, type OverlayKind, type ReferenceFormat } from "../shared/types";
 import { alert, isUserError } from "./alerts";
 import { getDoc, HttpError, loadTenant, log, now, runInWorkspace, save, tenantLoadHooks } from "./db";
-import { chatJSON, mediaLive } from "./llm";
+import { chatJSON, mediaLive, modelFor } from "./llm";
 import { netArgs, probe, run } from "./media";
+import { cachedStep } from "./steps";
 import { videoStore } from "./storage";
 import { transcribe, transcriptionAvailable } from "./transcribe";
 
@@ -147,14 +149,23 @@ async function analyze(t: Task) {
     if (!mediaLive()) throw new Error("Breaking down a video needs an AI key on the server");
     set(f, { step: "Watching the video and writing the format" });
     const proxy = path.join(tmp, "proxy.mp4");
-    await buildReferenceProxy(src, proxy);
-    const r = await chatJSON<Record<string, unknown>>(
-      "format",
-      SYSTEM,
-      { durationSec: Math.round(info.duration * 10) / 10, frame: `${info.width}x${info.height}`, transcript: timedText || "(no speech)", sceneCutsSec: cuts.slice(0, 120) },
-      5000,
-      [{ type: "video_url", video_url: { url: `data:video/mp4;base64,${fs.readFileSync(proxy).toString("base64")}` } }],
-    );
+    const ask = { durationSec: Math.round(info.duration * 10) / 10, frame: `${info.width}x${info.height}`, transcript: timedText || "(no speech)", sceneCutsSec: cuts.slice(0, 120) };
+    // Kept per reference, prompt and model: a resume after a restart doesn't pay again.
+    const { value: r, reused } = await cachedStep({
+      workspaceId: t.workspaceId,
+      receipts: (f.steps ??= {}),
+      name: "breakdown",
+      kind: "format-breakdown",
+      version: 1,
+      params: { source: f.sourceKey, ask, system: createHash("sha256").update(SYSTEM).digest("hex"), model: modelFor("format") },
+      paid: true,
+      save,
+      run: async () => {
+        await buildReferenceProxy(src, proxy);
+        return chatJSON<Record<string, unknown>>("format", SYSTEM, ask, 5000, [{ type: "video_url", video_url: { url: `data:video/mp4;base64,${fs.readFileSync(proxy).toString("base64")}` } }]);
+      },
+    });
+    if (reused) r.cost = 0;
     const breakdown = cleanBreakdown(r.json, info.duration);
     set(f, { status: "ready", step: undefined, breakdown, cost: Math.round(((f.cost ?? 0) + r.cost) * 10000) / 10000, model: r.model });
     log({ kind: "clip", message: `Broke down "${f.name}" into a format: ${breakdown.summary.slice(0, 120)}`, cost: r.cost || undefined });

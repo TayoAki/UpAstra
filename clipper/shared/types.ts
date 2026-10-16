@@ -225,6 +225,8 @@ export interface ReferenceFormat {
   breakdown?: FormatBreakdown;
   /** Times the breakdown restarted after a server restart cut it off. */
   resumes?: number;
+  /** What happened to each expensive step, by content key. */
+  steps?: Record<string, { key: string; status: "started" | "done" | "failed"; at: string; reused?: boolean }>;
   cost: number;
   model?: string;
   createdAt: string;
@@ -297,6 +299,8 @@ export interface RenderInfo {
   spokenSec?: number;
   /** Set when the current video was exported from the editor. */
   editedAt?: string;
+  /** What happened to each expensive step (voiceover, each shot), by content key. */
+  steps?: Record<string, { key: string; status: "started" | "done" | "failed"; at: string; reused?: boolean }>;
 }
 
 export interface EditParts {

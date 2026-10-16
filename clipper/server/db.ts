@@ -148,7 +148,8 @@ class PgBackend implements Backend {
     const rows = (
       await this.pool.query(
         `SELECT id FROM co_workspaces WHERE jsonb_path_exists(data, '$.clips[*].render.status ? (@ == "queued" || @ == "analyzing" || @ == "voicing" || @ == "rendering")')
-           OR jsonb_path_exists(data, '$.captionJobs[*].status ? (@ == "transcribing" || @ == "rendering")')`,
+           OR jsonb_path_exists(data, '$.captionJobs[*].status ? (@ == "transcribing" || @ == "rendering")')
+           OR jsonb_path_exists(data, '$.formats[*].status ? (@ == "analyzing")')`,
       )
     ).rows;
     return rows.map((r) => r.id as string);
@@ -252,7 +253,7 @@ class FileBackend implements Backend {
     const ids: string[] = [];
     for (const w of this.workspaces) {
       const d = await this.loadDoc(w.id);
-      if (d?.clips.some((c) => c.render && !["done", "failed"].includes(c.render.status)) || d?.captionJobs?.some((j) => j.status === "transcribing" || j.status === "rendering")) ids.push(w.id);
+      if (d?.clips.some((c) => c.render && !["done", "failed"].includes(c.render.status)) || d?.captionJobs?.some((j) => j.status === "transcribing" || j.status === "rendering") || d?.formats?.some((f) => f.status === "analyzing")) ids.push(w.id);
     }
     return ids;
   }
