@@ -4,7 +4,7 @@ import path from "node:path";
 import { traitsOf } from "../shared/learning";
 import { calibrate, checkClip, round2, speechLoad } from "../shared/rules";
 import type { Campaign, Clip, EditParts, FootageFile, RenderInfo, VoiceOption } from "../shared/types";
-import { buildAss, fitCaptionsFor, groups, HOOK_SECONDS, lastSentenceStart, sentences, timeWords } from "./captions";
+import { buildAss, fitCaptionsFor, groups, HOOK_SECONDS, lastSentenceStart, sentences, timeWords, type Timed } from "./captions";
 import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, saveNow, tenantLoadHooks } from "./db";
 import { mediaLive, modelFor, speak } from "./llm";
 import { blackSpans, concat, compose, cutSegment, cutSignature, ffmpegAvailable, H, run, sceneCutNear, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
@@ -16,7 +16,7 @@ import { sfxEvents } from "./sfx";
 import { cachedStep } from "./steps";
 import { alignScript, scriptLanguage, scriptWords, type Alignment } from "./align";
 import { transcribe, transcriptionAvailable, whisperModel, type Word } from "./transcribe";
-import { accentOf, resolveCaptionStyle } from "../shared/caption-styles";
+import { accentOf, resolveCaptionStyle, type BrandKit } from "../shared/caption-styles";
 import { prepareFonts } from "./fonts";
 import { analyzeFootage, pickMoment } from "./moments";
 import { videoStore } from "./storage";
@@ -60,13 +60,13 @@ tenantLoadHooks.push((ws, doc) => {
   }
 });
 
-export function enqueueRender(workspaceId: string, clip: Clip, voice: VoiceOption, actor?: "human" | "agent") {
+export function enqueueRender(workspaceId: string, clip: Clip, voice: VoiceOption, actor?: "human" | "agent", recompose = false) {
   if (!ffmpegAvailable()) throw new HttpError(503, "Rendering isn't available on this server (ffmpeg missing)");
   if (isPending(clip.id)) throw new HttpError(409, "This clip is already rendering");
   // One workspace can't fill the shared queue.
   const max = Number(process.env.MAX_QUEUED_RENDERS ?? 20);
   if (waitingCount(workspaceId, "render") >= max) throw new HttpError(429, `You already have ${max} clips waiting to render. Try again when some finish.`);
-  clip.render = { status: "queued", step: "Waiting in the render queue", voice, requestedAt: now(), cost: 0 };
+  clip.render = { status: "queued", step: "Waiting in the render queue", voice, requestedAt: now(), cost: 0, ...(recompose ? { recompose: true } : {}) };
   clip.status = "rendering";
   submit({ workspaceId, clipId: clip.id, actor });
 }
@@ -112,6 +112,22 @@ export const VOICE_STEP = 1;
 /** What the voiceover step reads: the same script, voice, model and timing reuse its take. */
 export const voiceStepParams = (c: Campaign, clip: Clip, voice: string) => ({ narration: clip.narration, voice, model: modelFor("voice"), glossary: glossaryOf(c), timing: transcriptionAvailable() ? path.basename(whisperModel()) : null });
 
+/**
+ * The captions, hook, call to action and overlays of a clip as an ASS file,
+ * from its timed words. The render burns this in; the browser preview draws
+ * the same file over a proxy (with the current caption style and overlays).
+ */
+export function buildClipAss(o: { clip: Clip; campaign: Campaign; brand: BrandKit | undefined; words: Timed[]; moments: Record<string, number>; duration: number; ctaFrom: number; ctaText: string; language?: string }) {
+  const { clip, duration, ctaFrom } = o;
+  const style = resolveCaptionStyle(o.brand, o.campaign.captions);
+  const captionGroups = groups(o.words, style.wordsPerCaption);
+  // Overlays land on the words they're cued to (tier items stay until the call to action).
+  const layout = { width: W, height: H, bandTop: VIDEO_TOP, bandHeight: VIDEO_H, font: style.font, fontWidths: style.fontWidths, accent: accentOf(o.brand), uppercase: style.uppercase, hook: { text: clip.hook, end: Math.min(HOOK_SECONDS, duration) } };
+  const { placed, missed } = placeOverlays(clip.overlays ?? [], o.words, duration, ctaFrom, o.moments);
+  const ass = buildAss({ hook: clip.hook, captions: captionGroups, cta: o.ctaText, ctaFrom, duration, style, accent: accentOf(o.brand), language: o.language, overlays: { placed, layout } });
+  return { ass, style, captionGroups, layout, placed, missed };
+}
+
 /** Show progress, keep a timed log of the steps, and stop here if the render was cancelled. */
 const step = (r: RenderInfo, status: RenderInfo["status"], text: string) => {
   checkCancelled();
@@ -140,6 +156,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     const failed = new Map<string, string>();
     const ensure = async (f: FootageFile) => {
       if (f.analyzedAt && f.durationSec) return true;
+      if (r.recompose && f.durationSec) return true; // a recompose doesn't pay to watch footage
       step(r, "analyzing", `Fetching and watching "${f.name}"`);
       try {
         const a = await analyzeFootage(f, c.brief);
@@ -216,6 +233,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
         params: voiceStepParams(c, clip, r.voice),
         file: takeFile,
         paid: true,
+        cachedOnly: !!r.recompose,
         save: saveNow,
         // Only a clean, word-timed take is reused later; a weak one is kept for this render only.
         keep: (t) => !transcriptionAvailable() || (!!t.al && t.al.matched >= 0.85 && t.al.extra.inside <= 3),
@@ -369,18 +387,14 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     const ctaText = c.brief.cta.text || clip.cta;
     const ctaFrom = Math.max(1, Math.min(lastStart, duration - 2.5));
     const brand = getDoc().brand;
-    const style = resolveCaptionStyle(brand, c.captions);
-    const captionGroups = groups(words, style.wordsPerCaption);
-    // Overlays land on the words they're cued to (tier items stay until the call to action).
-    const layout = { width: W, height: H, bandTop: VIDEO_TOP, bandHeight: VIDEO_H, font: style.font, fontWidths: style.fontWidths, accent: accentOf(brand), uppercase: style.uppercase, hook: { text: clip.hook, end: Math.min(HOOK_SECONDS, duration) } };
-    const { placed, missed } = placeOverlays(clip.overlays ?? [], words, duration, ctaFrom, moments);
+    const { ass: assText, style, captionGroups, layout, placed, missed } = buildClipAss({ clip, campaign: c, brand, words, moments, duration, ctaFrom, ctaText, language: r.language });
     const crowded = hiddenComments(placed, layout);
     if (crowded.length) log({ campaignId: c.id, kind: "clip", message: `Left out ${crowded.length} comment overlay(s) in "${clip.title}": too many on screen at once (${crowded.map((x) => `@${x.user}`).join(", ")}).` });
     const { stickers, missing } = await emojiStickers(placed, layout, tmp);
     if (missed.length || missing.length)
       log({ campaignId: c.id, kind: "clip", message: `Left out ${missed.length + missing.length} overlay(s) on "${clip.title}"${missed.length ? ` — cue words not in the voiceover: ${missed.map((o) => `"${o.cue ?? o.text}"`).join(", ")}` : ""}${missing.length ? ` — no image for ${missing.join(" ")}` : ""}.` });
     const ass = path.join(tmp, "subs.ass");
-    fs.writeFileSync(ass, buildAss({ hook: clip.hook, captions: captionGroups, cta: ctaText, ctaFrom, duration, style, accent: accentOf(brand), language: r.language, overlays: { placed, layout } }));
+    fs.writeFileSync(ass, assText);
     const final = path.join(tmp, "final.mp4");
     // Sound design (opt-in per brief): effects on the overlays' own times, voice-ducked game audio.
     const sound = c.brief.soundDesign ? { events: sfxEvents(placed, layout, stickers).filter((e) => e.at < duration - 0.1) } : undefined;
@@ -405,6 +419,17 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     if (voicePath) {
       editParts.voiceKey = `${stamp}/voice.wav`;
       await videoStore().put(editParts.voiceKey, voicePath, "audio/wav");
+    }
+    // For the in-browser preview: the picture without captions, with the voice, small.
+    editParts.timing = { words: words.map((w) => ({ text: w.text, start: round(w.start), end: round(w.end) })), moments, language: r.language };
+    try {
+      const proxy = path.join(tmp, "proxy.mp4");
+      const audio = voicePath ? ["-i", voicePath, "-map", "0:v", "-map", "1:a"] : ["-map", "0:v", "-map", "0:a?"];
+      await run("ffmpeg", ["-v", "error", "-y", "-i", joined, ...audio, "-t", duration.toFixed(3), "-vf", "scale=540:-2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "32", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", proxy]);
+      editParts.proxyKey = `${stamp}/proxy.mp4`;
+      await videoStore().put(editParts.proxyKey, proxy, "video/mp4");
+    } catch (err) {
+      console.error(`[render] preview proxy failed for ${clip.id}:`, errorText(err)); // the render itself is fine
     }
     editParts.overlays = placed.map((p) => ({
       kind: p.o.kind,

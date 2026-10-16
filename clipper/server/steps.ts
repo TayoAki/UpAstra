@@ -80,6 +80,8 @@ export async function cachedStep<T>(o: {
   scope?: string;
   /** Run anew even if a result is stored (an explicit "try again"); the new result replaces it. */
   fresh?: boolean;
+  /** Only reuse a stored result; never run (and pay for) the step. */
+  cachedOnly?: boolean;
   run: () => Promise<T>;
 }): Promise<{ value: T; reused: boolean }> {
   const key = stepKey(o.kind, o.version, o.params);
@@ -99,6 +101,7 @@ export async function cachedStep<T>(o: {
       // A broken or half-written entry: run the step again.
     }
   }
+  if (o.cachedOnly) throw new StepNeedsAttention(`The ${o.name} step isn't stored any more, so this can't be redone without running it again. Render instead.`);
   const prior = o.receipts[o.name];
   if (o.paid && prior?.key === key && prior.status === "started")
     throw new StepNeedsAttention(`The server restarted while the ${o.name} step was running and it may already have been charged, so it wasn't run again automatically. Start it again to redo it.`);

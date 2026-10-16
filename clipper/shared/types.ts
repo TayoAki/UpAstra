@@ -317,6 +317,8 @@ export interface RenderInfo {
   /** When this run started, and each step it went through (seconds since then). */
   startedAt?: string;
   log?: { at: number; step: string }[];
+  /** A recompose: only the final compose runs, from stored steps; nothing paid is redone. */
+  recompose?: boolean;
 }
 
 export interface EditParts {
@@ -329,6 +331,10 @@ export interface EditParts {
   /** Overlays as they were placed in the render (the editor shows them as text). */
   overlays?: { kind: OverlayKind; text: string; start: number; end: number; tier?: Tier }[];
   duration: number;
+  /** What the preview rebuilds the captions from: the shown words' times, named moments, language. */
+  timing?: { words: { text: string; start: number; end: number }[]; moments: Record<string, number>; language?: string };
+  /** A small copy of the video without captions or overlays, for the in-browser preview. */
+  proxyKey?: string;
 }
 
 export type PostStatus = "scheduled" | "live" | "submitted" | "approved" | "rejected" | "paid" | "failed";

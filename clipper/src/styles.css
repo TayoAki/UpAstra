@@ -1404,3 +1404,10 @@ tr.clickable:hover td {
   border-radius: 50%;
   vertical-align: middle;
 }
+
+/* In-browser caption preview: libass draws on a canvas laid over the proxy video. */
+.preview-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}

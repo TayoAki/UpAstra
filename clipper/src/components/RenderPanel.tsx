@@ -1,10 +1,12 @@
-import { useState } from "react";
-import { AlertTriangle, CalendarClock, Clapperboard, Download, Loader2, RotateCcw, Scissors, X } from "lucide-react";
+import { lazy, Suspense, useState } from "react";
+import { AlertTriangle, CalendarClock, Clapperboard, Download, Eye, Loader2, RotateCcw, Scissors, X } from "lucide-react";
 import { ScheduleModal } from "./ScheduleModal";
 import type { Clip, VoiceOption } from "../../shared/types";
 import { VOICES } from "../../shared/types";
 import { api } from "../api";
 import { useApp } from "../store";
+
+const ClipPreview = lazy(() => import("./ClipPreview"));
 
 const STEPS = ["queued", "analyzing", "voicing", "rendering", "done"] as const;
 
@@ -13,6 +15,9 @@ export function RenderPanel({ clip }: { clip: Clip }) {
   const { run, busy, state } = useApp();
   const [voice, setVoice] = useState<VoiceOption>(clip.render?.voice ?? "ash");
   const [scheduling, setScheduling] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const campaign = state?.campaigns.find((c) => c.id === clip.campaignId);
+  const styleKey = JSON.stringify([campaign?.captions, state?.brand]);
   const r = clip.render;
   const live = r && !["done", "failed"].includes(r.status);
   const canRender = state?.status.render === "connected";
@@ -99,6 +104,16 @@ export function RenderPanel({ clip }: { clip: Clip }) {
               </a>
             )}
           </div>
+          {r.parts?.proxyKey && (
+            <button className="btn sm ghost" onClick={() => setPreviewing(!previewing)} title="See caption and overlay changes without rendering">
+              <Eye size={14} /> {previewing ? "Hide preview" : "Preview changes"}
+            </button>
+          )}
+          {previewing && (
+            <Suspense fallback={<Loader2 size={14} className="spin" />}>
+              <ClipPreview clip={clip} styleKey={styleKey} />
+            </Suspense>
+          )}
           {r.editedAt && <p className="small muted" style={{ margin: 0 }}>Edited in the editor. Rendering again replaces the edit.</p>}
           {scheduling && <ScheduleModal clip={clip} onClose={() => setScheduling(false)} />}
           {controls("Render again")}

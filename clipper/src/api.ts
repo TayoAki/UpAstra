@@ -103,6 +103,8 @@ export const api = {
   },
   deleteClip: (id: string) => req<State>(`/clips/${id}`, "DELETE"),
   renderClip: (id: string, voice: string, override?: boolean) => req<State>(`/clips/${id}/render`, "POST", { voice, override }),
+  preview: (id: string) => req<{ proxyUrl: string; ass: string; fonts: Record<string, string>; duration: number; missed: string[] }>(`/clips/${id}/preview`),
+  recompose: (id: string) => req<State>(`/clips/${id}/recompose`, "POST", {}),
   cancelRender: (id: string) => req<State>(`/clips/${id}/render/cancel`, "POST", {}),
   videoUrl: (id: string, key: string, download = false) => `/api/clips/${id}/video?v=${encodeURIComponent(key.slice(-24))}${download ? "&download=1" : ""}`,
   editorUrl: (id: string) => `/editor/?co_clip=${encodeURIComponent(id)}#/new?width=1080&height=1920&fps=30`,

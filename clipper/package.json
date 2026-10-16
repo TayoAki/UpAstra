@@ -20,6 +20,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1151.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "express": "^5.2.1",
+    "jassub": "^2.5.21",
     "lucide-react": "^1.52.0",
     "pg": "^8.23.1",
     "react": "^19.3.0",
@@ -35,6 +36,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "concurrently": "^10.0.5",
+    "playwright-core": "^1.56.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.3",
     "vitest": "^5.0.3"

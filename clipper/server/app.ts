@@ -15,7 +15,7 @@ import { extractBrief, normalizeBrief } from "./extract";
 import { aiLive, editorModel, forwardChat, mediaLive, modelFor, spendAI } from "./llm";
 import { emptyMonth, isAdmin, monthCost, monthKey, recordAI, usageReport } from "./usage";
 import { analyzeFootage } from "./moments";
-import { cancelRender, enqueueRender, renderAvailable } from "./render";
+import { buildClipAss, cancelRender, enqueueRender, renderAvailable } from "./render";
 import { cancelJob, isPending, waitingCount } from "./jobs";
 import { footageSource, isCached, saveStream, saveTo, saveUpload } from "./footage-cache";
 import { contactSheets, frameTimes, grabFrames, MAX_CUTS_WINDOW, MAX_WINDOW, phraseWindow, sceneCutsIn, workDir } from "./frames";
@@ -250,7 +250,7 @@ export function createApp() {
     if (!req.path.startsWith("/editor"))
       res.setHeader(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+        "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
       );
     next();
   });
@@ -1340,9 +1340,42 @@ export function createApp() {
       const clip = findClip(String(req.params.id));
       const p = clip.render?.parts;
       const name = String(req.params.name);
-      const key = [...(p?.shots.map((s) => s.key) ?? []), p?.voiceKey].find((k) => k && k.split("/").pop() === name);
+      const key = [...(p?.shots.map((s) => s.key) ?? []), p?.voiceKey, p?.proxyKey].find((k) => k && k.split("/").pop() === name);
       if (!key || !key.startsWith(`${req.workspaceId}/`)) throw new HttpError(404, "Part not found");
       await streamKey(req, res, key, name.endsWith(".wav") ? "audio/wav" : "video/mp4", name);
+    }),
+  );
+
+  // The in-browser preview: the clip's captions, hook, CTA and overlays as ASS,
+  // rebuilt now with the current caption style and overlays (no render), to draw
+  // over the small caption-free proxy of the last render.
+  api.get("/clips/:id/preview", (req, res) => {
+    const clip = findClip(String(req.params.id));
+    const p = clip.render?.status === "done" ? clip.render.parts : undefined;
+    if (!p?.timing || !p.proxyKey) throw new HttpError(409, "Render this clip once more to preview caption and overlay changes here.");
+    const c = findCampaign(clip.campaignId);
+    const brand = getDoc().brand;
+    const { ass, missed } = buildClipAss({ clip, campaign: c, brand, words: p.timing.words, moments: p.timing.moments, duration: p.duration, ctaFrom: p.cta.from, ctaText: p.cta.text, language: p.timing.language });
+    const fonts: Record<string, string> = Object.fromEntries([...BUNDLED_FONTS.map((f) => [f.family, `/fonts/${f.file}`]), ...(brand?.fonts ?? []).map((f) => [f.family, `/api/brand/fonts/${f.id}/file`])]);
+    res.json({ proxyUrl: `/api/clips/${clip.id}/parts/${encodeURIComponent(p.proxyKey.split("/").pop()!)}`, ass, fonts, duration: p.duration, missed: missed.map((o) => o.cue ?? o.text), revision: clip.revision ?? 0 });
+  });
+
+  // Apply caption and overlay changes to the video: only the final compose runs,
+  // from the stored voiceover and shots. Refused if that would need anything paid.
+  api.post(
+    "/clips/:id/recompose",
+    wrap(async (req, res) => {
+      const clip = findClip(String(req.params.id));
+      const r = clip.render;
+      if (r?.status !== "done") throw new HttpError(409, "Render this clip first");
+      const pre = await preflightRender(req.workspaceId!, clip, r.voice, true);
+      if (pre.blockers.length) throw new HttpError(pre.blockers[0].status, `${pre.blockers[0].message} Nothing was charged.`);
+      if (r.voice !== "none" && !pre.voice.takeCached) throw new HttpError(409, "The voiceover would have to be recorded again (the script changed). Render instead.");
+      if (isPending(clip.id)) throw new HttpError(409, "This clip is already rendering. Nothing was charged.");
+      enqueueRender(req.workspaceId!, clip, r.voice, req.actor, true);
+      log({ campaignId: clip.campaignId, kind: "clip", message: `Re-composing "${clip.title}" with the current captions and overlays.` });
+      save();
+      res.status(202).json(stateFor());
     }),
   );
 

@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CAPTION_STYLES } from "../shared/caption-styles";
+import { joinWords } from "../shared/words";
 import type { Campaign, CampaignStats, CaptionJob, Clip, Insights, LearningReport, Post, ReferenceFormat, ServiceStatus, SocialAccount } from "../shared/types";
 import { HOOK_STYLES, PLATFORMS, VOICES } from "../shared/types";
 
@@ -567,14 +568,14 @@ export function createMcpServer(api: ApiCall): McpServer {
 
   tool(
     "transcribe",
-    "Word timings: of a rendered clip's voiceover (clipId; free), or of any video with speech at a public link (url; runs speech recognition, up to waitSec).",
+    "Word timings: of a rendered clip (clipId; free — the caption words as shown on screen, with their times), or of any video with speech at a public link (url; runs speech recognition as a captioning job, which also appears on the user's Captions page; waits up to waitSec).",
     { clipId: z.string().optional(), url: z.string().url().optional(), language: z.string().default("auto"), waitSec: z.number().int().min(0).max(240).default(120) },
     async ({ clipId, url, language, waitSec }) => {
       if (!clipId === !url) throw new ToolError("INVALID_ARGUMENT", "Give clipId or url (one of them)");
       if (clipId) {
         const pack = await api<{ captions: { words: { text: string; start: number; end: number }[] }[] }>("GET", `/clips/${encodeURIComponent(clipId)}/edit-pack`);
         const words = pack.captions.flatMap((c) => c.words);
-        return { clipId, words, text: words.map((w) => w.text).join(" ") };
+        return { clipId, words, text: joinWords(words.map((w) => w.text)) };
       }
       const { job } = await api<{ job: { id: string } }>("POST", "/captions/from-url", { url, language });
       const until = Date.now() + waitSec * 1000;
@@ -583,6 +584,7 @@ export function createMcpServer(api: ApiCall): McpServer {
         await sleep(delay);
         j = await api<CaptionJob>("GET", `/captions/${job.id}`);
       }
+      if (j.status === "failed") throw new ToolError("FAILED_PRECONDITION", `Transcription failed: ${j.error ?? "unknown error"}`, "Check the link plays as a video file with speech.");
       if (j.status !== "ready" && j.status !== "done") return { jobId: j.id, status: j.status, error: j.error, next: [{ tool: "get_caption_job", args: { jobId: j.id }, why: "Still transcribing; check again." }] satisfies Next[] };
       return { jobId: j.id, language: j.language, words: j.words.map((w) => ({ text: w.text, start: w.start, end: w.end })), text: j.words.map((w) => w.text).join(j.joiner ?? " ") };
     },

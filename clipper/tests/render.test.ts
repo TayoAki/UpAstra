@@ -160,6 +160,36 @@ describe.skipIf(!ffmpegAvailable())("render pipeline", () => {
     expect(near.body.images).toHaveLength(2);
     expect((await api("/api/frames", "POST", { clipId: clip.id, aroundPhrase: "zebra quantum" })).status).toBe(404);
     expect((await api("/api/frames", "POST", { clipId: clip.id, aroundPhrase: "—" })).status).toBe(400);
+    // The in-browser preview: the captions as ASS, rebuilt with the current style, over a small caption-free proxy.
+    const renders = () => api("/api/state").then((x) => x.body.activity.filter((a: { message: string }) => /Render queued|Re-composing/.test(a.message)).length);
+    const before = await renders();
+    const prev = await api(`/api/clips/${clip.id}/preview`);
+    expect(prev.status).toBe(200);
+    expect(prev.body.ass).toMatch(/Style: Cap,/);
+    expect(prev.body.fonts["Anton"]).toBe("/fonts/Anton-Regular.ttf");
+    const proxy = await fetch(base + prev.body.proxyUrl, { headers: { cookie } });
+    expect(proxy.status).toBe(200);
+    expect(proxy.headers.get("content-type")).toBe("video/mp4");
+    // A caption style change shows in the preview at once, with no render.
+    await api(`/api/campaigns/${id}`, "PUT", { captions: { style: "box-highlight", size: 90 } });
+    const prev2 = await api(`/api/clips/${clip.id}/preview`);
+    expect(prev2.body.ass).not.toBe(prev.body.ass);
+    expect(await renders()).toBe(before);
+
+    // A recompose applies it to the video from the stored steps: every shot reused, nothing paid.
+    const rc = await api(`/api/clips/${clip.id}/recompose`, "POST", {});
+    expect(rc.status).toBe(202);
+    let re: { status: string; steps?: Record<string, { reused?: boolean }>; cost: number; recompose?: boolean } | undefined;
+    for (let i = 0; i < 240 && !re; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      const rr = (await api("/api/state")).body.clips.find((x: { id: string }) => x.id === clip.id).render;
+      if (["done", "failed"].includes(rr.status)) re = rr;
+    }
+    expect(re?.status).toBe("done");
+    expect(re?.recompose).toBe(true);
+    expect(Object.values(re?.steps ?? {}).every((x) => x.reused)).toBe(true);
+    expect(re?.cost).toBe(0);
+
     // A rendered clip's cuts are its shot boundaries, even when the shots look alike.
     const cuts = await api("/api/scene-cuts", "POST", { clipId: clip.id });
     let at = 0;
