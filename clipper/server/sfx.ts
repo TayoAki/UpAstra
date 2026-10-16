@@ -24,11 +24,14 @@ export const SFX_GAIN: Record<SfxKind, number> = { pop: 0.5, whoosh: 0.35 };
  */
 export function sfxEvents(placed: Placed[], L: OverlayLayout, stickers?: { start: number }[]): SfxEvent[] {
   const out: SfxEvent[] = [];
-  const tiers = placed.filter((p) => p.o.kind === "tier" && p.o.text?.trim());
-  if (tiers.length) {
-    const to = Math.max(...tiers.map((t) => t.end));
-    for (const s of tierSchedule(tiers.map((t) => t.start), to)) out.push({ at: s.start, kind: "pop" }, { at: s.glideStart, kind: "whoosh" });
+  // Each board (tier list, Top-N, podium) schedules its own items.
+  for (const kind of ["tier", "rank", "podium"] as const) {
+    const items = placed.filter((p) => p.o.kind === kind && p.o.text?.trim() && (kind === "tier" || p.o.rank));
+    if (!items.length) continue;
+    const to = Math.max(...items.map((t) => t.end));
+    for (const s of tierSchedule(items.map((t) => t.start), to)) out.push({ at: s.start, kind: "pop" }, { at: s.glideStart, kind: "whoosh" });
   }
+  for (const p of placed) if (p.o.kind === "quiz" && (p.o.answers?.length ?? 0) >= 2) out.push({ at: p.start, kind: "pop" }, ...(p.o.correct !== undefined ? [{ at: p.start + (p.end - p.start) * 0.6, kind: "pop" as const }] : []));
   for (const c of layoutComments(placed, L)) if (c.shown) out.push({ at: c.start, kind: "pop" });
   for (const p of placed) if (p.o.kind === "text" && p.o.text?.trim()) out.push({ at: p.start, kind: "pop" });
   for (const s of stickers ?? placed.filter((p) => p.o.kind === "emoji" && p.o.emoji)) out.push({ at: s.start, kind: "pop" });

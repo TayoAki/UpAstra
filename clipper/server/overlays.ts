@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { UNSPACED } from "../shared/overlays";
-import { TIERS, type Overlay, type Tier } from "../shared/types";
+import { BOARD_KINDS, TIERS, type Overlay, type Tier } from "../shared/types";
 import { assColor, type Timed } from "./captions";
 import { FONT_WIDTHS, WIDE_EM } from "./font-metrics";
 import { videoStore } from "./storage";
@@ -18,7 +18,7 @@ export interface Placed {
   end: number;
 }
 
-const DEFAULT_HOLD: Record<Overlay["kind"], number> = { comment: 2.8, emoji: 1.3, text: 1.1, tier: 0 };
+const DEFAULT_HOLD: Record<Overlay["kind"], number> = { comment: 2.8, emoji: 1.3, text: 1.1, tier: 0, rank: 0, podium: 0, quiz: 3.5 };
 const norm = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
 /**
@@ -64,7 +64,7 @@ export function placeOverlays(overlays: Overlay[], words: Timed[], duration: num
       continue;
     }
     // The board stays until the call to action (a last item named just before it gets 0.6 s to land).
-    const end = o.kind === "tier" ? Math.max(start + 0.6, until) : start + (o.hold && o.hold > 0 ? Math.min(o.hold, 8) : DEFAULT_HOLD[o.kind]);
+    const end = BOARD_KINDS.includes(o.kind) ? Math.max(start + 0.6, until) : start + (o.hold && o.hold > 0 ? Math.min(o.hold, 8) : DEFAULT_HOLD[o.kind]);
     placed.push({ o, start, end: Math.min(end, duration) });
   }
   return { placed: placed.sort((a, b) => a.start - b.start), missed };
@@ -275,6 +275,106 @@ export function tierLayout(items: { text: string; tier: Tier }[], L: OverlayLayo
   return { left, top, width, labelW, rowH, items: placed };
 }
 
+/** A board item fitted into its place: centred at (cx, cy). */
+export interface Slot {
+  text: string;
+  size: number;
+  cx: number;
+  cy: number;
+  box: Box;
+}
+const emptySlot: Slot = { text: "", size: 0, cx: 0, cy: 0, box: { x: 0, y: 0, w: 0, h: 0 } };
+
+/**
+ * A Top-N list: a numbered column of `n` slots down the footage, #1 at the
+ * top. Each item is fitted to its slot (shrunk, then cut with "…"); a second
+ * item for a taken place isn't drawn.
+ */
+export function rankLayout(items: { text: string; rank: number }[], L: OverlayLayout) {
+  const px = scaleOf(L);
+  const n = Math.min(10, Math.max(3, ...items.map((i) => i.rank)));
+  const left = px(40);
+  const width = L.width - 2 * left;
+  const slotH = Math.min(px(120), Math.floor((L.bandHeight - px(40)) / n));
+  const top = L.bandTop + Math.round((L.bandHeight - slotH * n) / 2);
+  const labelW = Math.min(px(130), slotH + px(20));
+  const gap = px(20);
+  const outline = px(5);
+  const area = width - labelW - gap - px(12);
+  const taken = new Set<number>();
+  const slots = items.map((it): Slot => {
+    if (taken.has(it.rank)) return emptySlot;
+    taken.add(it.rank);
+    const size = Math.max(px(16), Math.min(px(58), Math.floor(slotH - px(14) - 2 * outline)));
+    const fit = fitText(it.text, { font: L.font, widths: L.fontWidths, size, minSize: Math.max(px(14), Math.floor(size * 0.6)), maxWidth: area - 2 * outline, maxLines: 1 });
+    const text = fit.lines[0] ?? "";
+    const w = textWidth(text, fit.size, L.font, L.fontWidths);
+    const x = left + labelW + gap + outline;
+    const cy = top + (it.rank - 1) * slotH + slotH / 2;
+    return { text, size: fit.size, cx: x + w / 2, cy, box: { x: x - outline, y: cy - fit.size / 2 - outline, w: w + 2 * outline, h: fit.size + 2 * outline } };
+  });
+  return { n, left, top, width, slotH, labelW, slots };
+}
+
+/** Podium blocks, left to right: 2nd, 1st (tallest), 3rd. */
+const PODIUM_ORDER = [2, 1, 3];
+const PODIUM_HEIGHT: Record<number, number> = { 1: 300, 2: 220, 3: 160 };
+const PODIUM_COLORS: Record<number, string> = { 1: "#F5C542", 2: "#C9CED6", 3: "#D08A4E" };
+
+/** A podium at the foot of the footage; each item's name sits above its block. */
+export function podiumLayout(items: { text: string; rank: number }[], L: OverlayLayout) {
+  const px = scaleOf(L);
+  const side = px(60);
+  const gap = px(18);
+  const blockW = Math.floor((L.width - 2 * side - 2 * gap) / 3);
+  const bottom = L.bandTop + L.bandHeight - px(24);
+  const blocks = PODIUM_ORDER.map((place, i) => {
+    const h = px(PODIUM_HEIGHT[place]);
+    return { place, x: side + i * (blockW + gap), y: bottom - h, w: blockW, h };
+  });
+  const outline = px(5);
+  const taken = new Set<number>();
+  const slots = items.map((it): Slot => {
+    if (taken.has(it.rank)) return emptySlot;
+    taken.add(it.rank);
+    const b = blocks.find((x) => x.place === it.rank)!;
+    const fit = fitText(it.text, { font: L.font, widths: L.fontWidths, size: px(52), minSize: px(26), maxWidth: b.w - 2 * outline, maxLines: 1 });
+    const text = fit.lines[0] ?? "";
+    const w = textWidth(text, fit.size, L.font, L.fontWidths);
+    const cx = b.x + b.w / 2;
+    const cy = b.y - px(16) - fit.size / 2;
+    return { text, size: fit.size, cx, cy, box: { x: cx - w / 2 - outline, y: cy - fit.size / 2 - outline, w: w + 2 * outline, h: fit.size + 2 * outline } };
+  });
+  return { blocks, slots };
+}
+
+/**
+ * A quiz strip: 2–4 answer chips across the bottom of the footage, each
+ * lettered and fitted (shrunk, wrapped onto two lines, then cut), with the
+ * question above them when there is one.
+ */
+export function quizLayout(o: Overlay, L: OverlayLayout) {
+  const px = scaleOf(L);
+  const answers = (o.answers ?? []).slice(0, 4);
+  const side = px(40);
+  const gap = px(16);
+  const n = Math.max(1, answers.length);
+  const chipW = Math.floor((L.width - 2 * side - (n - 1) * gap) / n);
+  const chipH = px(132);
+  const y = L.bandTop + L.bandHeight - px(36) - chipH;
+  const badge = px(44);
+  const chips = answers.map((a, i) => {
+    const x = side + i * (chipW + gap);
+    // The text sits right of the letter badge: 14 px in, the badge, 12 px, then the text, 14 px clear of the edge.
+    const textW = chipW - px(14) - badge - px(12) - px(14);
+    const fit = fitText(esc(a), { font: L.font, widths: L.fontWidths, size: px(40), minSize: px(20), maxWidth: textW, maxLines: 2 });
+    return { x, y, w: chipW, h: chipH, letter: "ABCD"[i], lines: fit.lines, size: fit.size, textW };
+  });
+  const q = o.text?.trim() ? fitText(esc(o.text.trim()), { font: L.font, widths: L.fontWidths, size: px(52), minSize: px(30), maxWidth: L.width - 2 * side, maxLines: 2 }) : undefined;
+  const qBox = q ? { x: side, y: y - px(20) - q.lines.length * q.size * 1.15, w: L.width - 2 * side, h: q.lines.length * q.size * 1.15 } : undefined;
+  return { chips, badge, question: q && qBox ? { ...q, box: qBox } : undefined, box: { x: side, y: qBox?.y ?? y, w: L.width - 2 * side, h: y + chipH - (qBox?.y ?? y) } };
+}
+
 /** Something else on screen for a while that comment cards must keep clear of. */
 export interface Blocked extends Box {
   start: number;
@@ -317,6 +417,7 @@ export function blockedBoxes(placed: Placed[], L: OverlayLayout): Blocked[] {
     out.push({ what: "hook", start: 0, end: L.hook.end, x: px(70) - px(7), y: L.bandTop - px(330) - px(7), w: L.width - 2 * px(70) + 2 * px(7), h: lines * fs * 1.15 + 2 * px(7) });
   }
   for (const p of placed.filter((x) => x.o.kind === "text" && x.o.text?.trim())) out.push({ what: "text", start: p.start, end: p.end, ...popLayout(p, L).box });
+  for (const p of placed.filter((x) => x.o.kind === "quiz" && (x.o.answers?.length ?? 0) >= 2)) out.push({ what: "text", start: p.start, end: p.end, ...quizLayout(p.o, L).box });
   const { size, spots } = stickerSpots(L);
   placed
     .filter((x) => x.o.kind === "emoji" && x.o.emoji)
@@ -395,12 +496,16 @@ export function overlayStyles(L: OverlayLayout): string[] {
     `Style: OvPop,${L.font},${px(124)},&H00FFFFFF,&H00FFFFFF,${accent},&H64000000,0,0,0,0,100,100,0,0,1,${px(9)},${px(4)},5,0,0,0,1`,
     `Style: OvTierLabel,${L.font},${px(64)},&H00201C1A,&H00201C1A,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1`,
     `Style: OvTierItem,${L.font},${px(48)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,${px(5)},0,4,0,0,0,1`,
+    `Style: OvRankLabel,${L.font},${px(64)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1`,
+    `Style: OvQuizQ,${L.font},${px(52)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,${px(6)},${px(2)},2,0,0,0,1`,
+    `Style: OvQuizLetter,${L.font},${px(30)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1`,
+    `Style: OvQuizText,${L.font},${px(40)},&H00201C1A,&H00201C1A,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,4,0,0,0,1`,
   ];
 }
 
 /** The comment cards of a render, laid out (while a tier board covers the footage, they sit above it). */
 export function layoutComments(placed: Placed[], L: OverlayLayout) {
-  const tiers = placed.filter((x) => x.o.kind === "tier" && x.o.text?.trim());
+  const tiers = placed.filter((x) => BOARD_KINDS.includes(x.o.kind) && x.o.text?.trim());
   const board = tiers.length ? { from: tiers[0].start, to: Math.max(...tiers.map((t) => t.end)) } : undefined;
   const comments = placed
     .filter((x) => x.o.kind === "comment" && x.o.text?.trim())
@@ -421,6 +526,22 @@ export function overlayEvents(placed: Placed[], L: OverlayLayout): string[] {
     lines.push(`Dialogue: ${layer},${ts(start)},${ts(end)},OvShape,,0,0,0,,{\\an7\\pos(${Math.round(x)},${Math.round(y)})\\1c${assColor(color)}${extra}\\p1}${drawing}{\\p0}`);
 
   const tierItems = placed.filter((x) => x.o.kind === "tier" && x.o.text?.trim());
+  const ms = (a: number, b: number) => Math.max(1, Math.round((b - a) * 1000));
+  /** Board items: each pops in large at the stage on its cue, then glides into its slot and stays. */
+  const reveal = (items: Placed[], slots: { text: string; size: number; cx: number; cy: number }[], to: number, stage: { x: number; y: number; width: number }) => {
+    const plan = tierSchedule(items.map((p) => p.start), to);
+    items.forEach((_, i) => {
+      const it = slots[i];
+      if (!it?.text) return;
+      const s = plan[i];
+      const big = fitText(it.text, { font: L.font, widths: L.fontWidths, size: px(96), minSize: it.size, maxWidth: stage.width - px(60), maxLines: 1 }).size;
+      const [cellX, cellY, sx, sy] = [Math.round(it.cx), Math.round(it.cy), Math.round(stage.x), Math.round(stage.y)];
+      const popMs = Math.round(Math.min(180, (s.glideStart - s.start) * 1000 * 0.5));
+      lines.push(`Dialogue: 7,${ts(s.start)},${ts(s.glideStart)},OvTierItem,,0,0,0,,{\\an5\\pos(${sx},${sy})\\fs${big}\\fscx40\\fscy40\\t(0,${popMs},\\fscx100\\fscy100)\\fad(${Math.min(100, popMs)},0)}${it.text}`);
+      lines.push(`Dialogue: 7,${ts(s.glideStart)},${ts(s.glideEnd)},OvTierItem,,0,0,0,,{\\an5\\move(${sx},${sy},${cellX},${cellY},0,${ms(s.glideStart, s.glideEnd)})\\fs${big}\\t(0,${ms(s.glideStart, s.glideEnd)},\\fs${it.size})}${it.text}`);
+      lines.push(`Dialogue: 6,${ts(s.glideEnd)},${ts(s.end)},OvTierItem,,0,0,0,,{\\an5\\pos(${cellX},${cellY})\\fs${it.size}}${it.text}`);
+    });
+  };
 
   // Comment cards, laid out so cards on screen together never overlap.
   for (const p of layoutComments(placed, L)) {
@@ -478,21 +599,60 @@ export function overlayEvents(placed: Placed[], L: OverlayLayout): string[] {
     );
     // Each item pops in large at the board's centre on its cue, holds while it's
     // talked about, then glides and shrinks into its cell before the next one.
-    const plan = tierSchedule(tiers.map((p) => p.start), to);
-    const stageX = left + width / 2;
-    const stageY = top + (rowH * TIERS.length) / 2;
-    tiers.forEach((_, i) => {
-      const it = grid.items[i];
-      if (!it.text) return;
-      const s = plan[i];
-      const stage = fitText(it.text, { font: L.font, widths: L.fontWidths, size: px(96), minSize: it.size, maxWidth: width - px(60), maxLines: 1 }).size;
-      const cellX = Math.round(it.x + textWidth(it.text, it.size, L.font, L.fontWidths) / 2);
-      const cellY = Math.round(it.cy);
-      const ms = (a: number, b: number) => Math.max(1, Math.round((b - a) * 1000));
-      const popMs = Math.round(Math.min(180, (s.glideStart - s.start) * 1000 * 0.5));
-      lines.push(`Dialogue: 7,${ts(s.start)},${ts(s.glideStart)},OvTierItem,,0,0,0,,{\\an5\\pos(${Math.round(stageX)},${Math.round(stageY)})\\fs${stage}\\fscx40\\fscy40\\t(0,${popMs},\\fscx100\\fscy100)\\fad(${Math.min(100, popMs)},0)}${it.text}`);
-      lines.push(`Dialogue: 7,${ts(s.glideStart)},${ts(s.glideEnd)},OvTierItem,,0,0,0,,{\\an5\\move(${Math.round(stageX)},${Math.round(stageY)},${cellX},${cellY},0,${ms(s.glideStart, s.glideEnd)})\\fs${stage}\\t(0,${ms(s.glideStart, s.glideEnd)},\\fs${it.size})}${it.text}`);
-      lines.push(`Dialogue: 6,${ts(s.glideEnd)},${ts(s.end)},OvTierItem,,0,0,0,,{\\an5\\pos(${cellX},${cellY})\\fs${it.size}}${it.text}`);
+    reveal(
+      tiers,
+      grid.items.map((it) => ({ text: it.text, size: it.size, cx: it.x + textWidth(it.text, it.size, L.font, L.fontWidths) / 2, cy: it.cy })),
+      to,
+      { x: left + width / 2, y: top + (rowH * TIERS.length) / 2, width },
+    );
+  }
+
+  // A Top-N list: numbered slots down the footage; items land in their place and stay.
+  const ranks = placed.filter((x) => x.o.kind === "rank" && x.o.text?.trim() && x.o.rank);
+  if (ranks.length) {
+    const from = ranks[0].start;
+    const to = Math.max(...ranks.map((t) => t.end));
+    const g = rankLayout(ranks.map((p) => ({ text: esc(p.o.text!.trim()), rank: p.o.rank! })), L);
+    shape(from, to, g.left - px(8), g.top - px(8), "#141414", roundedRect(g.width + px(16), g.slotH * g.n + px(16), px(18)), 3, "\\1a&H30&\\fad(200,0)");
+    for (let k = 0; k < g.n; k++) {
+      const y = g.top + k * g.slotH;
+      shape(from, to, g.left, y + px(4), k === 0 ? L.accent : "#2A2A2A", roundedRect(g.labelW, g.slotH - px(8), px(10)), 4, "\\shad0\\fad(200,0)");
+      lines.push(`Dialogue: 5,${ts(from)},${ts(to)},OvRankLabel,,0,0,0,,{\\an5\\pos(${Math.round(g.left + g.labelW / 2)},${Math.round(y + g.slotH / 2)})\\fs${Math.min(px(64), Math.round(g.slotH * 0.55))}\\fad(200,0)}#${k + 1}`);
+    }
+    reveal(ranks, g.slots, to, { x: g.left + g.width / 2, y: g.top + (g.slotH * g.n) / 2, width: g.width });
+  }
+
+  // A podium: 2nd, 1st, 3rd; each name lands above its block and stays.
+  const podium = placed.filter((x) => x.o.kind === "podium" && x.o.text?.trim() && x.o.rank);
+  if (podium.length) {
+    const from = podium[0].start;
+    const to = Math.max(...podium.map((t) => t.end));
+    const g = podiumLayout(podium.map((p) => ({ text: esc(p.o.text!.trim()), rank: p.o.rank! })), L);
+    for (const b of g.blocks) {
+      // Blocks rise from the floor as the podium appears.
+      shape(from, to, b.x, b.y, PODIUM_COLORS[b.place], roundedRect(b.w, b.h, px(14)), 4, `\\clip(${b.x},${b.y + b.h},${b.x + b.w},${b.y + b.h})\\t(0,260,\\clip(${b.x},${b.y},${b.x + b.w},${b.y + b.h}))`);
+      lines.push(`Dialogue: 5,${ts(from)},${ts(to)},OvRankLabel,,0,0,0,,{\\an5\\pos(${Math.round(b.x + b.w / 2)},${Math.round(b.y + Math.min(b.h / 2, px(70)))})\\1c&H00201C1A&\\fs${px(72)}\\fad(260,0)}${b.place}`);
+    }
+    const top = Math.min(...g.blocks.map((b) => b.y));
+    reveal(podium, g.slots, to, { x: L.width / 2, y: L.bandTop + (top - L.bandTop) / 2, width: L.width - px(120) });
+  }
+
+  // Quiz strips: answer chips pop in one after another; the right one lights up for the last 40%.
+  for (const p of placed.filter((x) => x.o.kind === "quiz" && (x.o.answers?.length ?? 0) >= 2)) {
+    const q = quizLayout(p.o, L);
+    const reveal = p.o.correct !== undefined ? p.start + (p.end - p.start) * 0.6 : undefined;
+    if (q.question)
+      lines.push(`Dialogue: 8,${ts(p.start)},${ts(p.end)},OvQuizQ,,0,0,0,,{\\an2\\pos(${Math.round(L.width / 2)},${Math.round(q.question.box.y + q.question.box.h)})${q.question.size !== px(52) ? `\\fs${q.question.size}` : ""}\\fad(120,160)}${q.question.lines.join("\\N")}`);
+    q.chips.forEach((c, i) => {
+      const t0 = p.start + i * 0.08;
+      const pop = `\\fad(100,160)\\fscx70\\fscy70\\t(0,140,\\fscx100\\fscy100)\\org(${Math.round(c.x + c.w / 2)},${Math.round(c.y + c.h / 2)})`;
+      const right = reveal !== undefined && i === p.o.correct;
+      shape(t0, reveal ?? p.end, c.x, c.y, "#FFFFFF", roundedRect(c.w, c.h, px(22)), 8, pop);
+      if (reveal !== undefined) shape(reveal, p.end, c.x, c.y, right ? L.accent : "#FFFFFF", roundedRect(c.w, c.h, px(22)), 8, right ? "\\fad(0,160)\\fscx106\\fscy106\\t(0,120,\\fscx100\\fscy100)" : "\\1a&H80&\\fad(0,160)");
+      shape(t0, p.end, c.x + px(14), c.y + (c.h - q.badge) / 2, "#201C1A", roundedRect(q.badge, q.badge, q.badge / 2), 9, `\\shad0${pop}`);
+      lines.push(`Dialogue: 10,${ts(t0)},${ts(p.end)},OvQuizLetter,,0,0,0,,{\\an5\\pos(${Math.round(c.x + px(14) + q.badge / 2)},${Math.round(c.y + c.h / 2)})\\fad(100,160)}${c.letter}`);
+      const tx = c.x + px(14) + q.badge + px(12);
+      lines.push(`Dialogue: 10,${ts(t0)},${ts(p.end)},OvQuizText,,0,0,0,,{\\an4\\pos(${Math.round(tx)},${Math.round(c.y + c.h / 2)})${c.size !== px(40) ? `\\fs${c.size}` : ""}\\fad(100,160)}${c.lines.join("\\N")}`);
     });
   }
   return lines;

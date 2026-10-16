@@ -1279,15 +1279,19 @@ export function createApp() {
       const clip = findClip(String(req.params.id));
       const c = findCampaign(clip.campaignId);
       if (!clip.comments?.some((x) => !x.resolved)) throw new HttpError(409, "This clip has no open comments");
+      if (isPending(clip.id)) throw new HttpError(409, "This clip is rendering; apply the comments when it's done.");
       spendAI(req.workspaceId!, 1);
-      const rev = clip.revision ?? 0;
+      // What a person (or agent) might edit meanwhile; a render finishing only changes its length and status.
+      const planOf = (x: Clip) => JSON.stringify([x.hook, x.narration, x.onScreenText, x.cta, x.shots, x.caption, x.hashtags, x.overlays]);
+      const before = planOf(clip);
+      const passed = clip.qa.pass;
       const r = await reviseFromComments(c, clip);
-      // Someone edited it while the planner worked: don't overwrite their change.
-      if ((clip.revision ?? 0) !== rev) throw new HttpError(409, "The plan was edited while the comments were being applied; apply them again.");
+      if (planOf(clip) !== before) throw new HttpError(409, "The plan was edited while the comments were being applied, so the revision wasn't saved (the AI call was charged). Apply them again.");
       const d = r.draft;
-      Object.assign(clip, { hook: d.hook, narration: d.narration, onScreenText: d.onScreenText, cta: d.cta, shots: d.shots, lengthSec: d.lengthSec, caption: d.caption, hashtags: d.hashtags, ...(d.overlays ? { overlays: d.overlays } : {}), revision: rev + 1, updatedAt: now() });
+      Object.assign(clip, { hook: d.hook, narration: d.narration, onScreenText: d.onScreenText, cta: d.cta, shots: d.shots, lengthSec: d.lengthSec, caption: d.caption, hashtags: d.hashtags, ...(d.overlays ? { overlays: d.overlays } : {}), revision: (clip.revision ?? 0) + 1, updatedAt: now() });
       clip.qa = checkClip(clip, c.brief);
-      if (clip.status === "rejected") clip.status = "draft";
+      // A revision that breaks a rule goes back to review instead of staying approved (B7.2's guarantee).
+      if (clip.status === "rejected" || (!clip.qa.pass && (passed || clip.status === "approved" || clip.status === "ready"))) clip.status = "draft";
       for (const cm of clip.comments ?? []) if (r.applied.includes(cm.id)) cm.resolved = true;
       log({ campaignId: c.id, kind: "clip", message: `Applied ${r.applied.length} review comment(s) to "${clip.title}"${clip.qa.pass ? "" : " — it now fails a rule, check it"}.`, cost: r.cost });
       save();

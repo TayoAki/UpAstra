@@ -1,5 +1,5 @@
 import { displayText, momentNames } from "./markup";
-import { OVERLAY_KINDS, TIERS, type Overlay, type Tier } from "./types";
+import { BOARD_KINDS, OVERLAY_KINDS, TIERS, type Overlay, type Tier } from "./types";
 
 // Overlay validation shared by the server (plans, edits) and the UI (warnings).
 
@@ -52,8 +52,16 @@ export function sanitizeOverlays(raw: unknown, script?: string, makeId: () => st
       if (!EMOJI.test(e)) continue;
       // One emoji (a single grapheme), not a string of them.
       o.emoji = typeof Intl !== "undefined" && "Segmenter" in Intl ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(e)][0].segment : e;
+    } else if (kind === "quiz") {
+      const answers = (Array.isArray(x.answers) ? x.answers : []).map((a) => str(a, 32)).filter(Boolean).slice(0, 4);
+      if (answers.length < 2) continue;
+      o.answers = answers;
+      const q = str(x.text, 60);
+      if (q) o.text = q;
+      const k = Number(x.correct);
+      if (Number.isInteger(k) && k >= 0 && k < answers.length) o.correct = k;
     } else {
-      const text = str(x.text, kind === "comment" ? 140 : kind === "tier" ? 24 : 40);
+      const text = str(x.text, kind === "comment" ? 140 : kind === "tier" || kind === "rank" || kind === "podium" ? 24 : 40);
       if (!text) continue;
       o.text = text;
     }
@@ -62,9 +70,18 @@ export function sanitizeOverlays(raw: unknown, script?: string, makeId: () => st
       const user = str(x.user, 24).replace(/^@/, "").replace(/[^\w.]/g, "");
       if (user) o.user = user;
     }
+    if (kind === "rank" || kind === "podium") {
+      const n = Math.round(Number(x.rank));
+      const max = kind === "podium" ? 3 : 10;
+      if (!(n >= 1 && n <= max)) continue;
+      o.rank = n;
+    }
     if (kind === "tier") o.tier = (TIERS as readonly string[]).includes(str(x.tier, 1).toUpperCase()) ? (str(x.tier, 1).toUpperCase() as Tier) : "C";
     if (!o.cue && o.at === undefined) continue;
     if (script && o.cue && !cueInScript(o.cue, script) && o.at === undefined) continue;
+    // One board a clip: a tier list, a Top-N or a podium (they'd cover each other).
+    const board = out.find((y) => BOARD_KINDS.includes(y.kind))?.kind;
+    if (board && BOARD_KINDS.includes(o.kind) && o.kind !== board) continue;
     out.push(o);
     if (out.length >= MAX_OVERLAYS) break;
   }

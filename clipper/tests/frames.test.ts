@@ -92,6 +92,28 @@ describe.skipIf(!ffmpegAvailable())("frames from a video", () => {
     expect(size).toBe(`${20 * 160},${18 * 90}`);
   }, 120_000);
 
+  it("shows each tile's own moment, even with keyframes 5 s apart", async () => {
+    // Brightness ramps 0 → 255 over 20 s, keyframes every 5 s: tile i must show second i.
+    const ramp = path.join(dir, "ramp.mp4");
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=160x90:r=10:d=20", "-vf", "geq=lum='T*12':cb=128:cr=128", "-c:v", "libx264", "-preset", "ultrafast", "-g", "50", "-pix_fmt", "yuv420p", ramp]);
+    const out = path.join(dir, "ramp-board.jpg");
+    await buildStoryboard(ramp, 20, out);
+    const lum = (i: number) => execFileSync("ffmpeg", ["-v", "error", "-i", out, "-vf", `crop=120:60:${i * 160 + 20}:15,scale=1:1`, "-f", "rawvideo", "-pix_fmt", "gray", "-"])[0];
+    // Limited-range luma: Y = 12·t reads back as (Y − 16) × 255/219.
+    for (const i of [2, 4, 7, 13, 18]) expect(Math.abs(lum(i) - ((i * 12 - 16) * 255) / 219)).toBeLessThan(6);
+  }, 60_000);
+
+  it("fills the last tiles when keyframes are far apart", async () => {
+    const white = path.join(dir, "white.mp4");
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=white:s=160x90:r=10:d=20", "-c:v", "libx264", "-preset", "ultrafast", "-g", "50", "-pix_fmt", "yuv420p", white]);
+    const out = path.join(dir, "white-board.jpg");
+    const p = await buildStoryboard(white, 20, out);
+    expect(p.count).toBe(20);
+    // The last tile (row 1, col 19) is white like the rest, not black padding.
+    const px = execFileSync("ffmpeg", ["-v", "error", "-i", out, "-vf", `crop=160:90:${19 * 160}:0,scale=1:1`, "-f", "rawvideo", "-pix_fmt", "gray", "-"]);
+    expect(px[0]).toBeGreaterThan(200);
+  }, 60_000);
+
   it("finds the scene cut", async () => {
     const cuts = await sceneCutsIn(src, 0, 6);
     expect(cuts).toHaveLength(1);

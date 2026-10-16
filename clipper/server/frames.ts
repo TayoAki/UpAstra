@@ -150,10 +150,14 @@ export function storyboardPlan(duration: number): Storyboard {
   return { interval, count, cols, rows: Math.ceil(count / cols), tileW: STORYBOARD.tileW, tileH: STORYBOARD.tileH };
 }
 
-/** Draw the storyboard atlas (JPEG) from keyframes only, so even long files are quick. */
+/**
+ * Draw the storyboard atlas (JPEG): tile i is the frame at i × interval.
+ * Every frame is decoded (keyframes alone would show a moment up to a GOP
+ * late); `fps` picks the frames before anything is scaled, so it stays cheap.
+ */
 export async function buildStoryboard(src: string, duration: number, out: string): Promise<Storyboard> {
   const p = storyboardPlan(duration);
-  const fit = `scale=${p.tileW}:${p.tileH}:force_original_aspect_ratio=decrease,pad=${p.tileW}:${p.tileH}:(ow-iw)/2:(oh-ih)/2:color=black`;
-  await run("ffmpeg", [...netArgs(src), "-v", "error", "-y", "-skip_frame", "nokey", "-i", src, "-an", "-vf", `fps=1/${p.interval},${fit},tile=${p.cols}x${p.rows}:color=black`, "-frames:v", "1", "-q:v", "5", out], 5 * 60_000);
+  const fit = `scale=${p.tileW}:${p.tileH}:force_original_aspect_ratio=decrease:flags=fast_bilinear,pad=${p.tileW}:${p.tileH}:(ow-iw)/2:(oh-ih)/2:color=black`;
+  await run("ffmpeg", [...netArgs(src), "-v", "error", "-y", "-i", src, "-an", "-sn", "-vf", `fps=1/${p.interval}:round=up:eof_action=pass,${fit},tile=${p.cols}x${p.rows}:color=black`, "-frames:v", "1", "-q:v", "5", out], 10 * 60_000);
   return p;
 }

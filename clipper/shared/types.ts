@@ -184,13 +184,18 @@ export interface Clip {
 
 // ---- Overlays ------------------------------------------------------------------
 
-export type OverlayKind = "comment" | "emoji" | "text" | "tier";
+export type OverlayKind = "comment" | "emoji" | "text" | "tier" | "rank" | "podium" | "quiz";
 export const OVERLAY_KINDS: { id: OverlayKind; label: string; hint: string }[] = [
   { id: "comment", label: "Comment bubble", hint: "A viewer comment pops up, like a reply-to-comment video." },
   { id: "emoji", label: "Emoji pop", hint: "An emoji bounces in on a word." },
   { id: "text", label: "Pop-up text", hint: "A big word or number pops on screen." },
   { id: "tier", label: "Tier list item", hint: "Drops the item into a tier (S–D) as it's said; the board stays." },
+  { id: "rank", label: "Top-N item", hint: "Puts the item in a numbered column (#1–#10) as it's said; the list stays." },
+  { id: "podium", label: "Podium place", hint: "Puts the item on the 1st, 2nd or 3rd place podium as it's said; the podium stays." },
+  { id: "quiz", label: "Quiz answers", hint: "Shows 2–4 answer options along the bottom; the right one lights up before it goes." },
 ];
+/** Overlay kinds that build a board which stays until the call to action. */
+export const BOARD_KINDS: OverlayKind[] = ["tier", "rank", "podium"];
 export const TIERS = ["S", "A", "B", "C", "D"] as const;
 export type Tier = (typeof TIERS)[number];
 
@@ -208,6 +213,11 @@ export interface Overlay {
   user?: string;
   emoji?: string;
   tier?: Tier;
+  /** Top-N place (1–10) or podium place (1–3). */
+  rank?: number;
+  /** Quiz options (2–4) and which one is right (0-based). */
+  answers?: string[];
+  correct?: number;
 }
 
 // ---- Reference formats ("clone a viral video") ------------------------------------

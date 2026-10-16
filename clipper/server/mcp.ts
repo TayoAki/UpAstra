@@ -345,12 +345,15 @@ export function createMcpServer(api: ApiCall): McpServer {
   );
 
   const OVERLAY = z.object({
-    kind: z.enum(["comment", "emoji", "text", "tier"]),
+    kind: z.enum(["comment", "emoji", "text", "tier", "rank", "podium", "quiz"]).describe("One board kind per clip: tier, rank (Top-N) or podium"),
     cue: z.string().describe("Exact words from the voiceover the overlay appears with"),
     text: z.string().optional().describe("Comment text, pop-up word, or tier-list item"),
     user: z.string().optional().describe("Comment author handle"),
     emoji: z.string().optional(),
     tier: z.enum(["S", "A", "B", "C", "D"]).optional(),
+    rank: z.number().int().min(1).max(10).optional().describe("rank: place 1–10; podium: 1–3"),
+    answers: z.array(z.string().max(32)).min(2).max(4).optional().describe("quiz: the options"),
+    correct: z.number().int().min(0).max(3).optional().describe("quiz: which option is right (0-based); it lights up before the strip goes"),
     hold: z.number().optional().describe("Seconds on screen"),
   });
 

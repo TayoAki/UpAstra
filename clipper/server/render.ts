@@ -50,7 +50,9 @@ tenantLoadHooks.push((ws, doc) => {
     const r = c.render;
     if (!r || ["done", "failed"].includes(r.status) || isPending(c.id)) continue;
     if (!ffmpegAvailable() || (r.resumes ?? 0) >= MAX_RESUMES) {
-      c.render = { ...r, status: "failed", step: "Interrupted by a restart", error: "Interrupted by a server restart — render it again." };
+      // A recompose that can't resume leaves the finished video it was replacing.
+      if (r.recompose && r.previous) c.render = { ...r.previous };
+      else c.render = { ...r, status: "failed", step: "Interrupted by a restart", error: "Interrupted by a server restart — render it again." };
       if (c.status === "rendering") c.status = "approved";
       continue;
     }
@@ -455,7 +457,13 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     }
     editParts.overlays = placed.map((p) => ({
       kind: p.o.kind,
-      text: p.o.kind === "emoji" ? p.o.emoji ?? "" : p.o.kind === "comment" ? `${p.o.user ? `@${p.o.user}: ` : ""}${p.o.text ?? ""}` : (p.o.text ?? ""),
+      text:
+        p.o.kind === "emoji" ? p.o.emoji ?? ""
+        : p.o.kind === "comment" ? `${p.o.user ? `@${p.o.user}: ` : ""}${p.o.text ?? ""}`
+        : p.o.kind === "rank" ? `#${p.o.rank} ${p.o.text ?? ""}`
+        : p.o.kind === "podium" ? `${p.o.rank}. ${p.o.text ?? ""}`
+        : p.o.kind === "quiz" ? [p.o.text, (p.o.answers ?? []).map((a, i) => `${"ABCD"[i]}) ${a}`).join("  ")].filter(Boolean).join(" — ")
+        : (p.o.text ?? ""),
       start: round(p.start),
       end: round(p.end),
       tier: p.o.tier,
