@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CAPTION_STYLES } from "../shared/caption-styles";
-import { HOOK_STYLES, OVERLAY_KINDS, type FormatBreakdown, type HookStyle, type OverlayKind, type ReferenceFormat } from "../shared/types";
+import { speechLoad } from "../shared/rules";
+import { BEAT_ANCHORS, HOOK_STYLES, OVERLAY_KINDS, type BeatAnchor, type FormatBreakdown, type HookStyle, type OverlayKind, type ReferenceFormat } from "../shared/types";
 import { alert, isUserError } from "./alerts";
 import { getDoc, HttpError, loadTenant, log, now, runInWorkspace, save, saveNow, tenantLoadHooks } from "./db";
 import { chatJSON, mediaLive, modelFor } from "./llm";
@@ -27,7 +28,8 @@ Return JSON:
 {"summary": one paragraph naming the format (e.g. "reply-to-comment tier list"),
  "whyItWorks": [3-5 short reasons tied to what happens on screen],
  "hook": {"text": the exact opening line or on-screen hook, "style": one of ${HOOK_STYLES.map((h) => h.id).join("|")}, "seconds": how long the hook lasts, "visual": what's on screen during it},
- "beats": [{"start","end","purpose" (e.g. setup, payoff, twist, proof, cta),"visual","onScreenText","narration"}] covering the whole video,
+ "beats": [{"start","end","purpose" (e.g. setup, payoff, twist, proof, cta),"job": what it does for the viewer in a few words,"anchor": what it hangs on (line|visual|cut|text|overlay),"visual","onScreenText","narration"}] covering the whole video,
+ "systems": [{"name","job","how"}] for elements that run through the whole video (a running board, a counter, a recurring sound or visual gag),
  "pacing": {"cuts": number of cuts, "avgShotSec", "notes"},
  "captions": {"style": the closest of ${CAPTION_STYLES.map((s) => s.id).join("|")}, "wordsPerCaption": 1-4, "notes"},
  "overlays": [{"kind": one of ${OVERLAY_KINDS.map((k) => k.id).join("|")}, "atSec", "description", "example"}] for comment stickers, emoji pops, big pop-up words or ranking boards you see,
@@ -111,11 +113,15 @@ async function analyze(t: Task) {
     set(f, { durationSec: Math.round(info.duration * 10) / 10, width: info.width, height: info.height });
 
     let timedText = "";
+    let speech: FormatBreakdown["speech"];
     if (transcriptionAvailable() && info.hasAudio) {
       set(f, { step: "Transcribing what's said" });
       try {
         const tr = await transcribe(src, {});
         const joiner = tr.joiner ?? " ";
+        // How fast it's spoken: words and syllables (or characters/morae) a second, first word to last.
+        const span = tr.words.length > 3 ? tr.words[tr.words.length - 1].end - tr.words[0].start : 0;
+        if (span > 2) speech = { wordsPerSec: Math.round((tr.words.length / span) * 10) / 10, unitsPerSec: Math.round((speechLoad(tr.words.map((w) => w.text).join(joiner)) / span) * 10) / 10 };
         set(f, { language: tr.language, transcript: tr.words.map((w) => w.text).join(joiner).trim().slice(0, 6000) });
         // Words grouped into short timed lines for the model.
         const lines: string[] = [];
@@ -159,7 +165,7 @@ async function analyze(t: Task) {
       },
     });
     if (reused) r.cost = 0;
-    const breakdown = cleanBreakdown(r.json, info.duration);
+    const breakdown = cleanBreakdown(r.json, info.duration, speech);
     set(f, { status: "ready", step: undefined, refresh: undefined, breakdown, cost: Math.round(((f.cost ?? 0) + r.cost) * 10000) / 10000, model: r.model });
     log({ kind: "clip", message: `Broke down "${f.name}" into a format: ${breakdown.summary.slice(0, 120)}`, cost: r.cost || undefined });
   } catch (err) {
@@ -180,7 +186,7 @@ const num = (v: unknown, max: number) => {
   return Number.isFinite(n) && n >= 0 ? Math.min(max, Math.round(n * 10) / 10) : 0;
 };
 
-export function cleanBreakdown(raw: Record<string, unknown>, duration: number): FormatBreakdown {
+export function cleanBreakdown(raw: Record<string, unknown>, duration: number, speech?: FormatBreakdown["speech"]): FormatBreakdown {
   const o = (v: unknown) => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
   const hook = o(raw.hook);
   const style = str(hook.style, 20) as HookStyle;
@@ -193,7 +199,19 @@ export function cleanBreakdown(raw: Record<string, unknown>, duration: number): 
   const beats = (Array.isArray(raw.beats) ? raw.beats : [])
     .slice(0, 20)
     .map((b) => o(b))
-    .map((b) => ({ start: num(b.start, duration), end: num(b.end, duration), purpose: str(b.purpose, 60), visual: str(b.visual, 240), onScreenText: str(b.onScreenText, 160) || undefined, narration: str(b.narration, 400) || undefined }))
+    .map((b) => {
+      const anchor = str(b.anchor, 12).toLowerCase() as BeatAnchor;
+      return {
+        start: num(b.start, duration),
+        end: num(b.end, duration),
+        purpose: str(b.purpose, 60),
+        ...(str(b.job, 120) ? { job: str(b.job, 120) } : {}),
+        ...(BEAT_ANCHORS.includes(anchor) ? { anchor } : {}),
+        visual: str(b.visual, 240),
+        onScreenText: str(b.onScreenText, 160) || undefined,
+        narration: str(b.narration, 400) || undefined,
+      };
+    })
     .filter((b) => b.purpose && b.end > b.start)
     .sort((a, b) => a.start - b.start);
   return {
@@ -201,6 +219,12 @@ export function cleanBreakdown(raw: Record<string, unknown>, duration: number): 
     whyItWorks: (Array.isArray(raw.whyItWorks) ? raw.whyItWorks : []).map((x) => str(x, 200)).filter(Boolean).slice(0, 6),
     hook: { text: str(hook.text, 200), style: HOOK_STYLES.some((h) => h.id === style) ? style : "other", seconds: num(hook.seconds, 15) || 2, visual: str(hook.visual, 240) },
     beats,
+    systems: (Array.isArray(raw.systems) ? raw.systems : [])
+      .slice(0, 6)
+      .map((x) => o(x))
+      .map((x) => ({ name: str(x.name, 60), job: str(x.job, 120), how: str(x.how, 200) }))
+      .filter((x) => x.name && x.job),
+    ...(speech && speech.unitsPerSec > 0 ? { speech } : {}),
     pacing: { cuts: Math.round(num(pacing.cuts, 500)), avgShotSec: num(pacing.avgShotSec, 60), notes: str(pacing.notes, 300) },
     captions: { style: CAPTION_STYLES.some((s) => s.id === capStyle) ? capStyle : "bold-pop", wordsPerCaption: Math.max(1, Math.min(4, Math.round(num(caps.wordsPerCaption, 4)) || 3)), notes: str(caps.notes, 300) },
     overlays: (Array.isArray(raw.overlays) ? raw.overlays : [])
@@ -215,21 +239,35 @@ export function cleanBreakdown(raw: Record<string, unknown>, duration: number): 
   };
 }
 
-/** What the clip planner gets: the format without the reference's own words. */
+const share = (sec: number, total: number) => (total > 0 ? Math.round((sec / total) * 100) / 100 : 0);
+
+/**
+ * What the clip planner gets: the format's structure as relationships (order,
+ * share of the runtime, what each part is for) rather than the reference's
+ * seconds or words, plus lenses for footage that lacks the reference's elements.
+ */
 export function formatForPlanner(f: ReferenceFormat) {
   const b = f.breakdown!;
+  const total = b.lengthSec || f.durationSec || Math.max(1, ...b.beats.map((x) => x.end));
+  const systems = b.systems ?? [];
   return {
     name: f.name,
     summary: b.summary,
     recipe: b.recipe,
-    hookStyle: b.hook.style,
-    hookSeconds: b.hook.seconds,
-    beats: b.beats.map((x) => ({ start: x.start, end: x.end, purpose: x.purpose, visual: x.visual, onScreenText: x.onScreenText ? "yes" : undefined })),
-    pacing: b.pacing,
-    lengthSec: b.lengthSec,
-    overlays: b.overlays.map((o) => ({ kind: o.kind, atSec: o.atSec, what: o.description })),
-    voice: b.voice,
+    hook: { style: b.hook.style, share: share(b.hook.seconds, total) },
+    beats: b.beats.map((x, i) => ({ order: i + 1, share: share(x.end - x.start, total), purpose: x.purpose, job: x.job, anchor: x.anchor, visual: x.visual, onScreenText: x.onScreenText ? "yes" : undefined })),
+    systems,
+    pacing: { shotsPer10s: total ? Math.round((b.pacing.cuts / total) * 100) / 10 : 0, notes: b.pacing.notes },
+    referenceLengthSec: b.lengthSec,
+    overlays: b.overlays.map((o) => ({ kind: o.kind, at: share(o.atSec, total), what: o.description })),
+    voice: { ...b.voice, ...(b.speech ? { syllablesPerSec: b.speech.unitsPerSec } : {}) },
     whyItWorks: b.whyItWorks,
+    lenses: [
+      "Keep the beats' order, jobs and shares of the runtime; scale them to this clip's length.",
+      "Where this campaign's footage can't show what a beat shows, keep the beat's job and carry it with narration, on-screen text or an overlay instead.",
+      ...systems.map((s) => `If you can't keep "${s.name}", give its job (${s.job}) to something that runs through the clip.`),
+      "Use this campaign's product and facts; never the reference's subject, words or claims.",
+    ],
   };
 }
 

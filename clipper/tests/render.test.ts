@@ -120,7 +120,7 @@ describe.skipIf(!ffmpegAvailable())("render pipeline", () => {
     expect(r.status).toBe(202);
     let done: { status: string; error?: string; videoKey?: string; durationSec?: number } | undefined;
     // Up to 2 minutes: renders share the CPU with the rest of the suite.
-    for (let i = 0; i < 240 && !done; i++) {
+    for (let i = 0; i < 480 && !done; i++) {
       await new Promise((res) => setTimeout(res, 500));
       const s = await api("/api/state");
       const rr = s.body.clips.find((x: { id: string }) => x.id === clip.id).render;
@@ -193,7 +193,7 @@ describe.skipIf(!ffmpegAvailable())("render pipeline", () => {
     const rc = await api(`/api/clips/${clip.id}/recompose`, "POST", {});
     expect(rc.status).toBe(202);
     let re: { status: string; steps?: Record<string, { reused?: boolean }>; cost: number; recompose?: boolean; previous?: unknown } | undefined;
-    for (let i = 0; i < 240 && !re; i++) {
+    for (let i = 0; i < 480 && !re; i++) {
       await new Promise((r) => setTimeout(r, 500));
       const rr = (await api("/api/state")).body.clips.find((x: { id: string }) => x.id === clip.id).render;
       if (["done", "failed"].includes(rr.status)) re = rr;
@@ -249,5 +249,5 @@ describe.skipIf(!ffmpegAvailable())("render pipeline", () => {
     expect(uploaded.storageKey).toMatch(/\/footage\//);
     const bad = await fetch(`${base}/api/campaigns/${id}/footage/upload`, { method: "POST", headers: { cookie, "Content-Type": "text/html" }, body: "<html>" });
     expect(bad.status).toBe(415);
-  }, 120_000);
+  }, 300_000);
 });

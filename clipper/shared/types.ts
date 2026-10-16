@@ -222,6 +222,9 @@ export interface Overlay {
 
 // ---- Reference formats ("clone a viral video") ------------------------------------
 
+export type BeatAnchor = "line" | "visual" | "cut" | "text" | "overlay";
+export const BEAT_ANCHORS: BeatAnchor[] = ["line", "visual", "cut", "text", "overlay"];
+
 export type FormatStatus = "uploaded" | "analyzing" | "ready" | "failed";
 
 export interface FormatBreakdown {
@@ -229,7 +232,22 @@ export interface FormatBreakdown {
   summary: string;
   whyItWorks: string[];
   hook: { text: string; style: HookStyle; seconds: number; visual: string };
-  beats: { start: number; end: number; purpose: string; visual: string; onScreenText?: string; narration?: string }[];
+  beats: {
+    start: number;
+    end: number;
+    purpose: string;
+    visual: string;
+    onScreenText?: string;
+    narration?: string;
+    /** What the beat hangs on: a spoken line, a visual, a cut, on-screen text or an overlay. */
+    anchor?: BeatAnchor;
+    /** What it does for the viewer ("earns the click", "proves the claim"). */
+    job?: string;
+  }[];
+  /** Elements that run through the whole video (a running board, a counter, a recurring sound) and what they're for. */
+  systems?: { name: string; job: string; how: string }[];
+  /** How fast it's spoken, measured from the transcript. */
+  speech?: { wordsPerSec: number; unitsPerSec: number };
   pacing: { cuts: number; avgShotSec: number; notes: string };
   captions: { style: string; wordsPerCaption: number; notes: string };
   overlays: { kind: OverlayKind; atSec: number; description: string; example?: string }[];

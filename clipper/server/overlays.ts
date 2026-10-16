@@ -64,7 +64,9 @@ export function placeOverlays(overlays: Overlay[], words: Timed[], duration: num
       continue;
     }
     // The board stays until the call to action (a last item named just before it gets 0.6 s to land).
-    const end = BOARD_KINDS.includes(o.kind) ? Math.max(start + 0.6, until) : start + (o.hold && o.hold > 0 ? Math.min(o.hold, 8) : DEFAULT_HOLD[o.kind]);
+    let end = BOARD_KINDS.includes(o.kind) ? Math.max(start + 0.6, until) : start + (o.hold && o.hold > 0 ? Math.min(o.hold, 8) : DEFAULT_HOLD[o.kind]);
+    // A quiz (and its answer reveal) is over before the call to action comes up.
+    if (o.kind === "quiz" && start < until) end = Math.max(start + 1, Math.min(end, until));
     placed.push({ o, start, end: Math.min(end, duration) });
   }
   return { placed: placed.sort((a, b) => a.start - b.start), missed };
@@ -353,7 +355,7 @@ export function podiumLayout(items: { text: string; rank: number }[], L: Overlay
  * lettered and fitted (shrunk, wrapped onto two lines, then cut), with the
  * question above them when there is one.
  */
-export function quizLayout(o: Overlay, L: OverlayLayout) {
+export function quizLayout(o: Overlay, L: OverlayLayout, above = false) {
   const px = scaleOf(L);
   const answers = (o.answers ?? []).slice(0, 4);
   const side = px(40);
@@ -361,7 +363,8 @@ export function quizLayout(o: Overlay, L: OverlayLayout) {
   const n = Math.max(1, answers.length);
   const chipW = Math.floor((L.width - 2 * side - (n - 1) * gap) / n);
   const chipH = px(132);
-  const y = L.bandTop + L.bandHeight - px(36) - chipH;
+  // Over the bottom of the footage; or just above it while a board covers the footage.
+  const y = above ? L.bandTop - px(24) - chipH : L.bandTop + L.bandHeight - px(36) - chipH;
   const badge = px(44);
   const chips = answers.map((a, i) => {
     const x = side + i * (chipW + gap);
@@ -373,6 +376,15 @@ export function quizLayout(o: Overlay, L: OverlayLayout) {
   const q = o.text?.trim() ? fitText(esc(o.text.trim()), { font: L.font, widths: L.fontWidths, size: px(52), minSize: px(30), maxWidth: L.width - 2 * side, maxLines: 2 }) : undefined;
   const qBox = q ? { x: side, y: y - px(20) - q.lines.length * q.size * 1.15, w: L.width - 2 * side, h: q.lines.length * q.size * 1.15 } : undefined;
   return { chips, badge, question: q && qBox ? { ...q, box: qBox } : undefined, box: { x: side, y: qBox?.y ?? y, w: L.width - 2 * side, h: y + chipH - (qBox?.y ?? y) } };
+}
+
+/** Whether a quiz shares the screen with a board (tier, Top-N, podium), so it goes above the footage. */
+function quizAbove(q: Placed, placed: Placed[]) {
+  const board = placed.filter((x) => BOARD_KINDS.includes(x.o.kind) && x.o.text?.trim());
+  if (!board.length) return false;
+  const from = Math.min(...board.map((b) => b.start));
+  const to = Math.max(...board.map((b) => b.end));
+  return q.start < to && q.end > from;
 }
 
 /** Something else on screen for a while that comment cards must keep clear of. */
@@ -417,7 +429,7 @@ export function blockedBoxes(placed: Placed[], L: OverlayLayout): Blocked[] {
     out.push({ what: "hook", start: 0, end: L.hook.end, x: px(70) - px(7), y: L.bandTop - px(330) - px(7), w: L.width - 2 * px(70) + 2 * px(7), h: lines * fs * 1.15 + 2 * px(7) });
   }
   for (const p of placed.filter((x) => x.o.kind === "text" && x.o.text?.trim())) out.push({ what: "text", start: p.start, end: p.end, ...popLayout(p, L).box });
-  for (const p of placed.filter((x) => x.o.kind === "quiz" && (x.o.answers?.length ?? 0) >= 2)) out.push({ what: "text", start: p.start, end: p.end, ...quizLayout(p.o, L).box });
+  for (const p of placed.filter((x) => x.o.kind === "quiz" && (x.o.answers?.length ?? 0) >= 2)) out.push({ what: "text", start: p.start, end: p.end, ...quizLayout(p.o, L, quizAbove(p, placed)).box });
   const { size, spots } = stickerSpots(L);
   placed
     .filter((x) => x.o.kind === "emoji" && x.o.emoji)
@@ -639,7 +651,7 @@ export function overlayEvents(placed: Placed[], L: OverlayLayout): string[] {
 
   // Quiz strips: answer chips pop in one after another; the right one lights up for the last 40%.
   for (const p of placed.filter((x) => x.o.kind === "quiz" && (x.o.answers?.length ?? 0) >= 2)) {
-    const q = quizLayout(p.o, L);
+    const q = quizLayout(p.o, L, quizAbove(p, placed));
     const reveal = p.o.correct !== undefined ? p.start + (p.end - p.start) * 0.6 : undefined;
     if (q.question)
       lines.push(`Dialogue: 8,${ts(p.start)},${ts(p.end)},OvQuizQ,,0,0,0,,{\\an2\\pos(${Math.round(L.width / 2)},${Math.round(q.question.box.y + q.question.box.h)})${q.question.size !== px(52) ? `\\fs${q.question.size}` : ""}\\fad(120,160)}${q.question.lines.join("\\N")}`);

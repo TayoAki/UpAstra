@@ -146,7 +146,7 @@ describe("formats", () => {
     expect(clip.overlays).toEqual([expect.objectContaining({ kind: "tier", cue: "The Octane", tier: "S" })]);
     // The planner got the format's recipe — and not the reference's transcript.
     const plan = JSON.parse([...seen].reverse().find((x) => !/reusable FORMAT/.test(x.system))!.user);
-    expect(plan.format).toMatchObject({ name: "Tier list reply", recipe: BREAKDOWN.recipe, hookStyle: "number" });
+    expect(plan.format).toMatchObject({ name: "Tier list reply", recipe: BREAKDOWN.recipe, hook: { style: "number" } });
     // Not even the reference's hook line: the recipe carries the hook as a fill-in pattern.
     expect(JSON.stringify(plan.format)).not.toContain(BREAKDOWN.hook.text);
 

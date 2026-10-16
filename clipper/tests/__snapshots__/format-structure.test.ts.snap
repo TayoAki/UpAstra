@@ -1,0 +1,190 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`format structure > gives the planner order, shares and jobs instead of seconds, with lenses for missing elements 1`] = `
+{
+  "beats": [
+    {
+      "anchor": "overlay",
+      "job": "turns a stranger's claim into a challenge",
+      "onScreenText": "yes",
+      "order": 1,
+      "purpose": "hook",
+      "share": 0.17,
+      "visual": "comment sticker",
+    },
+    {
+      "anchor": "line",
+      "job": "pays off one item at a time",
+      "onScreenText": undefined,
+      "order": 2,
+      "purpose": "ranking",
+      "share": 0.5,
+      "visual": "items drop into tiers",
+    },
+    {
+      "anchor": undefined,
+      "job": "keeps them watching",
+      "onScreenText": undefined,
+      "order": 3,
+      "purpose": "twist",
+      "share": 0.2,
+      "visual": "surprise pick",
+    },
+    {
+      "anchor": undefined,
+      "job": undefined,
+      "onScreenText": undefined,
+      "order": 4,
+      "purpose": "cta",
+      "share": 0.13,
+      "visual": "logo",
+    },
+  ],
+  "hook": {
+    "share": 0.17,
+    "style": "question",
+  },
+  "lenses": [
+    "Keep the beats' order, jobs and shares of the runtime; scale them to this clip's length.",
+    "Where this campaign's footage can't show what a beat shows, keep the beat's job and carry it with narration, on-screen text or an overlay instead.",
+    "If you can't keep "tier board", give its job (shows progress so viewers stay for the end) to something that runs through the clip.",
+    "Use this campaign's product and facts; never the reference's subject, words or claims.",
+  ],
+  "name": "Tier reply",
+  "overlays": [
+    {
+      "at": 0.01,
+      "kind": "comment",
+      "what": "viewer comment",
+    },
+    {
+      "at": 0.2,
+      "kind": "tier",
+      "what": "tier items",
+    },
+  ],
+  "pacing": {
+    "notes": "fast",
+    "shotsPer10s": 6,
+  },
+  "recipe": "1. Comment hook. 2. Rank. 3. Twist. 4. CTA.",
+  "referenceLengthSec": 15,
+  "summary": "Reply-to-comment tier list: a viewer's comment sets up a ranking that the creator fills in live.",
+  "systems": [
+    {
+      "how": "stays on screen, items fill in",
+      "job": "shows progress so viewers stay for the end",
+      "name": "tier board",
+    },
+  ],
+  "voice": {
+    "syllablesPerSec": 4.2,
+    "tone": "fast, opinionated",
+    "type": "voiceover",
+  },
+  "whyItWorks": [
+    "The comment poses a question viewers want answered",
+    "Each item landing is a small payoff",
+  ],
+}
+`;
+
+exports[`format structure > records each beat's job and anchor, the systems that run through it, and the measured pace 1`] = `
+{
+  "beats": [
+    {
+      "anchor": "overlay",
+      "end": 2.5,
+      "job": "turns a stranger's claim into a challenge",
+      "narration": "Ranking every car",
+      "onScreenText": "octane is mid",
+      "purpose": "hook",
+      "start": 0,
+      "visual": "comment sticker",
+    },
+    {
+      "anchor": "line",
+      "end": 10,
+      "job": "pays off one item at a time",
+      "narration": "Octane, S tier",
+      "onScreenText": undefined,
+      "purpose": "ranking",
+      "start": 2.5,
+      "visual": "items drop into tiers",
+    },
+    {
+      "end": 13,
+      "job": "keeps them watching",
+      "narration": undefined,
+      "onScreenText": undefined,
+      "purpose": "twist",
+      "start": 10,
+      "visual": "surprise pick",
+    },
+    {
+      "end": 15,
+      "narration": undefined,
+      "onScreenText": undefined,
+      "purpose": "cta",
+      "start": 13,
+      "visual": "logo",
+    },
+  ],
+  "captions": {
+    "notes": "",
+    "style": "bold-pop",
+    "wordsPerCaption": 2,
+  },
+  "cta": {
+    "atSec": 13,
+    "text": "Play now",
+  },
+  "hook": {
+    "seconds": 2.5,
+    "style": "question",
+    "text": "Ranking every car because @max said Octane is mid",
+    "visual": "Comment sticker over gameplay",
+  },
+  "lengthSec": 15,
+  "overlays": [
+    {
+      "atSec": 0.2,
+      "description": "viewer comment",
+      "example": "octane is mid",
+      "kind": "comment",
+    },
+    {
+      "atSec": 3,
+      "description": "tier items",
+      "example": undefined,
+      "kind": "tier",
+    },
+  ],
+  "pacing": {
+    "avgShotSec": 1.6,
+    "cuts": 9,
+    "notes": "fast",
+  },
+  "recipe": "1. Comment hook. 2. Rank. 3. Twist. 4. CTA.",
+  "speech": {
+    "unitsPerSec": 4.2,
+    "wordsPerSec": 3.1,
+  },
+  "summary": "Reply-to-comment tier list: a viewer's comment sets up a ranking that the creator fills in live.",
+  "systems": [
+    {
+      "how": "stays on screen, items fill in",
+      "job": "shows progress so viewers stay for the end",
+      "name": "tier board",
+    },
+  ],
+  "voice": {
+    "tone": "fast, opinionated",
+    "type": "voiceover",
+  },
+  "whyItWorks": [
+    "The comment poses a question viewers want answered",
+    "Each item landing is a small payoff",
+  ],
+}
+`;

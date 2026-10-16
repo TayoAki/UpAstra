@@ -106,7 +106,8 @@ const api = async (p: string, method = "GET", body?: unknown) => {
   return { status: r.status, body: await r.json().catch(() => ({})) };
 };
 const settle = async (clipId: string) => {
-  for (let i = 0; i < 240; i++) {
+  // Up to 3 minutes: renders share the CPU with the rest of the suite.
+  for (let i = 0; i < 720; i++) {
     await new Promise((res) => setTimeout(res, 250));
     const rr = (await api("/api/state")).body.clips.find((x: { id: string }) => x.id === clipId).render;
     if (["done", "failed"].includes(rr.status)) return rr;

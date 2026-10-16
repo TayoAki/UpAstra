@@ -113,4 +113,17 @@ describe("drawing and validation", () => {
     expect(out[1].answers).toEqual(["x", "y", "z", "w"]);
     expect(out[1].correct).toBeUndefined();
   });
+
+  it("ends a quiz by the call to action, and lifts it above the footage while a board is up", () => {
+    const quiz: Overlay = { id: "q", kind: "quiz", cue: "one", answers: ["Octane", "Breakout", "Merc"], correct: 1, hold: 5 };
+    const { placed } = placeOverlays([...ranks, quiz], words, 12, 7);
+    const q = placed.find((p) => p.o.kind === "quiz")!;
+    expect(q.end).toBeLessThanOrEqual(7);
+    const Lp = L("Poppins Black");
+    const g = rankLayout(ranks.map((r) => ({ text: r.text!, rank: r.rank! })), Lp);
+    const ql = quizLayout(q.o, Lp, true);
+    expect(ql.box.y + ql.box.h).toBeLessThanOrEqual(Lp.bandTop);
+    expect(ql.box.y).toBeGreaterThanOrEqual(0);
+    for (const s of g.slots) expect(overlap(s.box, ql.box)).toBe(false);
+  });
 });

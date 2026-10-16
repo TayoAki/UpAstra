@@ -236,7 +236,9 @@ function FormatDetail({ id }: { id: string }) {
                       <span className="dot-sw" style={{ background: BEAT_COLORS[i % BEAT_COLORS.length] }} /> {secs(x.start)}–{secs(x.end)}
                     </td>
                     <td>
-                      <strong>{x.purpose}</strong> <span className="small muted">{x.visual}</span>
+                      <strong>{x.purpose}</strong>
+                      {x.job && <span className="small"> — {x.job}</span>}
+                      {x.anchor && <span className="badge" style={{ marginLeft: 6 }}>on {x.anchor}</span>} <span className="small muted">{x.visual}</span>
                       {(x.onScreenText || x.narration) && (
                         <div className="small faint">
                           {x.onScreenText && <>On screen: “{x.onScreenText}” </>}
@@ -248,6 +250,18 @@ function FormatDetail({ id }: { id: string }) {
                 ))}
               </tbody>
             </table>
+            {(b.systems?.length ?? 0) > 0 && (
+              <div className="mt small">
+                <strong>Runs throughout:</strong>{" "}
+                {b.systems!.map((x, i) => (
+                  <span key={i}>
+                    {i > 0 && " · "}
+                    {x.name} <span className="muted">({x.job})</span>
+                  </span>
+                ))}
+              </div>
+            )}
+            {b.speech && <div className="small faint">Spoken at about {b.speech.wordsPerSec} words a second.</div>}
           </Panel>
 
           <div className="grid cards">
