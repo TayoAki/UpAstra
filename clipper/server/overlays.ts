@@ -302,7 +302,7 @@ export function stickerGraph(stickers: Sticker[], firstInput: number, base: stri
     );
     const next = i === stickers.length - 1 ? out : `ov${i}`;
     parts.push(
-      `[${prev}][${tag}]overlay=x=${s.x}:y='${s.y}+${Math.round(s.size * 0.25)}*max(0\\,1-(t-${s.start.toFixed(2)})/0.18)':eof_action=pass:repeatlast=0:format=auto[${next}]`,
+      `[${prev}][${tag}]overlay=x=${s.x}:y='${s.y}+${Math.round(s.size * 0.25)}*max(0\\,1-(t-${s.start.toFixed(2)})/0.18)':eof_action=pass:repeatlast=0:format=rgb[${next}]`,
     );
     prev = next;
   });

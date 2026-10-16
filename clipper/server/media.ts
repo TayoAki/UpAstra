@@ -42,14 +42,30 @@ export function hardenInputs(cmd: string, args: string[]): string[] {
   return out;
 }
 
+// ffmpeg, ffprobe and whisper get only what they need to run, never the
+// server's keys. Proxy and CA settings reach ffmpeg as arguments (netArgs).
+const CHILD_ENV = ["PATH", "HOME", "XDG_CACHE_HOME", "LANG", "LC_ALL", "TMPDIR", "TZ", "SSL_CERT_FILE", "LD_LIBRARY_PATH", "OMP_NUM_THREADS", "FONTCONFIG_FILE", "FONTCONFIG_PATH"];
+export function childEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of CHILD_ENV) if (env[k] !== undefined) out[k] = env[k]!;
+  return out;
+}
+
 export function run(cmd: string, args: string[], timeoutMs = 20 * 60_000): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, hardenInputs(cmd, args), { stdio: ["ignore", "pipe", "pipe"] });
+    // Its own process group, so a timeout also kills anything it started.
+    const p = spawn(cmd, hardenInputs(cmd, args), { stdio: ["ignore", "pipe", "pipe"], env: childEnv(), detached: true });
     let stdout = "";
     let stderr = "";
     p.stdout.on("data", (d) => (stdout += d));
     p.stderr.on("data", (d) => (stderr = (stderr + d).slice(-8000)));
-    const timer = setTimeout(() => p.kill("SIGKILL"), timeoutMs);
+    const timer = setTimeout(() => {
+      try {
+        process.kill(-p.pid!, "SIGKILL");
+      } catch {
+        p.kill("SIGKILL");
+      }
+    }, timeoutMs);
     p.on("error", (e) => (clearTimeout(timer), reject(e)));
     p.on("close", (code) => {
       clearTimeout(timer);
@@ -74,12 +90,18 @@ export async function probe(url: string): Promise<{ duration: number; hasAudio: 
 
 /**
  * A small preview for the vision model: keyframes only (fast even for long
- * 60 fps HEVC), resampled to a steady 1 fps with the real timestamp burned
- * into each frame — models read printed time far more reliably than they
- * track it.
+ * 60 fps HEVC; a full decode measured 5.6× slower), capped at a steady 1 fps,
+ * with each picture's real timestamp burned in — models read printed time far
+ * more reliably than they track it. The label is drawn before fps= because
+ * fps= re-stamps frames with their slot time, which ran late by up to a whole
+ * keyframe interval; eof_action=pass keeps the last keyframe.
  */
-export async function buildProxy(url: string, out: string, durationSec: number) {
+export function proxyFilter(durationSec: number, width: number): string {
   const fps = durationSec > 1500 ? 0.5 : 1;
+  return `scale=${width}:-2,drawtext=text='%{pts\\:hms}':x=8:y=8:fontsize=${Math.round(width / 22)}:fontcolor=white:box=1:boxcolor=black@0.7,fps=${fps}:eof_action=pass`;
+}
+
+export async function buildProxy(url: string, out: string, durationSec: number) {
   const width = durationSec > 1500 ? 360 : 480;
   await run("ffmpeg", [
     ...netArgs(url),
@@ -87,11 +109,14 @@ export async function buildProxy(url: string, out: string, durationSec: number) 
     "-skip_frame", "nokey",
     "-i", url,
     "-an",
-    "-vf", `fps=${fps},scale=${width}:-2,drawtext=text='%{pts\\:hms}':x=8:y=8:fontsize=${Math.round(width / 22)}:fontcolor=white:box=1:boxcolor=black@0.7`,
+    "-vf", proxyFilter(durationSec, width),
     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
     out,
   ], 30 * 60_000);
 }
+
+/** Output tags for BT.709 limited-range video. */
+export const BT709 = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"];
 
 export const W = 1080;
 export const H = 1920;
@@ -121,7 +146,7 @@ export async function cutSegment(url: string, start: number, seconds: number, ha
     "-filter_complex", filter,
     "-map", "[v]", "-map", "[a1]",
     "-t", seconds.toFixed(2),
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", ...BT709,
     "-c:a", "aac", "-b:a", "160k",
     out,
   ]);
@@ -161,10 +186,13 @@ export async function compose(opts: { video: string; ass: string; voice?: string
     "-i", opts.video,
     "-i", wav("mix"),
     ...st.inputs,
-    "-filter_complex", `[0:v]ass='${assEsc}'${fonts}[sub];${st.graph}`,
-    "-map", "[v]", "-map", "1:a",
+    // Captions and stickers are drawn in RGB over the footage (read as BT.709),
+    // then the frame is converted to BT.709 once and tagged as such. Without
+    // this, overlay colours shifted by up to ~25 levels on phones.
+    "-filter_complex", `[0:v]scale=in_color_matrix=bt709:in_range=tv,format=rgb24,ass='${assEsc}'${fonts}[sub];${st.graph};[v]scale=out_color_matrix=bt709:out_range=tv,format=yuv420p[vo]`,
+    "-map", "[vo]", "-map", "1:a",
     "-t", opts.duration.toFixed(2),
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", ...BT709,
     "-c:a", "aac", "-b:a", "160k",
     "-movflags", "+faststart",
     opts.out,
