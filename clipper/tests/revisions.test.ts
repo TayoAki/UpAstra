@@ -4,6 +4,8 @@ import { createApp } from "../server/app";
 import { initAuth } from "../server/auth";
 import { useMemoryBackend } from "../server/db";
 import { setAISimulated } from "../server/llm";
+import { openComments } from "../server/agent";
+import { runInWorkspace } from "../server/db";
 
 // B7.2: plan edits carry the revision they were made from.
 const brief = `The name "Turbo Ball" must be spoken.\nEncourage viewers to play Turbo Ball now.\nCPM: $1\nVideos 10-20 seconds.`;
@@ -62,5 +64,35 @@ describe("revisioned plan edits", () => {
     const forced = await api(`/api/clips/${clip.id}`, "PUT", { baseRevision: ok.revision, narration: "Soccer with cars. Download it.", allowFailing: true });
     expect(forced.status).toBe(200);
     expect((await clipOf(clip.id)).qa.pass).toBe(false);
+  });
+});
+
+describe("review comments", () => {
+  it("adds, resolves and lists comments, and the agent sees the open ones", async () => {
+    const c = await api("/api/campaigns", "POST", { text: brief });
+    const clip = (await api(`/api/campaigns/${c.body.campaign.id}/clips`, "POST", { count: 1 })).body.clips[0];
+    const a = await api(`/api/clips/${clip.id}/comments`, "POST", { text: "Cut to the goal sooner", at: 4.25 });
+    expect(a.status).toBe(201);
+    expect(a.body.comment).toMatchObject({ at: 4.25, text: "Cut to the goal sooner", author: "human", resolved: false });
+    const b = await api(`/api/clips/${clip.id}/comments`, "POST", { text: "Hook is too slow" });
+    expect((await api(`/api/clips/${clip.id}/comments`, "POST", { text: " " })).status).toBe(400);
+    expect((await api(`/api/clips/${clip.id}/comments`, "POST", { text: "x", at: -1 })).status).toBe(400);
+    await api(`/api/clips/${clip.id}/comments/${b.body.comment.id}`, "PUT", { resolved: true });
+    const now = await clipOf(clip.id);
+    expect(now.comments.map((x: { text: string; resolved: boolean }) => [x.text, x.resolved])).toEqual([["Cut to the goal sooner", false], ["Hook is too slow", true]]);
+
+    // The in-app agent's context lists the open comment, not the resolved one.
+    const ws = (await api("/api/auth/me")).body.workspace.id;
+    const ctx = await runInWorkspace(ws, undefined, async () => openComments());
+    expect(ctx).toMatch(/Open review comments/);
+    expect(ctx).toMatch(/at 4\.3s|at 4\.2s/);
+    expect(ctx).toMatch(/Cut to the goal sooner/);
+    expect(ctx).not.toMatch(/Hook is too slow/);
+
+    // Applying needs the AI planner (off in tests); nothing changes.
+    const ap = await api(`/api/clips/${clip.id}/apply-comments`, "POST", {});
+    expect(ap.status).toBe(503);
+    await api(`/api/clips/${clip.id}/comments/${a.body.comment.id}`, "DELETE");
+    expect((await api(`/api/clips/${clip.id}/apply-comments`, "POST", {})).status).toBe(409);
   });
 });

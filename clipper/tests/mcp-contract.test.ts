@@ -134,4 +134,16 @@ describe("MCP contract", () => {
     const tr = await client.callTool({ name: "transcribe", arguments: {} });
     expect(parse(tr).error.code).toBe("INVALID_ARGUMENT");
   });
+
+  it("lets an agent leave, list and resolve review comments", async () => {
+    const made = parse(await client.callTool({ name: "brief_to_shorts", arguments: { briefText: brief, count: 1, render: false } }));
+    const clipId = made.plans[0].id;
+    const added = parse(await client.callTool({ name: "add_comment", arguments: { clipId, text: "Say the brand name earlier", at: 2 } }));
+    expect(added.comment).toMatchObject({ author: "agent", at: 2 });
+    expect(added.next[0]).toMatchObject({ tool: "apply_comments", args: { clipId } });
+    expect(parse(await client.callTool({ name: "list_comments", arguments: { clipId } })).comments).toHaveLength(1);
+    const done = parse(await client.callTool({ name: "resolve_comment", arguments: { clipId, commentId: added.comment.id } }));
+    expect(done).toMatchObject({ resolved: true, format: "ugc.resolve_comment@1" });
+    expect(parse(await client.callTool({ name: "list_comments", arguments: { clipId } })).comments).toHaveLength(0);
+  });
 });

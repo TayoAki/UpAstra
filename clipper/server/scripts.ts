@@ -81,7 +81,7 @@ export function toDraft(raw: Record<string, unknown>, c: Campaign): Draft {
   };
 }
 
-function briefForModel(c: Campaign) {
+export function briefForModel(c: Campaign) {
   const b = c.brief;
   return {
     product: b.product,

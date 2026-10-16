@@ -127,11 +127,23 @@ export type ClipStatus = "draft" | "approved" | "rendering" | "ready" | "posted"
 export const CLIP_STATUSES: ClipStatus[] = ["draft", "approved", "rendering", "ready", "posted", "rejected"];
 
 /** One planned short: the hook, the narration and the shots, before render. */
+export interface ClipComment {
+  id: string;
+  /** Seconds into the rendered video (absent: about the whole clip). */
+  at?: number;
+  text: string;
+  author: "human" | "agent";
+  resolved: boolean;
+  createdAt: string;
+}
+
 export interface Clip {
   id: string;
   campaignId: string;
   /** Bumped on every change; edits sent with a stale baseRevision are refused. */
   revision?: number;
+  /** Review notes pinned to moments of the video. */
+  comments?: ClipComment[];
   title: string;
   angle: string;
   hook: string;

@@ -476,6 +476,46 @@ export function createMcpServer(api: ApiCall): McpServer {
   );
 
   tool(
+    "list_comments",
+    "A clip's review comments: each pinned to a moment of the video (at, seconds) or the whole clip, open or resolved.",
+    { clipId: z.string(), open: z.boolean().default(true).describe("Only the unresolved ones") },
+    async ({ clipId, open }) => {
+      const c = clipIn(await state(), clipId);
+      return { clipId, comments: (c.comments ?? []).filter((x) => !open || !x.resolved) };
+    },
+    true,
+  );
+
+  tool(
+    "add_comment",
+    "Pin a review note to a moment of a clip (at, seconds into the rendered video), or to the whole clip.",
+    { clipId: z.string(), text: z.string().min(1).max(2000), at: z.number().min(0).max(600).optional() },
+    async ({ clipId, text: t, at }) => {
+      const r = await api<{ comment: { id: string } }>("POST", `/clips/${encodeURIComponent(clipId)}/comments`, { text: t, at });
+      return { comment: r.comment, next: [{ tool: "apply_comments", args: { clipId }, why: "Re-plan the clip from its open comments." }] satisfies Next[] };
+    },
+  );
+
+  tool(
+    "resolve_comment",
+    "Mark a review comment done (or open again with resolved: false).",
+    { clipId: z.string(), commentId: z.string(), resolved: z.boolean().default(true) },
+    async ({ clipId, commentId, resolved }) => (await api<{ comment: unknown }>("PUT", `/clips/${encodeURIComponent(clipId)}/comments/${encodeURIComponent(commentId)}`, { resolved })).comment as Record<string, unknown>,
+  );
+
+  tool(
+    "apply_comments",
+    "Re-plan a clip from its open review comments (one AI call): the changes they ask for, the rest kept. The comments it answered are resolved, and the plan is checked against the brief again. Render it again to see the result.",
+    { clipId: z.string() },
+    async ({ clipId }) => {
+      const s = await api<State>("POST", `/clips/${encodeURIComponent(clipId)}/apply-comments`, {});
+      const c = clipIn(s, clipId);
+      const next: Next[] = c.qa.pass ? [{ tool: c.status === "draft" ? "review_clip" : "render_clip", args: c.status === "draft" ? { clipId, decision: "approve" } : { clipId }, why: "The revised plan follows the brief." }] : [{ tool: "edit_clip", args: { clipId }, why: `It now fails: ${failing(c).join("; ")}.` }];
+      return { ...clipFull(c), next };
+    },
+  );
+
+  tool(
     "render_clip",
     "Render an approved plan into a finished 1080×1920 MP4 (footage cut at the best moments, hook, word-timed captions, CTA card, optional AI voiceover). Queued; follow with wait_for_renders. With dryRun, only the preflight (cost estimate, blockers, quota); nothing is queued or charged. A render that's blocked is refused before anything is charged.",
     { clipId: z.string(), voice: VOICE.default("ash"), dryRun: z.boolean().default(false) },

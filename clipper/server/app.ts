@@ -11,6 +11,7 @@ import { buttonEmail, sendEmail } from "./email";
 import { HttpError, emptyDoc, forgetTenant, getBackend, getDoc, loadedDoc, loadTenant, log, newId, now, runInWorkspace, save, type UserRow } from "./db";
 import { createMcpServer, httpApi } from "./mcp";
 import { preflightBrief, preflightRender } from "./preflight";
+import { reviseFromComments } from "./revise";
 import { extractBrief, normalizeBrief } from "./extract";
 import { aiLive, editorModel, forwardChat, mediaLive, modelFor, spendAI } from "./llm";
 import { emptyMonth, isAdmin, monthCost, monthKey, recordAI, usageReport } from "./usage";
@@ -1230,6 +1231,62 @@ export function createApp() {
     save();
     res.json(stateFor());
   });
+
+  // Review comments pinned to moments of a clip.
+  const MAX_COMMENTS = 100;
+  api.post("/clips/:id/comments", (req, res) => {
+    const clip = findClip(String(req.params.id));
+    const text = String(req.body?.text ?? "").trim().slice(0, 2000);
+    if (!text) throw new HttpError(400, "Write a comment");
+    const at = req.body?.at === undefined || req.body?.at === null ? undefined : Number(req.body.at);
+    if (at !== undefined && !(at >= 0 && at <= 600)) throw new HttpError(400, "at is seconds into the video");
+    if ((clip.comments ?? []).length >= MAX_COMMENTS) throw new HttpError(400, `Up to ${MAX_COMMENTS} comments a clip — delete resolved ones first`);
+    const comment = { id: newId("cm"), ...(at !== undefined ? { at: Math.round(at * 100) / 100 } : {}), text, author: req.actor === "agent" ? ("agent" as const) : ("human" as const), resolved: false, createdAt: now() };
+    clip.comments = [...(clip.comments ?? []), comment];
+    save();
+    res.status(201).json({ comment, state: stateFor() });
+  });
+
+  api.put("/clips/:id/comments/:cid", (req, res) => {
+    const clip = findClip(String(req.params.id));
+    const cm = clip.comments?.find((x) => x.id === req.params.cid);
+    if (!cm) throw new HttpError(404, "Comment not found");
+    if (typeof req.body?.resolved === "boolean") cm.resolved = req.body.resolved;
+    if (typeof req.body?.text === "string" && req.body.text.trim()) cm.text = req.body.text.trim().slice(0, 2000);
+    save();
+    res.json({ comment: cm, state: stateFor() });
+  });
+
+  api.delete("/clips/:id/comments/:cid", (req, res) => {
+    const clip = findClip(String(req.params.id));
+    if (!clip.comments?.some((x) => x.id === req.params.cid)) throw new HttpError(404, "Comment not found");
+    clip.comments = clip.comments.filter((x) => x.id !== req.params.cid);
+    save();
+    res.json(stateFor());
+  });
+
+  // Re-plan a clip from its open comments; the comments it answered are resolved.
+  api.post(
+    "/clips/:id/apply-comments",
+    wrap(async (req, res) => {
+      const clip = findClip(String(req.params.id));
+      const c = findCampaign(clip.campaignId);
+      if (!clip.comments?.some((x) => !x.resolved)) throw new HttpError(409, "This clip has no open comments");
+      spendAI(req.workspaceId!, 1);
+      const rev = clip.revision ?? 0;
+      const r = await reviseFromComments(c, clip);
+      // Someone edited it while the planner worked: don't overwrite their change.
+      if ((clip.revision ?? 0) !== rev) throw new HttpError(409, "The plan was edited while the comments were being applied; apply them again.");
+      const d = r.draft;
+      Object.assign(clip, { hook: d.hook, narration: d.narration, onScreenText: d.onScreenText, cta: d.cta, shots: d.shots, lengthSec: d.lengthSec, caption: d.caption, hashtags: d.hashtags, ...(d.overlays ? { overlays: d.overlays } : {}), revision: rev + 1, updatedAt: now() });
+      clip.qa = checkClip(clip, c.brief);
+      if (clip.status === "rejected") clip.status = "draft";
+      for (const cm of clip.comments ?? []) if (r.applied.includes(cm.id)) cm.resolved = true;
+      log({ campaignId: c.id, kind: "clip", message: `Applied ${r.applied.length} review comment(s) to "${clip.title}"${clip.qa.pass ? "" : " — it now fails a rule, check it"}.`, cost: r.cost });
+      save();
+      res.json(stateFor());
+    }),
+  );
 
   // A/B variants: the same clip with different hooks (and optionally CTAs).
   api.post(

@@ -34,7 +34,23 @@ How to work:
 - Use whats_working to lean on hooks and formats that performed. To A/B test openings, make_variants on a clip.
 - To copy a viral video's structure: clone_format (a direct video link), wait for get_format to be ready, then plan_clips with formatId.
 - Clips can carry overlays timed to words (comment bubbles, emoji, pop-up words, tier lists) via edit_clip; cues must be exact words from the voiceover.
-- Don't invent payouts, views or links; report what the tools return. Keep replies short: what you did, links, and what needs the user.`;
+- Don't invent payouts, views or links; report what the tools return. Keep replies short: what you did, links, and what needs the user.
+- Review comments are notes pinned to moments of a clip ("at" seconds). When asked to act on them: apply_comments re-plans a clip from its open comments; or make the edits yourself with edit_clip, then resolve_comment each one you handled.${openComments()}`;
+
+/** The open review comments, for the agent's context (newest clips first, capped). */
+export function openComments(): string {
+  let doc;
+  try {
+    doc = getDoc();
+  } catch {
+    return "";
+  }
+  const lines = doc.clips
+    .filter((c) => c.comments?.some((x) => !x.resolved))
+    .slice(0, 10)
+    .flatMap((c) => [`- "${c.title}" (${c.id}):`, ...c.comments!.filter((x) => !x.resolved).slice(0, 8).map((x) => `  - ${x.at !== undefined ? `at ${x.at.toFixed(1)}s` : "whole clip"} [${x.id}]: ${x.text.slice(0, 300)}`)]);
+  return lines.length ? `\n\nOpen review comments:\n${lines.join("\n")}` : "";
+}
 
 /** After a restart the full transcript is gone: continue from what the user saw. */
 function rebuild(run: AgentRun, tz: string): Msg[] {

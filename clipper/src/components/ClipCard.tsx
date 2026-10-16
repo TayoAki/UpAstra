@@ -9,6 +9,7 @@ import { go, useApp } from "../store";
 import { Checks, ClipBadge } from "./ui";
 import { PostForm } from "./PostForm";
 import { OverlayEditor } from "./OverlayEditor";
+import { ClipComments } from "./ClipComments";
 import { RenderPanel } from "./RenderPanel";
 
 export function ClipCard({ clip, campaign, showCampaign }: { clip: Clip; campaign: Campaign; showCampaign?: boolean }) {
@@ -168,6 +169,7 @@ export function ClipCard({ clip, campaign, showCampaign }: { clip: Clip; campaig
       )}
 
       {clip.status !== "rejected" && <OverlayEditor clip={clip} />}
+      {(clip.render?.status === "done" || (clip.comments ?? []).length > 0) && <ClipComments clip={clip} />}
 
       <p className="small" style={{ marginBottom: 6 }}>
         <span className="muted">Caption:</span> {clip.caption} <span className="info">{clip.hashtags.join(" ")}</span>
