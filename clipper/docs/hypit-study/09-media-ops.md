@@ -493,157 +493,128 @@ Every file listed was read fully. The `uv.lock` files (`provider-image-opencv-lo
 
 | File | Lines | Read |
 |---|---:|:---:|
-html-program/README.md 77
-html-program/package.json 43
-html-program/src/activation.ts 10
-html-program/src/capture-scope.ts 67
-html-program/src/component.ts 62
-html-program/src/document.ts 1033
-html-program/src/execution.ts 63
-html-program/src/fragment.ts 32
-html-program/src/frame-work.ts 148
-html-program/src/html-visual.ts 116
-html-program/src/index.ts 17
-html-program/src/manifest.ts 111
-html-program/src/playback.ts 229
-html-program/src/text.ts 1188
-html-program/src/types.ts 64
-html-program/src/visibility.ts 29
-html-program/test/capture-scope.test.ts 74
-html-program/test/document.test.ts 859
-html-program/test/frame-work.test.ts 95
-html-program/test/text-runtime.test.ts 164
-html-program/test/visibility.test.ts 35
-html-document/README.md 71
-html-document/package.json 21
-html-document/src/activation.ts 17
-html-document/src/component.ts 19
-html-document/src/document.ts 170
-html-document/src/fragment.ts 14
-html-document/src/index.ts 6
-html-document/src/manifest.ts 50
-html-document/src/surface.ts 25
-html-video/README.md 24
-html-video/package.json 47
-html-video/src/activation.ts 17
-html-video/src/fragment.ts 70
-html-video/src/index.ts 3
-html-video/src/manifest.ts 60
-html-video/src/surface.ts 61
-html-video/test/presentation.test.ts 20
-html-video/test/render.test.ts 419
-provider-html-local/README.md 94
-provider-html-local/package.json 48
-provider-html-local/src/activation.ts 128
-provider-html-local/src/browser-install.ts 5
-provider-html-local/src/browser.ts 118
-provider-html-local/src/capture-exit.ts 33
-provider-html-local/src/capture-process.ts 131
-provider-html-local/src/capture-worker.ts 38
-provider-html-local/src/capture.ts 331
-provider-html-local/src/concurrency.ts 95
-provider-html-local/src/frame-span-index.ts 109
-provider-html-local/src/index.ts 10
-provider-html-local/src/opaque-capture.ts 287
-provider-html-local/src/options.ts 27
-provider-html-local/src/ordered-frame-sink.ts 139
-provider-html-local/src/output.ts 73
-provider-html-local/src/process-tree.ts 88
-provider-html-local/src/process.ts 157
-provider-html-local/src/program.ts 80
-provider-html-local/src/progress.ts 53
-provider-html-local/src/provider.ts 98
-provider-html-local/src/render.ts 191
-provider-html-local/src/sampling.ts 99
-provider-html-local/src/server.ts 52
-provider-html-local/src/source-frame-decoder.ts 178
-provider-html-local/src/source-frame-store.ts 326
-provider-html-local/src/stage.ts 148
-provider-html-local/src/surface-validation.ts 209
-provider-html-local/src/weighted-capacity.ts 50
-provider-html-local/test/alpha.test.ts 85
-provider-html-local/test/browser-download.test.ts 108
-provider-html-local/test/browser.test.ts 76
-provider-html-local/test/capture-process.test.ts 269
-provider-html-local/test/concurrency.test.ts 62
-provider-html-local/test/frame-span-index.test.ts 44
-provider-html-local/test/frames.test.ts 60
-provider-html-local/test/ordered-frame-sink.test.ts 61
-provider-html-local/test/process-env.test.ts 70
-provider-html-local/test/progress.test.ts 29
-provider-html-local/test/provider.test.ts 186
-provider-html-local/test/range.test.ts 244
-provider-html-local/test/source-frame-decoder.test.ts 25
-provider-html-local/test/source-frame-store.test.ts 103
-provider-html-local/test/stage.test.ts 209
-provider-html-local/test/surface-validation.test.ts 153
-provider-html-local/test/visual-readiness.test.ts 439
-provider-html-local/test/weighted-capacity.test.ts 18
-browser-capture/README.md 92
-browser-capture/package.json 28
-browser-capture/src/browser.ts 33
-browser-capture/src/cli.ts 204
-browser-capture/src/index.ts 194
-browser-capture/test/capture.test.ts 117
-browser-capture/test/cli.test.ts 53
-visual-track/README.md 139
-visual-track/package.json 45
-visual-track/preview/build.svrun 5
-visual-track/preview/preview.svml 50
-visual-track/preview/recipes.svs 16
-visual-track/src/activation.ts 42
-visual-track/src/author.ts 204
-visual-track/src/component.ts 123
-visual-track/src/fragment.ts 56
-visual-track/src/frame-treatment.ts 55
-visual-track/src/index.ts 45
-visual-track/src/layers.ts 352
-visual-track/src/lower.ts 347
-visual-track/src/manifest.ts 438
-visual-track/src/motion.ts 145
-visual-track/src/program.ts 215
-visual-track/src/source-time.ts 241
-visual-track/src/spatial.ts 77
-visual-track/src/studio.ts 210
-visual-track/src/surface.ts 675
-visual-track/src/types.ts 252
-visual-track/test/studio-companion.test.ts 27
-visual-track/test/visual-track.test.ts 722
-composition/README.md 82
-composition/package.json 36
-composition/src/activation.ts 8
-composition/src/audio-level-automation.ts 44
-composition/src/component.ts 11
-composition/src/index.ts 29
-composition/src/introspection.ts 52
-composition/src/manifest.ts 12
-composition/src/schema.ts 200
-composition/src/track.ts 1456
-composition/src/visual.ts 222
-composition/test/render.test.ts 215
-composition/test/track.test.ts 318
-film/README.md 54
-film/package.json 49
-film/src/activation.ts 23
-film/src/component.ts 62
-film/src/fragment.ts 83
-film/src/index.ts 11
-film/src/manifest.ts 151
-film/src/program.ts 110
-film/src/recipe.ts 25
-film/src/studio.ts 17
-film/src/surface.ts 144
-film/src/types.ts 26
-film/test/film.test.ts 254
-film/test/surface.test.ts 223
-video/README.md 65
-video/package.json 72
-video/src/commands.ts 19
-video/src/compiler.ts 74
-video/src/distribution.ts 95
-video/src/index.ts 10
-video/src/package-selection.ts 34
-video/src/vocabulary.ts 355
-video/test/cli.test.ts 164
-video/test/packages.ts 66
-video/test/vocabulary.test.ts 143
+| `packages/media/README.md` | 62 | ✅ |
+| `packages/media/src/activation.ts` | 45 | ✅ |
+| `packages/media/src/component.ts` | 28 | ✅ |
+| `packages/media/src/domain.ts` | 11 | ✅ |
+| `packages/media/src/frame-range.ts` | 33 | ✅ |
+| `packages/media/src/identity.ts` | 227 | ✅ |
+| `packages/media/src/index.ts` | 17 | ✅ |
+| `packages/media/src/manifest.ts` | 165 | ✅ |
+| `packages/media/src/render.ts` | 140 | ✅ |
+| `packages/media/src/schema.ts` | 70 | ✅ |
+| `packages/media/src/surface.ts` | 236 | ✅ |
+| `packages/media/src/types.ts` | 125 | ✅ |
+| `packages/media/test/asset-surface.test.ts` | 62 | ✅ |
+| `packages/media/test/domain.test.ts` | 22 | ✅ |
+| `packages/media/test/font-surface.test.ts` | 154 | ✅ |
+| `packages/media-local/README.md` | 108 | ✅ |
+| `packages/media-local/src/activation.ts` | 65 | ✅ |
+| `packages/media-local/src/audio-level-automation.ts` | 32 | ✅ |
+| `packages/media-local/src/cli.ts` | 22 | ✅ |
+| `packages/media-local/src/execute.ts` | 1380 | ✅ |
+| `packages/media-local/src/file-frames.ts` | 25 | ✅ |
+| `packages/media-local/src/files.ts` | 843 | ✅ |
+| `packages/media-local/src/frame-grid.ts` | 34 | ✅ |
+| `packages/media-local/src/index.ts` | 8 | ✅ |
+| `packages/media-local/src/normalize-copy.ts` | 53 | ✅ |
+| `packages/media-local/src/probe.ts` | 315 | ✅ |
+| `packages/media-local/src/process-env.ts` | 21 | ✅ |
+| `packages/media-local/src/process.ts` | 112 | ✅ |
+| `packages/media-local/src/program.ts` | 19 | ✅ |
+| `packages/media-local/src/provider.ts` | 147 | ✅ |
+| `packages/media-local/src/speech.ts` | 65 | ✅ |
+| `packages/media-local/src/toolchain.ts` | 55 | ✅ |
+| `packages/media-local/src/webp.ts` | 200 | ✅ |
+| `packages/media-local/test/alpha.test.ts` | 52 | ✅ |
+| `packages/media-local/test/file-frames.test.ts` | 34 | ✅ |
+| `packages/media-local/test/files.test.ts` | 282 | ✅ |
+| `packages/media-local/test/probe.test.ts` | 92 | ✅ |
+| `packages/media-local/test/process-env.test.ts` | 53 | ✅ |
+| `packages/media-local/test/provider.test.ts` | 1125 | ✅ |
+| `packages/media-local/test/toolchain.test.ts` | 26 | ✅ |
+| `packages/media-local/test/webp.test.ts` | 53 | ✅ |
+| `packages/media-operations/README.md` | 122 | ✅ |
+| `packages/media-operations/src/activation.ts` | 49 | ✅ |
+| `packages/media-operations/src/audio-plan.ts` | 146 | ✅ |
+| `packages/media-operations/src/component.ts` | 364 | ✅ |
+| `packages/media-operations/src/fragment.ts` | 188 | ✅ |
+| `packages/media-operations/src/index.ts` | 46 | ✅ |
+| `packages/media-operations/src/manifest.ts` | 636 | ✅ |
+| `packages/media-operations/src/operations.ts` | 247 | ✅ |
+| `packages/media-operations/src/selection.ts` | 108 | ✅ |
+| `packages/media-operations/src/surface.ts` | 369 | ✅ |
+| `packages/media-operations/src/types.ts` | 172 | ✅ |
+| `packages/media-operations/test/manifest.test.ts` | 223 | ✅ |
+| `packages/media-operations/test/mux.test.ts` | 36 | ✅ |
+| `packages/media-operations/test/presentation.test.ts` | 14 | ✅ |
+| `packages/media-operations/test/selection.test.ts` | 133 | ✅ |
+| `packages/media-operations/test/still-video.test.ts` | 29 | ✅ |
+| `packages/image-operations/README.md` | 33 | ✅ |
+| `packages/image-operations/src/activation.ts` | 43 | ✅ |
+| `packages/image-operations/src/component.ts` | 68 | ✅ |
+| `packages/image-operations/src/compose-component.ts` | 100 | ✅ |
+| `packages/image-operations/src/compose-declaration.ts` | 51 | ✅ |
+| `packages/image-operations/src/compose-fragment.ts` | 54 | ✅ |
+| `packages/image-operations/src/compose-program.ts` | 75 | ✅ |
+| `packages/image-operations/src/compose-surface.ts` | 83 | ✅ |
+| `packages/image-operations/src/compose-types.ts` | 22 | ✅ |
+| `packages/image-operations/src/execution-types.ts` | 58 | ✅ |
+| `packages/image-operations/src/execution.ts` | 132 | ✅ |
+| `packages/image-operations/src/fragment.ts` | 25 | ✅ |
+| `packages/image-operations/src/index.ts` | 47 | ✅ |
+| `packages/image-operations/src/manifest.ts` | 245 | ✅ |
+| `packages/image-operations/src/operation-schema.ts` | 53 | ✅ |
+| `packages/image-operations/src/program.ts` | 16 | ✅ |
+| `packages/image-operations/src/refs.ts` | 30 | ✅ |
+| `packages/image-operations/src/surface.ts` | 211 | ✅ |
+| `packages/image-operations/src/types.ts` | 8 | ✅ |
+| `packages/image-operations/test/execution.test.ts` | 42 | ✅ |
+| `packages/image-operations/test/image-compose.test.ts` | 96 | ✅ |
+| `packages/image-operations/test/image-transform.test.ts` | 109 | ✅ |
+| `packages/provider-image-opencv-local/README.md` | 16 | ✅ |
+| `packages/provider-image-opencv-local/runtime/README.md` | 33 | ✅ |
+| `packages/provider-image-opencv-local/runtime/pyproject.toml` | 13 | ✅ |
+| `packages/provider-image-opencv-local/runtime/raster_execute.py` | 299 | ✅ |
+| `packages/provider-image-opencv-local/src/activation.ts` | 61 | ✅ |
+| `packages/provider-image-opencv-local/src/deployment.ts` | 62 | ✅ |
+| `packages/provider-image-opencv-local/src/index.ts` | 2 | ✅ |
+| `packages/provider-image-opencv-local/src/program.ts` | 60 | ✅ |
+| `packages/provider-image-opencv-local/src/provider.ts` | 181 | ✅ |
+| `packages/provider-image-opencv-local/test/program.test.ts` | 59 | ✅ |
+| `packages/provider-image-opencv-local/test/provider.test.ts` | 181 | ✅ |
+| `packages/audio-track/README.md` | 68 | ✅ |
+| `packages/audio-track/src/activation.ts` | 36 | ✅ |
+| `packages/audio-track/src/component.ts` | 51 | ✅ |
+| `packages/audio-track/src/fragment.ts` | 64 | ✅ |
+| `packages/audio-track/src/index.ts` | 8 | ✅ |
+| `packages/audio-track/src/manifest.ts` | 167 | ✅ |
+| `packages/audio-track/src/program.ts` | 199 | ✅ |
+| `packages/audio-track/src/source-time.ts` | 201 | ✅ |
+| `packages/audio-track/src/studio.ts` | 83 | ✅ |
+| `packages/audio-track/src/surface.ts` | 275 | ✅ |
+| `packages/audio-track/src/types.ts` | 82 | ✅ |
+| `packages/audio-track/test/audio-track.test.ts` | 395 | ✅ |
+| `packages/volcengine-matting/README.md` | 99 | ✅ |
+| `packages/volcengine-matting/src/activation.ts` | 15 | ✅ |
+| `packages/volcengine-matting/src/index.ts` | 45 | ✅ |
+| `packages/volcengine-matting/src/surface.ts` | 48 | ✅ |
+| `packages/volcengine-matting/test/matting.test.ts` | 24 | ✅ |
+| `packages/yt-dlp/README.md` | 40 | ✅ |
+| `packages/yt-dlp/runtime/README.md` | 20 | ✅ |
+| `packages/yt-dlp/runtime/pyproject.toml` | 13 | ✅ |
+| `packages/yt-dlp/src/cli.ts` | 85 | ✅ |
+| `packages/yt-dlp/src/download.ts` | 100 | ✅ |
+| `packages/yt-dlp/src/environment.ts` | 41 | ✅ |
+| `packages/yt-dlp/src/index.ts` | 2 | ✅ |
+| `packages/yt-dlp/test/cli.test.ts` | 39 | ✅ |
+| `packages/yt-dlp/test/download.test.ts` | 100 | ✅ |
+| `packages/recipe/README.md` | 37 | ✅ |
+| `packages/recipe/src/activation.ts` | 11 | ✅ |
+| `packages/recipe/src/format.ts` | 16 | ✅ |
+| `packages/recipe/src/frontend.ts` | 34 | ✅ |
+| `packages/recipe/src/index.ts` | 5 | ✅ |
+| `packages/recipe/src/manifest.ts` | 17 | ✅ |
+| `packages/recipe/src/parser.ts` | 306 | ✅ |
+| `packages/recipe/src/types.ts` | 26 | ✅ |
+| `packages/recipe/test/source-closure.test.ts` | 371 | ✅ |
