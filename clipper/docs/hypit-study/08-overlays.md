@@ -18,7 +18,7 @@ Paths are relative to the hypit repo root (`packages/...`). Our code is cited as
 
 ## 0. The shape every package shares
 
-All five component packages are built the same way, so this is described once:
+The four overlay packages (ranking, comment-sticker, interview-emoji-reveal, depth-stack) are built the same way, so this is described once. `spatial` and `region-evidence` share only the surface and fragment layers: they have no style decoder, program or renderer. Only ranking, comment-sticker and depth-stack ship a `studio.ts`; interview-emoji-reveal, spatial and region-evidence have none *(corrected in check)*.
 
 1. **Surface** (`surface.ts`): a markup tag handler. It checks attributes against an allow-list and resolves typed references (Frame, Window/Instant, Recipe, Font, Blob). It emits sealed *records* plus one *component* whose graph *fragment* does the work. Unknown attributes and wrong reference types throw.
 2. **Style decoder** (`style.ts`/`author.ts`): takes an "SVS Recipe" (a flat key→value map). Unknown keys are refused *by name*. Every key has a default. The result is a typed, canonicalized Style object.

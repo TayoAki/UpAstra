@@ -2,7 +2,7 @@
 
 **Batch:** 01 "Language & compiler"
 **Source:** hypit-ai/hypit at commit `dc2b7a8f31b1ef1443a79ca448548d69e3ceb6a0`
-**Packages (TypeScript lines, `src/` + `test/`):** markup 2,248 · loader 1,634 · compiler 2,106 · kernel 3,140 · protocol 639 · result 2,271 · admission 148 · facet 71 · source 211 · project 55 · blob 32 · atomic-file 103 · workspace 418. Total about 13.1k lines of TypeScript, of which about 8.5k are `src/`. READMEs and `package.json` files were also read. Per-file counts are in the coverage table at the end.
+**Packages (TypeScript lines, `src/` + `test/`):** markup 2,248 · loader 1,634 · compiler 2,106 · kernel 3,140 · protocol 639 · result 2,271 · admission 148 · facet 71 · source 211 · project 55 · blob 32 · atomic-file 103 · workspace 418. Total about 13.1k lines of TypeScript, of which about 9.0k (9,033) are `src/` *(corrected in check)*. READMEs and `package.json` files were also read. Per-file counts are in the coverage table at the end.
 
 All paths below are relative to the hypit repo root.
 
@@ -12,7 +12,7 @@ All paths below are relative to the hypit repo root.
 
 This is how `.svml`, `.svs` and `.svrun` text becomes a build plan. Each step is detailed per package below.
 
-1. **Source header picks the parser, not the file suffix.** Every authored file starts with `<?svml using="<frontend>@<n>"?>`. The parser for that header is `packages/source/src/header.ts:42-74`. The masking at `:77-81` keeps the byte offsets of everything after it unchanged. A test renames `main.svml` to `main.anything` and gets the same result (`packages/compiler/test/compiler.test.ts:363-385`).
+1. **Source header picks the parser, not the file suffix.** Every authored file starts with `<?svml using="<frontend>@<n>"?>`. The parser for that header is `packages/source/src/header.ts:42-74`. The masking at `:77-81` keeps the UTF-16 code-unit offsets (and line numbers) of everything after it unchanged. It does not keep UTF-8 byte offsets: the masked text is re-encoded (`:95`), so a BOM or a non-ASCII header character shrinks to one space byte *(corrected in check)*. A test renames `main.svml` to `main.anything` and gets the same result (`packages/compiler/test/compiler.test.ts:363-385`).
    - `.svml` usually selects `@hypit/markup@1`, the author graph.
    - `.svrun` selects `@hypit/markup/run@1`, the run selection.
    - `.svs` selects some other frontend. In the examples it is `@hypit/recipe@1`, a CSS-like `<sheet>` (`examples/semantic-composition/chat.svs:1-4`). That frontend is outside this batch.
@@ -110,8 +110,8 @@ It also contains the `.svrun` parser (subpath `./run`). Markup has no built-in d
   - duplicate components are rejected (`:275-286`).
 - `test/run/run.test.ts` has 11:
   - one multi-export fragment runs once (`:145-163`);
-  - unselected literal fragments never become records (`:165-193`);
-  - `value="5"` becomes the number 5, and giving both `from` and `value` fails (`:195-211`);
+  - an unselected literal fragment's input is still a Run-graph record, but it never enters the build state (`:165-193`) *(corrected in check)*;
+  - `value="5"` becomes the number 5, and giving both `from` and `value` fails (`:195-211`). The input is named `prompt`, so the test itself shows a text-like input silently becoming a number;
   - a `<file>` becomes a `@hypit/blob@1#Blob` Candidate (`:230-250`);
   - imports after the body are rejected, and an error message carries `bad.svrun:2:` (`:272-279`).
 
@@ -219,13 +219,13 @@ It also contains the `.svrun` parser (subpath `./run`). Markup has no built-in d
   2. Extend the program with modules used only by the selected run fragments (`:271-274`; `src/compiler.ts:166-171`).
   3. Make a **structural plan first**, before reading any values (`:283`).
   4. Open only the `<value>` JSON, `<file>` blobs and `<build-record>` outputs that the plan selected (`:284-336`). An unreachable `<value>` pointing at a missing file is never opened (`test/compiler.test.ts:471-491`).
-  5. A historical output is *located* (type-checked from the manifest) always, but only *materialized* when a selected producer consumes it (`:309-335`; tested at `test/compiler.test.ts:509-573`). An output that is only forwarded becomes a `resultForward` instead of a target (`:355-362`, `:385-392`, `:401-414`).
-  6. Substitute the resolved values into the Run Graph (`:337-354`), re-plan, admit the selected initial records (`:359-370`), then `sliceExecution` and `defineBuild` (`:393-399`).
+  5. A historical output is *located* (type-checked from the manifest) always, but only *materialized* when a selected producer consumes it (`:309-335`; tested at `test/compiler.test.ts:509-573`). Every selected `build-output` Candidate becomes a `resultForward`, including one that is also consumed (the test at `:565` gets one forward for a consumed output). Only a forward-*only* output is also dropped from the execution targets (`:355-362`, `:385-392`, `:401-414`) *(corrected in check)*.
+  6. Substitute the resolved values into the Run Graph (`:337-354`), re-plan, and admit the selected initial records (`:359-370`). `sliceExecution` and `defineBuild` happen afterwards, in the separate `planCompilation` step (`:382-416`, at `:393-399`) *(corrected in check)*.
 - **`checkResolvedSource`** (`:189-261`) is the static variant. It accepts a future `<build-record>` without opening any Results (`test/compiler.test.ts:435-469`).
 - **Attachments.** Asset bytes travel beside the graph as `BlobAttachment`s, deduplicated by resource and media type. A size conflict on one resource is an error (`src/compiler.ts:31-54`).
 
-**Tests.** 16 tests.
-- `test/compiler.test.ts` has 14, plus a symlink subtest:
+**Tests.** 17 top-level tests, plus one subtest *(corrected in check)*.
+- `test/compiler.test.ts` has 15, plus a symlink subtest *(corrected in check)*:
   - run-only modules extend the execution closure but stay out of the author graph, and the durable build keeps only the modules its slice needs (`:387-433`);
   - source assets become blob records plus attachments, and editing the asset changes the resource id (`:575-594`);
   - Workspace read-once and containment, including symlinks (`:644-713`);
@@ -364,7 +364,8 @@ Planning first and opening only selected inputs is exactly what our CPU-only ren
 - **Canonicalization** (`src/canonical.ts:5-33`):
   - rejects NaN and Infinity, and normalizes `-0` to `0`;
   - rejects `undefined`;
-  - sorts object keys with `localeCompare` (`:16`).
+  - sorts object keys with `localeCompare` (`:16`);
+  - has no plain-object check. Anything with `typeof "object"` goes through `Object.entries`, so a `Date`, `Map`, `Set` or class instance becomes `{}` silently instead of being rejected (`:14-22`) *(added in check)*.
 - **Type identity** is nominal: module plus name. "There is no structural fallback" (`src/identity.ts:17-25`).
 - **Build ids** look like `bld_YYYYMMDDTHHMMSSmmmZ_<10 [0-9A-Z]>` and sort chronologically. They are explicitly not digests (`src/build-id.ts:5`, `:14-23`). A build id must be one path segment (`:47-52`).
 - **Durable model.** The `BuildDefinition` plus a fixed set of three `BuildFact` kinds are stored. `BuildState` is a disposable view (`src/build.ts:214-265`).
@@ -373,7 +374,7 @@ Planning first and opening only selected inputs is exactly what our CPU-only ren
 
 **Quality notes.**
 - (+) The data model is tight and well documented, and it states its identity semantics explicitly (`src/identity.ts:1`, `src/value.ts:13`).
-- (−) `localeCompare` makes "canonical" JSON depend on locale and ICU (`src/canonical.ts:16`). It is used for fragment equality (`packages/markup/src/frontend.ts:415`, `packages/compiler/src/source.ts:373`). That is safe within one process but not as a cross-machine hash input.
+- (−) `localeCompare` makes "canonical" JSON depend on locale and ICU (`src/canonical.ts:16`). It is used for fragment equality (`packages/markup/src/frontend.ts:415`, `packages/compiler/src/source.ts:373`) and to normalize Need constraints (`packages/kernel/src/reducer.ts:110`). That is safe within one process but not as a cross-machine hash input. `localeCompare` is also the sort everywhere else in the batch: command scheduling (`packages/kernel/src/reducer.ts:238`), attachment order (`packages/workspace/src/node/workspace.ts:257`, `packages/compiler/src/compiler.ts:53`), module closures (`packages/compiler/src/modules.ts:103`) and exports (`packages/compiler/src/source.ts:403`) *(added in check)*.
 - (−) `ValueSchema` exists (`src/value.ts:26-66`), but Core manifests' `TypeDeclaration` is only `{name}` (`src/module.ts:10-12`). Schemas live in surface vocabularies and validators, not Types.
 
 **Relevance to UGCMediaClips: Medium.**
@@ -503,10 +504,10 @@ It also stores a terminal outcome and execution evidence. Execution state itself
 - `./text`: `parseSourceHeader`, `maskSourceHeader`, `resolveSelfDescribedTextSource` and `SourceHeaderError` (`src/header.ts`).
 
 **How it works.**
-- The header grammar is deliberately minimal: an optional BOM (`src/header.ts:43`), then exactly one `<?svml using="x"?>` with no padding (`:53`, `:64-66`). A second header is rejected (`:70-72`).
+- The header grammar is deliberately minimal: an optional BOM (`src/header.ts:43`), then exactly one `<?svml using="x"?>` (`:53`). The regex needs at least one space or tab before `using`, allows trailing spaces or tabs before `?>`, and accepts single or double quotes. Only the *value* must be unpadded and free of whitespace, `<>&'"` (`:29`, `:64-66`) *(corrected in check)*. A second header is rejected (`:70-72`).
 - Masking replaces every header code unit except CR and LF with a space. Downstream offsets and line numbers therefore stay exact, including for characters outside the Basic Multilingual Plane (`:77-81`).
 
-**Tests.** 3 tests (`test/text.test.ts`): offsets preserved (`:10-18`); UTF-16 offsets preserved with a non-BMP character (`:20-27`); BOM accepted, a missing, duplicate or padded header rejected with a `file:2:1:` prefix (`:29-48`).
+**Tests.** 3 tests (`test/text.test.ts`): offsets preserved (`:10-18`); UTF-16 offsets preserved with a non-BMP character (`:20-27`); BOM accepted; a missing, duplicate or padded header is rejected, and only the duplicate case asserts the `duplicate.svml:2:1:` prefix (`:29-48`) *(corrected in check)*.
 
 **Quality notes.**
 - (+) An explicit parser choice instead of guessing from suffixes, and careful offset preservation.
@@ -757,6 +758,61 @@ Every file was read in full ✅. Line counts are from `wc -l`.
 | packages/workspace/src/node/workspace.ts | 304 | ✅ |
 | packages/workspace/test/node/workspace.test.ts | 65 | ✅ |
 
-**Test count across the batch: 96 `test()` cases.** markup 16, loader 18, compiler 16, kernel 21, protocol 6, result 13, source 3, atomic-file 1, workspace 2. Admission, facet, project and blob have no tests of their own.
+**Test count across the batch: 97 top-level `test()` cases** (plus one subtest in compiler) *(corrected in check)*. markup 16, loader 18, compiler 17, kernel 21, protocol 6, result 13, source 3, atomic-file 1, workspace 2. Admission, facet, project and blob have no tests of their own.
 
 **Out of scope but referenced** (not verified here): `@hypit/author` (`elaborateAuthorGraph`, `sealGraphFragment` and how fragment ids are hashed) and `@hypit/run` (`resolveRunDocument`, `sealRunGraph`, `collectRunModuleRequests`). Both are needed to fully confirm how a fragment instance in `.svrun` becomes graph operations. Context only: `examples/semantic-composition/chat.svml`, `chat.svs` and `chat.svrun` show the three file kinds together.
+
+## Check
+
+Second review against hypit at `dc2b7a8f31b1ef1443a79ca448548d69e3ceb6a0`, after the santa-method pass.
+
+**Method.**
+- I opened every cited location in the priority areas and compared it with the claim:
+  - identity and caching: `workspace.ts:110/148/195/231-249`, `compiler.test.ts:566/575-594/644-713/771-798`, `demand.test.ts:473-508`;
+  - parser and compile pipeline: `source/header.ts`, `compiler/source.ts`, `compiler/compiler.ts`, `compiler/run.ts`, kernel `plan.ts`, `machine.ts`, `reducer.ts`, `graph.ts`, `link.ts` and `slice.ts`;
+  - the reported smells: `protocol/canonical.ts:16`, `markup run/syntax.ts:160-169`, `markup frontend.ts:247/270` with `element.ts:9/11/32`.
+- I also checked markup `syntax.ts` and `frontend.ts`, protocol, admission, facet, project, blob, atomic-file, the main result `writer.ts` and `store.ts` citations, and the loader's `loader.ts`, `location.ts`, `module-scope.ts` and `distribution-resolution.ts` anchors.
+- I recounted every test title.
+- The "Our app" anchors match: `clipper/server/footage-cache.ts:31` (`cacheKey`: the Drive id, or a sha256 of the URL), `server/render.ts` exists, and the README says signed links are valid for 7 days.
+
+**Totals.**
+
+| | Count |
+|---|---:|
+| Distinct claims checked | about 230 (from 415 citation occurrences, many repeated) |
+| Confirmed | about 222 |
+| Corrected | 8 |
+| Removed | 0 |
+| Unverified | 0 |
+| Added | 2 |
+
+The 8 corrections:
+1. The `src/` total is about 9.0k lines, not 8.5k.
+2. Header masking preserves UTF-16 offsets, not byte offsets.
+3. The header regex allows some whitespace and either quote style; only the value must be unpadded.
+4. Only the duplicate-header test asserts the `file:2:1:` prefix.
+5. `compiler.test.ts` has 15 top-level tests, not 14. The package has 17 and the batch has 97, not 16 and 96.
+6. Unselected Run literals are Run-graph records; they are only absent from the build state.
+7. Every `build-output` selection becomes a `resultForward`, consumed or not.
+8. Slicing and `defineBuild` happen in `planCompilation`, not in `compileResolvedSource`.
+
+The 2 additions:
+1. `canonicalize` silently turns a `Date`, `Map` or `Set` into `{}`.
+2. A fuller list of `localeCompare` sites, including Need constraints and command scheduling.
+
+**All priority claims hold:**
+- Random `res_${randomUUID()}` ids (`workspace.ts:195`, `:234`).
+- The equal-bytes-different-ids assertion (`compiler.test.ts:790-791`).
+- Lazy attachment reads under the old identity (`:671-673`). Note that this test's edit also changes the size, so only a same-size edit is undetectable from the captured identity.
+- No content deduplication of operations (`demand.test.ts:498-508`).
+- Hygienic ids embed the absolute canonical path (`compiler/source.ts:100-102`, `:153-162`).
+- The plan-then-open order (`run.ts:283-336`).
+- The demand walk, Kahn's check and the reachability check (`plan.ts:131-297`, `:437-492`).
+- `evaluate`/`commit` (`machine.ts:113-204`).
+- The `localeCompare` canonicalization (`canonical.ts:16`).
+- Implicit literal coercion (`run/syntax.ts:160-169`).
+- Surface errors without location (no try/catch around `frontend.ts:247`/`:270`; plain `Error` in `element.ts`).
+
+**Files added to coverage.** None. All 115 files in the 13 packages (`src`, `test`, README and `package.json`) are in the table, and every line count matches `wc -l`.
+
+**Verdict: Verified ✅.** About 3.5% of claims needed a correction, all of them minor precision or count fixes, and coverage is complete. None of the corrections changes a conclusion or a recommendation.

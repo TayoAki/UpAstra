@@ -109,7 +109,7 @@ The key idea: one self-contained HTML document is a pure function of an **absolu
 **Public surface.**
 - `createLocalHtmlProvider`, `localHtmlProviderModuleRef`, `rasterizeHtmlProgram`, `rasterizeHtmlFrames`, plus types (`src/index.ts:1-10`).
 - The runtime adapter accepts these config keys: `workers`, `maxWorkers`, `quality`, `browserGpu`, `defaultConcurrency`, `browserCapacity`, timeouts and byte budgets (`src/activation.ts:24-27`).
-- The managed browser is Chrome Headless Shell `152.0.7928.2`, pinned in `package.json` (`package.json:110-112`, `src/browser.ts:9-19, 51, 79`).
+- The managed browser is Chrome Headless Shell `152.0.7928.2`, pinned in `package.json` (`package.json:16-18`, `src/browser.ts:9-19, 51, 79`). *(corrected in check)*
 
 **How it works.**
 - *Defaults* (`src/render.ts:39-69`):
@@ -154,7 +154,7 @@ The key idea: one self-contained HTML document is a pure function of an **absolu
   - A streaming PNG parser splits the pipe on IEND (`:39-90`).
   - Decoded frames sit in a byte-budgeted, LRU, lease-counted store shared by all workers. One oversized frame may overflow it so the render can't deadlock (`src/source-frame-store.ts:187-213`).
 - *Ordering.* `OrderedFrameSink` admits out-of-order PNGs up to 256 MiB. The frontier frame always passes, and one oversized frame is allowed when the set is empty (`src/ordered-frame-sink.ts:46-71`).
-- *Encode* (`src/capture.ts:143-152`):
+- *Encode* (`src/capture.ts:143-150`): *(corrected in check)*
   ```
   ffmpeg -f image2pipe -framerate N/D -vcodec png -i pipe:0 -frames:v <n> -an -c:v libx264
     -crf {draft 28 | standard 23 | high 18} -preset {veryfast for draft, else medium}
@@ -289,7 +289,7 @@ The key idea: one self-contained HTML document is a pure function of an **absolu
 - *Source time.* Symbolic relations (rate, anchors, wrap, fit) resolve to exact rational pieces by binary search over valid target frames (`src/source-time.ts:116-152, 207-241`). Sources **must already be normalized to the Timeline frame rate** (`src/source-time.ts:220-222`).
 - *Motion.* Poses carry `translate`, `rotate`, `scale` and `opacity` keyframes at start/end±Nf/percent, and must cover the whole clip clock exactly (`src/motion.ts:79-122`). Easing is limited to `linear` and `ease-in`, `ease-out`, `ease-in-out` (`:64-66`).
 
-**Tests.** 18 + 1 studio test. Highlights:
+**Tests.** 17 + 1 studio test. *(corrected in check)* Highlights:
 - Clip paths are translated into Frame-local coordinates: `M 0 0 L 400 0 L 360 300 L 40 300 Z` (`test/visual-track.test.ts:273`).
 - Self-blur shares one resource across two samples, with 103 px overscan for a 24 px blur (`:320-321`).
 - A hold is kept as `rate 0/1` (`:377`).
@@ -381,19 +381,38 @@ The key idea: one self-contained HTML document is a pure function of an **absolu
 
 | Aspect | UGCMediaClips today | hypit |
 |---|---|---|
-| Graphics engine | libass inside one ffmpeg pass: `[0:v]ass=…[sub]` then a chain of PNG sticker overlays (`clipper/server/media.ts:155-171`, `clipper/server/overlays.ts:289-310`) | Chrome renders every pixel, footage included. ffmpeg only decodes sources and encodes the result (`provider-html-local/src/capture.ts:144-152`) |
-| Time base | ASS centiseconds (`clipper/server/captions.ts:211-217`). libass samples per output frame. Good to about 10 ms. | Integer frames, rational fps, BigInt math (`html-program/src/document.ts:53-59`) |
+| Graphics engine | libass inside one ffmpeg pass: `[0:v]ass=…[sub]` then a chain of PNG sticker overlays (`clipper/server/media.ts:155-171`, `clipper/server/overlays.ts:289-310`) | Chrome renders every pixel, footage included. ffmpeg only decodes sources and encodes the result (`provider-html-local/src/capture.ts:143-150`) *(corrected in check)* |
+| Time base | ASS centiseconds (`clipper/server/captions.ts:18-24`) *(corrected in check)*. libass samples per output frame. Good to about 10 ms. | Integer frames, rational fps, BigInt math (`html-program/src/document.ts:53-59`) |
 | Motion vocabulary | ASS `\move`, `\t(\fscx…)`, `\fad`, `\frz`, vector `\p1` rounded rects (`clipper/server/overlays.ts:70-85, 162-178`); ffmpeg overlay with an expression bounce (`:305`) | Full CSS: transforms, filters, `backdrop-filter`, `mix-blend-mode`, SVG masks, gradients, per-grapheme staggered WAAPI, path text, shrink-to-fit |
 | What it can't do | Gradients on text or shapes; real box/backdrop blur; masks; colour emoji in text (worked around with PNGs, `clipper/server/overlays.ts:10-11`); flexbox layout and auto-fit; Lottie-style motion | Alpha output (it is opaque by design, `opaque-capture.ts:19-20`) |
 | Encode | `libx264 -preset veryfast -crf 21 -pix_fmt yuv420p +faststart` (`clipper/server/media.ts:167`); cuts at `veryfast -crf 20` (`:124`) | `libx264 -crf 23` (standard) or 18 (high), `-preset medium`, explicit BT.709 conversion and tags (`capture.ts:143-150`) |
-| Colour | Untagged. Overlays are RGBA PNGs converted by ffmpeg's default matrix (`clipper/server/media.ts:113, 167`). | Explicit `out_color_matrix=bt709:out_range=tv` plus `setparams` tags |
+| Colour | Untagged. Sticker PNGs are `format=rgba` then `overlay=…:format=auto` onto yuv420p (`clipper/server/overlays.ts:301-305`), and libass blends ASS colours into the same untagged yuv420p (`clipper/server/media.ts:164-167`); both use ffmpeg's default BT.601 matrix (measured, see below). *(corrected in check)* | Explicit `out_color_matrix=bt709:out_range=tv` plus `setparams` tags |
 | Cost per 30 s clip on 1.6 vCPU | One ffmpeg filter pass; libass is cheap. | ≥ 900 full-frame Chrome screenshots + PNG round trips. No benchmark exists in the repo; my estimate is minutes on one CPU worker. |
 | Parallelism | `RENDER_CONCURRENCY` renders, about 1.6 vCPU and 2 GB each (`clipper/README.md:228`, `clipper/server/render.ts:39`) | 1…N browsers inside one render. `autoWorkerLimit` gives **1** browser on a 2 GB container: `floor(2/2/1.5)=0 → max(1,…)` (`concurrency.ts:12-13`) |
 | Verification | Exit code only | ffprobe exact frame count, size, rate and codec (`output.ts:39-72`) |
 
 Takeaway: for 1080×1920 UGC with burned captions, our ASS path is the right default. It is about an order of magnitude cheaper (inference, not measured) and already frame-accurate enough. hypit's strength is *rich motion graphics*, and it pays for that with a browser per pixel. A hybrid keeps ffmpeg as the compositor and uses Chrome only for the premium overlay pixels.
 
-**A likely colour bug on our side, worth checking.** Our RGBA PNG stickers are overlaid onto yuv420p and the output carries no colour tags (`clipper/server/media.ts:159-170`). By default swscale converts RGB to YUV with BT.601 coefficients, while players assume BT.709 for untagged HD. Brand colours in stickers, and in any future PNG overlay layer, may shift slightly. Verify with a solid-colour sticker. The fix is hypit's filter tail: `scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,setparams=…bt709…`.
+**A colour bug on our side, confirmed in check.** Our final encode is `[0:v]ass=…[sub];<stickerGraph>` then `-c:v libx264 -preset veryfast -crf 21 -pix_fmt yuv420p` with no `-colorspace/-color_primaries/-color_trc` and no `out_color_matrix` (`clipper/server/media.ts:159-170`); each sticker is `format=rgba,scale,…` then `overlay=…:format=auto` (`clipper/server/overlays.ts:301-305`). ffprobe reports the output as `color_space/primaries/transfer/range = unknown`. ffmpeg's RGB→YUV conversion defaults to BT.601, while players commonly assume BT.709 for untagged HD. *(corrected in check: originally "likely"; now measured)*
+
+Experiment (ffmpeg 6.1.1, scratch dir `check05`): a solid `#E5484D` (229, 72, 77) 200×200 RGBA PNG overlaid on a 1080×1920 black H.264 with the same filter shape, `libx264 -crf 21 yuv420p`, one pixel decoded back to rgb24:
+
+| Variant | Stream tags | Decoded by ffmpeg (default) | Decoded as BT.709 (what an HD player assumes) |
+|---|---|---|---|
+| A. Ours: `format=rgba` + `overlay=format=auto`, untagged | unknown | 227, 71, 76 (Δ −2, −1, −1) | **240, 86, 74 (Δ +11, +14, −3)** |
+| B. + `scale=out_color_matrix=bt709:out_range=tv,format=yuv420p` + `-colorspace bt709 -color_primaries bt709 -color_trc bt709` | bt709 / tv | 228, 70, 75 (Δ −1, −2, −2) | 228, 70, 75 |
+| C. Tags only, no matrix conversion | bt709 | 240, 86, 74 | 240, 86, 74 (wrong for everyone) |
+| ASS `\p1` box `&H004D48E5&`, untagged (our caption path) | unknown | 229, 70, 76 | **242, 86, 74** |
+
+So the stickers *and* the ASS caption/comment/tier colours shift visibly (red channel +11–13, green +14) on any player that treats untagged 1080×1920 as BT.709, and look right only on BT.601-assuming decoders (ffmpeg itself). Tagging alone (C) makes it wrong everywhere. In ffmpeg 6.1, `setparams=…bt709` before `ass` doesn't change how libass blends (measured: still 242, 86, 74). A trailing `scale=out_color_matrix=bt709` (hypit's tail, variant B) re-matrixes the *whole* frame from BT.601 to BT.709. That brings ASS and stickers roughly right (ASS measured 226, 68, 73), but it also shifts footage that was already BT.709: a `#3366CC` BT.709 background came out as 49, 94, 192 against a reference of 46, 98, 198. So hypit's tail alone is not a drop-in fix for us. What kept all three right in the experiment was blending ASS and stickers in RGB, then converting once:
+
+```
+[0:v]scale=in_color_matrix=bt709:in_range=tv,format=rgb24,ass=…[sub];
+[sub][st]overlay=…:format=rgb,scale=out_color_matrix=bt709:out_range=tv,format=yuv420p[v]
+… -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv
+```
+
+That measured 228, 70, 75 for both the ASS box and the sticker, and 45, 97, 197 for the BT.709 footage (reference 46, 98, 198). It adds two full-frame colour conversions per frame (cost not measured), and assumes our cut segments are BT.709 (they are untagged too, `clipper/server/media.ts:113, 124`), so the same tags belong on `cutSegment` as well. hypit's equivalent is its encoder tail (`provider-html-local/src/capture.ts:148-149`).
 
 ---
 
@@ -409,9 +428,9 @@ Takeaway: for 1080×1920 UGC with burned captions, our ASS path is the right def
 ### What to change for alpha
 - `Emulation.setDefaultBackgroundColorOverride({color:{r:0,g:0,b:0,a:0}})` instead of `a:1` (`opaque-capture.ts:20`), plus `html,body{background:transparent}`. Chrome screenshots keep alpha when the page and default background are transparent; browser-capture's `omitBackground` test confirms pixel alpha = 0 (`browser-capture/test/capture.test.ts:54-55`).
 - **Clip the screenshot to the template's bounding box** (the CDP `clip` is already passed, `opaque-capture.ts:282`). PNG encode and decode cost scales with area: a 1080×400 lower-third is about 21% of a full frame.
-- **Don't encode an intermediate H.264.** Write `overlay_%05d.png` (or pipe it) and add it to our *existing* final compose as one more input, e.g. `-framerate 30 -i overlay_%05d.png` with `-itsoffset <start>`, then `overlay=x:y:eof_action=pass`. That is the same pattern `stickerGraph` already uses for PNG emoji (`clipper/server/overlays.ts:289-310`). If an overlay must be cached across renders, store it as **VP9-alpha WebM** (`-c:v libvpx-vp9 -pix_fmt yuva420p`) or **qtrle/ProRes 4444 MOV**. hypit's decoder already treats vp8, vp9 and prores as alpha codecs (`source-frame-decoder.ts:8`), and its surface validator checks that declared alpha matches the bytes (`surface-validation.ts:189-197`).
+- **Don't encode an intermediate H.264.** Write `overlay_%05d.png` (or pipe it) and add it to our *existing* final compose as one more input, e.g. `-framerate 30 -i overlay_%05d.png` with `-itsoffset <start>`, then `overlay=x:y:eof_action=pass`. That is the same pattern `stickerGraph` already uses for PNG emoji (`clipper/server/overlays.ts:289-310`). If an overlay must be cached across renders, store it as **VP9-alpha WebM** (`-c:v libvpx-vp9 -pix_fmt yuva420p`) or **qtrle/ProRes 4444 MOV**. hypit's decoder already treats vp8, vp9 and prores as alpha codecs (`source-frame-decoder.ts:8`), and its surface validator checks that declared alpha matches the bytes (`surface-validation.ts:189-197`). That check accepts either an alpha pixel format or an `alpha_mode` tag of `1`/`straight` (`surface-validation.ts:191-192`), which matters because ffprobe reports libvpx VP9-alpha WebM as `yuv420p` plus `alpha_mode=1`. *(added in check)*
 - **Cache across tenants by `hash(templateId, params, fps, size)`.** Stingers, "follow for more" cards and logo bumpers rarely change per clip. After the first render they cost nothing.
-- Add `--disable-gpu`. hypit's default `"hardware"` doesn't (`capture.ts:190`, `render.ts:45`). Also pin a Chrome Headless Shell version in the Dockerfile, as hypit pins `152.0.7928.2` (`provider-html-local/package.json:110-112`).
+- Add `--disable-gpu`. hypit's default `"hardware"` doesn't (`capture.ts:190`, `render.ts:45`). Also pin a Chrome Headless Shell version in the Dockerfile, as hypit pins `152.0.7928.2` (`provider-html-local/package.json:16-18`). *(corrected in check)*
 
 ### Budget (estimates, to be benchmarked; not measured in either repo)
 - **Per-frame cost on CPU** is three CDP round trips + raster + PNG encode (`optimizeForSpeed`) + PNG decode in ffmpeg. For a small region with simple CSS (transforms, opacity, text), expect roughly tens of milliseconds per frame on one software Chrome. Full-frame 1080×1920 with blur or `backdrop-filter` is much slower.
@@ -427,7 +446,7 @@ Takeaway: for 1080×1920 UGC with burned captions, our ASS path is the right def
 - **Exactness.** Verify the PNG count equals the frames in the span before compose, as `verifyOutput` does for MP4 frame counts.
 
 ### Recommended first step (one day)
-Benchmark on the Railway image. Render a 3 s 1080×400 transparent lower-third (CSS slide plus a text stagger) to PNGs with one headless Chrome (`--disable-gpu`, using hypit's capture loop with the alpha changes above). Overlay it in `compose`. Measure wall time, peak RSS and image size growth. Ship to a premium tier only if the extra time is ≤ 20% of the current render (about a minute, `clipper/README.md:22-26`).
+Benchmark on the Railway image. Render a 3 s 1080×400 transparent lower-third (CSS slide plus a text stagger) to PNGs with one headless Chrome (`--disable-gpu`, using hypit's capture loop with the alpha changes above). Overlay it in `compose`. Measure wall time, peak RSS and image size growth. Ship to a premium tier only if the extra time is ≤ 20% of the current render (about a minute, `clipper/README.md:29`) *(corrected in check)*.
 
 ---
 
@@ -435,7 +454,7 @@ Benchmark on the Railway image. Render a 3 s 1080×400 transparent lower-third (
 
 1. **The frame ABI and stateless seeking** (`applyFrame(int)`, paused CSS, transient `Animation` probe, `waitUntil`). This one design choice makes HTML deterministic, parallel and resumable (`html-program/src/document.ts:264-277, 702-763`).
 2. **The CDP capture loop and readiness wait.** Wait for images and fonts, then `captureScreenshot` with `clip`, adapted for alpha and bounding boxes (`provider-html-local/src/opaque-capture.ts:17-287`).
-3. **Explicit BT.709 conversion and tagging on our final encode**, and especially wherever RGBA overlays are composited (`capture.ts:148-149`). Cheap, and likely fixes a real colour shift.
+3. **Explicit BT.709 conversion and tagging on our final encode**, and especially wherever RGBA overlays are composited (`capture.ts:148-149`). Cheap, and fixes a measured colour shift in our stickers and ASS colours. hypit's tail alone would also re-matrix BT.709 footage, so the blending should happen in RGB first (see the colour section). *(corrected in check)*
 4. **Output verification.** ffprobe frame count, size and fps after every render step (`output.ts:39-72`), and the exact-length join check from html-video (`html-video/test/render.test.ts:253-300`).
 5. **Sparse and region rendering.** Render only frames and areas where an overlay is visible (`requestedFrameRanges`, capture scope, artifact usage spans). This is what makes the cost acceptable.
 6. **Closed style and parameter allowlists** for AI-filled templates (`composition/src/visual.ts:12-222`, `track.ts:577-623`).
@@ -618,3 +637,43 @@ Every source, test, README and package file in the batch was read top to bottom.
 | `packages/video/test/packages.ts` | 66 | ✅ |
 | `packages/video/test/vocabulary.test.ts` | 143 | ✅ |
 | `packages/visual-track/preview/{Track,flush,rounded}.png` | binary | not read (images) |
+
+## Check
+
+Second review against `hypit` at `dc2b7a8f`, plus `clipper/` for the "Our app" claims.
+
+**Structure.** The file was coherent and complete: no truncation, duplicated or contradictory sections. The coverage table ends cleanly, and every section has its Purpose / How / Tests / Quality / Relevance parts. No structural fix was needed.
+
+**Totals.** About 105 claims checked (citations, numbers, defaults, test counts and our-app comparisons). Breakdown:
+- 98 confirmed.
+- 7 corrected:
+  - Chrome pin is `package.json:16-18`, not `:110-112` (cited twice; the file has 48 lines).
+  - Encode range is `capture.ts:143-150`, not `:143-152` or `:144-152`.
+  - ASS time formatter is `captions.ts:18-24`, not `:211-217` (the file has 167 lines).
+  - visual-track has 17 + 1 tests, not 18 + 1.
+  - `README.md:29`, not `:22-26`, for "about a minute".
+  - The colour-row citation pointed at `cutSegment` (`media.ts:113`) instead of the sticker graph (`overlays.ts:301-305`).
+  - The colour claim was upgraded from "likely" to measured and widened to ASS colours.
+- 0 removed. The budget figures were already labelled estimates.
+- Added:
+  - the colour experiment table and an RGB-domain fix that works on ffmpeg 6.1;
+  - a warning that tags alone make it worse;
+  - the `alpha_mode` tag path in surface validation.
+
+**Priority citations, all confirmed:**
+- `document.ts:735-763`: `frameProgramRuntime`; ABI frozen at `:756-760`.
+- `:264-277`: `animation-play-state:paused`, with the page-load-leak comment.
+- `:702-729`: transient `new Animation(new KeyframeEffect…)` probe, read via `getComputedStyle`, then cancelled.
+- `opaque-capture.ts:19-20`: `a:1`, "MP4 has no alpha channel".
+- `:240-286`: three CDP round trips, `clip` at `:282`.
+- `capture.ts:143-150`: CRF map 28/23/18 and the BT.709 `-vf` tail at `:149`; `:190` is the software-only `--disable-gpu`.
+- `output.ts:39-72`: `-count_frames`, one H.264 stream, size, rate and frame count.
+- `concurrency.ts:12-13`: `floor(mem/2/1.5 GiB)`, `max(1, min(max(1,cpu−2), byMemory))`. Memory honours `process.constrainedMemory()`, so a 2 GB cgroup really gives 1 browser.
+- `surface-validation.ts:189-197`: alpha must match the declaration.
+
+**Our-app claim.** Confirmed. `clipper/server/media.ts:159-170` has no colour matrix or tags, and the output probes as all `unknown`. Measured drift of `#E5484D` under BT.709 decode: +11, +14, −3 for stickers and +13, +14, −3 for ASS. Scratch files are in `/tmp/claude-0/-home-user-UpAstra/c8a97aa2-c81c-52c3-a0df-9bba50d7f6fe/scratchpad/check05/` (A, B, C, F, G, G2, H, S `.mp4`).
+
+**Coverage.** All 154 text files in the nine packages are listed with correct `wc -l` counts, plus the 3 preview PNGs. No files were added.
+
+**Verdict: Verified ✅.** About 7% of claims needed a correction, all citation or count slips except the colour claim, which the experiment confirmed and strengthened. Coverage is complete.
+

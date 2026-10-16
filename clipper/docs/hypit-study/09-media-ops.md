@@ -75,7 +75,7 @@ Altogether that is about 10.7k source lines and 3.8k test lines. Paths below are
 ### 2a. Process boundary
 - **No shell.** Processes start with `spawn` and no shell (`process.ts:18-22`).
 - **Bounded.** A timeout sends SIGKILL (`:34`). Stdout has an optional byte cap (`:37-41`), and stderr keeps only its last 100,000 characters (`:47`).
-- **Scrubbed environment.** Children get only `PATH`, plus the Windows process-creation variables, so credentials never reach ffmpeg (`process-env.ts:8-21`; asserted in `test/process-env.test.ts:8-43`).
+- **Scrubbed environment (Provider port only).** `mediaProcessEnv` gives children only `PATH`, plus the Windows process-creation variables (`process-env.ts:8-21`; asserted in `test/process-env.test.ts:8-43`). But only `runBoundedMediaProcess` passes it (`process.ts:80-92`, used by `execute.ts:86-93`) and the toolchain probe (`toolchain.ts:38`). The file-port helpers `runProcess`, `runProcessOutput` and `runProcessWithInput` call `run` with no `environment`, so `spawn` inherits the full host env (`process.ts:21`, `95-112`). That covers every `hypit media` CLI call, including `cutFrame` (`files.ts:378`), `visualBoundaries` (`files.ts:475`), `file-frames.ts:13` and the speech WAV in `speech.ts:55` *(corrected in check)*.
 - **Defaults.** Timeout 10 min, probe JSON cap 256 MB, concurrency 1 (`provider.ts:53-55`, `81`). The file-port helpers use 300 s (`process.ts:95`, `100`).
 
 ### 2b. Probe (inspection)
@@ -180,7 +180,7 @@ Altogether that is about 10.7k source lines and 3.8k test lines. Paths below are
   - all frame and sample arithmetic is exact (BigInt);
   - the A/V-origin handling is honest;
   - the AAC tolerance is reasoned in the code;
-  - the environment is scrubbed;
+  - the environment is scrubbed on the Provider port (not on the file port, see 2a) *(corrected in check)*;
   - output is never clobbered;
   - grid labels never cover the picture.
 - **Whole-file probe.** `-show_frames` decodes every frame and serializes every frame as JSON (`execute.ts:271`), capped at 256 MB (`provider.ts:54`). This is O(duration) CPU on every inspect. By my estimate (unverified), an hour-long source could exceed the cap.
@@ -318,7 +318,7 @@ Compose allows at most 64 layers (`compose-program.ts:56`) and needs a `#RRGGBBA
 
 ## 6. `audio-track`: audio placement
 
-**Purpose.** "Audio Clip = normalized audio source + absolute Window + sampling + mix; Audio Track = additive set of Audio Clips" (`README.md:5-8`). Voice, music, ambience and SFX are all equal clips (`README.md:45-47`). **Ducking and crossfades are deliberately not built in.** They are meant to be separate components that compute gain envelopes and audibility (`README.md:49-52`). No such component exists in this batch, and a grep finds "duck" only in READMEs and one HTML document file.
+**Purpose.** "Audio Clip = normalized audio source + absolute Window + sampling + mix; Audio Track = additive set of Audio Clips" (`README.md:5-8`). Voice, music, ambience and SFX are all equal clips (`README.md:45-47`). **Ducking and crossfades are deliberately not built in.** They are meant to be separate components that compute gain envelopes and audibility (`README.md:49-52`). No such component exists in this batch. A case-insensitive grep finds "duck" in no source file: only in two READMEs (`packages/audio-track/README.md:49`, `packages/composition/README.md:82`) and in Markdown docs and skill references (`docs/quickstart/tracks.md`, `skills/hypit/...`) *(corrected in check)*.
 
 **Public surface.**
 - `<audio:Track id timeline>`, with `<audio:Clip source during gain fade-in fade-out source-time>` and inline `<audio:Map>` children.
@@ -443,12 +443,12 @@ compiled to one ffmpeg graph. Duck with `sidechaincompress`, keyed on the voice 
 | Concern | Clipper | hypit | Takeaway |
 |---|---|---|---|
 | Probe | First video stream; duration, audio, width, height (`clipper/server/media.ts:68-73`) | Every stream, exact PTS, timing status, rotation, SAR, album-art role (`packages/media-local/src/probe.ts:221-315`), at the cost of decoding every frame | Add stream-role filtering (skip `attached_pic`, pick the default audio) and rotation/SAR; skip `-show_frames` |
-| Vision proxy for moments | Keyframes only (`-skip_frame nokey`), `fps=1`, drawtext `%{pts}` (`clipper/server/media.ts:81-94`) | Burned labels use the **actual decoded frame PTS** (`files.ts:375-401`, `452-455`) | **Likely bug:** with keyframe-only decode resampled to 1 fps, the burned time is the output slot's time while the picture is the nearest keyframe. Moments can be off by up to one GOP (often 2-10 s for OBS or game captures). Unverified on our footage; worth measuring |
+| Vision proxy for moments | Keyframes only (`-skip_frame nokey`), `fps=1`, drawtext `%{pts}` (`clipper/server/media.ts:81-94`) | Burned labels use the **actual decoded frame PTS** (`files.ts:375-401`, `452-455`) | **Confirmed bug (measured in check, see below):** `fps` re-stamps every output frame with its slot index, so drawtext prints the slot time, while the picture is the latest keyframe at or before that slot (not the nearest). The label runs *ahead* of the picture by 0 to (GOP − 1 s), and the tail after the last keyframe is missing from the proxy. On a 5 s GOP, labels 1-4 s show the 0 s picture *(corrected in check)* |
 | Scene and visual cuts | `select='gt(scene,0.3)',showinfo`, then a 0.25 s merge (`clipper/server/formats.ts:88-92`) | 32×32 RGB mean absolute difference at 12 fps, threshold 0.1, with scores (`files.ts:467-491`) | Ours is better at merging; theirs is cheaper to run on long footage and returns scores. Combine: low-res decode plus scores plus merging |
 | Black or fade avoidance | Re-cut a shot up to 2 more times after `blackdetect` (`clipper/server/render.ts:278-289`), calling `blackSpans` twice on the same file (`:280`, `:282`) | none | Pre-scan the candidate window once at low resolution (black spans plus boundaries), then choose the start; one encode instead of up to three |
-| Frame evidence for LLM/agent | Full proxy video as base64 (`clipper/server/moments.ts:205`, `217`) | Labelled 3×3 grids with transcript words under each cell (`files.ts:418-462`, `frame-grid.ts`) | For formats and QA ("does the caption match the picture?"), grids with words are compact, model-agnostic evidence. Our MCP agent could use them too |
+| Frame evidence for LLM/agent | Full proxy video as base64 (`clipper/server/moments.ts:72`, `84`) *(corrected in check)* | Labelled 3×3 grids with transcript words under each cell (`files.ts:418-462`, `frame-grid.ts`) | For formats and QA ("does the caption match the picture?"), grids with words are compact, model-agnostic evidence. Our MCP agent could use them too |
 | Audio mix | Static duck (game 0.22, voice 1.6), then `loudnorm -14 LUFS, TP -1.5` (`clipper/server/media.ts:146-151`) | Exact-sample plan, gains, fades, envelopes, loops; no normalization or limiter (`execute.ts:493-519`, `1236`) | Keep our loudnorm. Add real ducking (sidechain) and an optional music or SFX clip list |
-| Input safety | Protocol and format whitelists on every `-i` (`clipper/server/media.ts:24-43`); env inherited (`:47`) | Env scrubbed to PATH (`process-env.ts:8-21`); no protocol whitelist | Take their env scrub (stops `OPENROUTER_API_KEY` etc. reaching ffmpeg); keep our whitelists |
+| Input safety | Protocol and format whitelists on every `-i` (`clipper/server/media.ts:24-43`); env inherited: `spawn` gets no `env` option, so ffmpeg, ffprobe and whisper.cpp (`transcribe.ts:47`, `51`) all see the whole server env (`:47`; confirmed in check) | Env scrubbed to PATH on the Provider port only (`process-env.ts:8-21`, `process.ts:80-92`); the file-port CLI inherits it *(corrected in check)*; no protocol whitelist | Take their env scrub (stops `OPENROUTER_API_KEY` etc. reaching ffmpeg); keep our whitelists |
 | Process bounds | Stderr tail of 8 KB; stdout unbounded (`clipper/server/media.ts:50-51`) | Optional stdout cap, stderr tail of 100 KB, SIGKILL timeout (`process.ts:8-77`) | Add a stdout cap to `run` (the `sceneCuts` and raw-frame cases) |
 | Acquisition | Drive or public link via `safeFetch`, size cap, in-flight dedupe, shared cache (`clipper/server/footage-cache.ts:19-20`, `52-95`) | yt-dlp with impersonation (`yt-dlp/src/download.ts:69-78`) | Don't adopt it (see §8) |
 
@@ -460,7 +460,8 @@ compiled to one ffmpeg graph. Duck with `sidechaincompress`, keyed on the voice 
    - Pattern: `packages/media-local/src/files.ts:375-401`.
    - Our code: `clipper/server/media.ts:81-94`.
    - This directly improves shot accuracy for every render.
-2. **Scrub the child-process environment** for ffmpeg, ffprobe and whisper (`packages/media-local/src/process-env.ts:8-21`). It's one line in `clipper/server/media.ts:47` (`env: { PATH }`) and stops secrets leaking into subprocesses and their crash dumps.
+   - Check measurement (ffmpeg 6.1.1, below): the drawtext-before-`fps` and full-decode variants both fix the label; full decode at `fps=1` was only ~1.6× slower than keyframe-only on the synthetic clip (0.20 s vs 0.13 s), but that ratio will be much worse on long 60 fps HEVC, so measure on real footage before choosing. Moving `drawtext` before `fps` alone fixes the label but not the missing tail; add `-t`/`eof_action` handling or `fps=…:eof_action=pass` if the last GOP matters *(added in check; the `eof_action` remedy is unverified)*.
+2. **Scrub the child-process environment** for ffmpeg, ffprobe and whisper (`packages/media-local/src/process-env.ts:8-21`). It's one line in `clipper/server/media.ts:47` (`env: { PATH }`) and stops secrets leaking into subprocesses and their crash dumps. Whisper.cpp also goes through `run` (`clipper/server/transcribe.ts:51`), so the same line covers it. Caveat from the check: our proxy and CA settings are already passed as arguments by `netArgs` (`media.ts:15-21`), but fontconfig (used by `drawtext` and `ass`) usually wants `HOME` or `XDG_CACHE_HOME`, so keep those (or `FONTCONFIG_*`) alongside `PATH` and test a caption render *(added in check; fontconfig need unverified on Railway)*.
 3. **One low-resolution pre-scan per footage file, cached alongside moments.** Run a 32×32 difference pass with scores (`packages/media-local/src/files.ts:467-491`) plus `blackdetect`, in one decode. Use it to:
    - snap shot starts to visual cuts;
    - avoid black frames without re-encoding (`clipper/server/render.ts:278-289`);
@@ -573,6 +574,7 @@ Every file listed was read fully. The `uv.lock` files (`provider-image-opencv-lo
 | `packages/image-operations/test/image-compose.test.ts` | 96 | ✅ |
 | `packages/image-operations/test/image-transform.test.ts` | 109 | ✅ |
 | `packages/provider-image-opencv-local/README.md` | 16 | ✅ |
+| `packages/provider-image-opencv-local/runtime/.python-version` | 1 | ✅ (`3.13`; added in check) |
 | `packages/provider-image-opencv-local/runtime/README.md` | 33 | ✅ |
 | `packages/provider-image-opencv-local/runtime/pyproject.toml` | 13 | ✅ |
 | `packages/provider-image-opencv-local/runtime/raster_execute.py` | 299 | ✅ |

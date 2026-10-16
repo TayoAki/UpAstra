@@ -2,7 +2,7 @@
 
 - **Batch:** 04, Studio (the preview and editing app)
 - **Source:** hypit at commit `dc2b7a8f31b1ef1443a79ca448548d69e3ceb6a0`, treated as read-only
-- **Package:** `packages/studio`. It has 11,569 lines in `src/` (1,696 of them CSS), 2,597 lines across 25 test files, and 735 lines of docs, locales and manifest. The total is 16,748 (`wc -l`).
+- **Package:** `packages/studio`. It has 13,297 lines in `src/` (11,601 TypeScript plus 1,696 CSS), 2,480 lines across 25 test files, and 971 lines of docs, locales, manifest and `index.html`. The total is 16,748 (`wc -l`). *(corrected in check)*
 
 The study's focus is fivefold:
 - the live preview architecture;
@@ -32,7 +32,7 @@ Studio never creates a Build and never spends money. The README states this at `
 | Verb | Flags / behaviour | Where |
 |---|---|---|
 | `hypit studio --run <x.svrun>` | `--runtime`, `--port` (default 5179), `--project`, `--package-root`, repeatable `--locale-pack`; `--check-locale` lints a language pack | `start.ts:7-29`, `start.ts:51-177` |
-| `hypit snapshot --studio <url>` | Takes `--at-frame n[,n]` or `--start-frame/--end-frame-exclusive/--step-frames`, plus `--grid CxR`, `--cell px`, `--runtime`, `--project` and `--json`. It captures exact frames of the *current* Studio picture through the Runtime's `rasterize-frames` provider. | `snapshot-cli.ts:17-140` |
+| `hypit snapshot --studio <url> --to <dir>` | Requires `--to` (a destination that must not exist yet, `snapshot-cli.ts:56,86`) *(added in check)*. Takes `--at-frame n[,n]` or `--start-frame/--end-frame-exclusive/--step-frames`, plus `--grid CxR`, `--cell px`, `--runtime`, `--project` and `--json`. It captures exact frames of the *current* Studio picture through the Runtime's `rasterize-frames` provider. | `snapshot-cli.ts:17-140` |
 
 **HTTP endpoints**
 
@@ -125,9 +125,9 @@ A hold (zero source rate) stays paused on its frame, and reverse playback is eva
   | `-` / `=` | Zoom |
   | `\` or `f` | Fit |
 
-  The shortcuts are suspended while an input field has focus.
+  The shortcuts are suspended while an input field has focus. Escape also clears the selection, and the zoom and fit keys are ignored in the comments view (`main.ts:1083`, `:1104`). *(added in check)*
 
-**Hover scrubbing without moving the playhead** (`ui/scrub-preview.ts:11-109`). A second, lazily created, muted iframe of the same `srcdoc` (about 200×170 px) seeks to the hovered frame. Requests coalesce: only the latest requested frame is shown (`:26-49`). The main playhead never moves. This needs no thumbnails and no server work.
+**Hover scrubbing without moving the playhead** (`ui/scrub-preview.ts:11-109`). A second, lazily created, muted iframe of the same `srcdoc` (about 200×170 px) seeks to the hovered frame. Requests coalesce: only the latest requested frame is shown (`:26-49`). The main playhead never moves. This needs no thumbnails and no server work. The stage wires it to the progress bar only in review mode (`stage.ts:260-267`; the `reviewMode` guard is at `:261`). *(added in check)*
 
 **On-picture selection.** Item boxes are *measured from the rendered DOM* with `getBoundingClientRect` on `[data-hypit-present-id]`, not recomputed from the layout data. Because of this they include motion offsets (`stage.ts:78-102`; the reasoning is at `ui/overlay.ts:47-58`).
 - Click selects the topmost hit.
@@ -142,7 +142,7 @@ A hold (zero source rate) stays paused on its frame, and reverse playback is eva
 - The ruler picks a major tick that is at least 112 px wide (`:415`) and frame subdivisions that are at least 18 px wide (`:435-438`).
 - Snapping goes to anchors and item edges within about 6 px (`:190-208`).
 - During playback the view auto-scrolls when the playhead passes 88 % of the width (`:777-779`).
-- Video items show a storyboard: a server-side ffmpeg atlas with 80 px tiles (`storyboard.ts:104-133`). Sampling is `min(fps, 360/duration)`, which keeps the atlas at about 360 tiles or fewer, laid out in 32 columns.
+- Video items show a storyboard: a server-side ffmpeg atlas with 80 px tiles (`storyboard.ts:104-133`). Sampling is `max(1, min(fps, 360/duration))` (`storyboard.ts:113`), laid out in up to 32 columns. That caps the atlas at about 360 tiles only for videos of 360 s or less. Longer videos are floored at 1 sample/s, so the tile count grows with duration and is not bounded. *(corrected in check)*
 - Audio items show a 2,048-column peak waveform decoded in the browser with `decodeAudioData` (`ui/material-preview.ts:101-130`).
 
 **Review mode** (`#comments`). Clicking the picture plays or pauses it, and the progress bar gets hover previews (`stage.ts:260-267`). Comments are stored at seconds precision in `FEEDBACK.json` (`feedback.ts:2-8`). The writes are conflict-checked:
@@ -161,7 +161,7 @@ Focusing the composer pauses playback and captures the current frame's time (`ui
 - a page and a section;
 - a control.
 
-There are seven controls: `text`, `number`, `boolean`, `select`, `color`, `list` and `record` (`INSPECTOR.md:376-385`). The registry rejects a declaration if the binding is unknown, the domain or control is unsupported, the options are repeated, the numeric presentation is invalid or the swatches are not hex (`studio-registry.ts:55-98`).
+There are seven controls: `text`, `number`, `boolean`, `select`, `color`, `list` and `record` (`INSPECTOR.md:36-44`; the file has 117 lines). *(corrected in check)* The registry rejects a declaration if the binding is unknown, the domain or control is unsupported, the options are repeated, the numeric presentation is invalid or the swatches are not hex (`studio-registry.ts:55-98`).
 
 **Numbers keep their authored units.**
 - `parameterNumber` splits off the suffix (for example `78%` or `0.25s`), lets the user edit only the magnitude, and writes the original suffix back (`parameter-values.ts:12-29`).
@@ -180,7 +180,7 @@ The server applies the following checks before writing:
 - patches must not overlap;
 - the current text in each range must equal the preimage, otherwise the server returns "Source changed outside Studio" with a 409.
 
-Multi-file patches are published atomically through temp files and renames, and files that were already replaced are restored if a later one fails (`source-transaction.ts:19-57`).
+Multi-file patches are published atomically through temp files and renames, and files that were already replaced are restored if a later one fails (`source-transaction.ts:19-57`). Each rename is atomic, but the cross-file restore is best effort: a failed restore is swallowed so the original error can propagate (`:45-46`). *(added in check)*
 
 **Commit, recompile, verify, roll back** (`server.ts:412-455`). A mutation is applied, recompiled synchronously and published without notifying the browser.
 - For a timeline drag, the server then checks that the rebuilt Item really lands at the requested frames (`:430-442`).
@@ -223,7 +223,7 @@ There are 25 files with about 78 `test(...)` declarations; a few are generated i
   - Cross-origin mutations get a 403 (`mutation-origin.test.ts:16-58`).
   - Stale comment edits throw `FeedbackConflict` (`feedback.test.ts:28-36`).
 - **Integration.** A real SVML fixture compiles; unconsumed Instants show on the locator row without changing the Run; and an unresolvable locator does not break the Film view (`unconsumed-instant.test.ts:55-119`).
-- **Not tested.** Nothing covers the UI layer: no DOM tests exist for the stage, timeline, inspector or scrub preview. `server.ts`'s commit, verify and rollback loop also has no direct test.
+- **Not tested.** No DOM tests exist for the stage, timeline, inspector or scrub preview. The only UI-folder test is the pure SVML tokenizer (`test/script-syntax.test.ts` imports `src/ui/syntax.ts`). *(corrected in check)* `server.ts`'s commit, verify and rollback loop also has no direct test.
 
 ## 5. Quality notes
 
@@ -240,17 +240,18 @@ There are 25 files with about 78 `test(...)` declarations; a few are generated i
 - **Untranslated strings in a localized app.** Hard-coded Chinese `disabledReason` strings appear at `parameters.ts:340, 437, 566, 584, 589`, although `LOCALIZATION.md:90-98` says all Studio-owned text goes through the catalog. English text is also hard-coded in the UI (`timeline.ts:623` "item(s)", `timeline.ts:733`, `library.ts:61`).
 - **Unbounded caches.**
   - Storyboards are cached forever per resource in a server `Map` (`server.ts:102, 682-686`), and the browser never revokes the object URLs (`material-preview.ts:45`). This is fine for a single-user local tool but leaks in a long-lived process.
-  - Material bytes are held fully in memory (`compile.ts:151-166`, `projection.ts:48-63`).
+  - Material bytes are held fully in memory (`compile.ts:151-166`, `projection.ts:48-63`). These two `bytesOf` helpers are also byte-for-byte duplicates. *(added in check)*
+  - The browser-side storyboard and waveform caches (`material-preview.ts:54-60`, `:132-135`) are also unbounded `Map`s. *(added in check)*
 - **Unguarded storage.** `localStorage` is not wrapped in try/catch in `ui/resize.ts:35,40`, unlike `theme.ts` and `i18n.ts`, so a blocked storage throws at startup.
 - **Full rebuilds.** The timeline rebuilds all DOM on every zoom or pan frame (`timeline.ts:815-823, 840`), with no virtualization. That is fine for short-form content but scales poorly.
-- **Unchecked frame list.** `snapshot-cli.ts` checks frame *ranges* against `frameCount` (`:76`) but not the explicit `--at-frame` list (`:71`).
-- **Test fixture uses the wrong attribute.** The shim tests set `data-fps` on the root (`test/video-preview.test.ts:22`), but the shim reads `data-hypit-frame-numerator` and falls back to 30 (`packages/html-program/src/playback.ts:16`). The tests pass only because 30 is the default, and a non-30 fps regression would go unnoticed.
+- ~~**Unchecked frame list.**~~ *Refuted in check, so this item is removed.* `snapshot-cli.ts` itself checks only ranges (`:76`), but the explicit `--at-frame` list is still bounded before any fetch, Runtime call or staging. `selectHtmlArtifacts` (`:91`) asserts every span lies within `frameCount` (`packages/html-program/src/document.ts:970-982`). `htmlFrameRequest` (`:97`) then requires strictly increasing integers in `[0, frameCount)` (`packages/html-program/src/execution.ts:22-34`). What remains is only that the error message is generic and does not name `--at-frame`.
+- **Test fixture uses the wrong attribute.** The shim tests set `data-fps` on the root (`test/video-preview.test.ts:22`, `:57`, `:93`, and also `test/audio-preview.test.ts:21` *(added in check)*), but the shim reads `data-hypit-frame-numerator` and `data-hypit-frame-denominator` and falls back to 30/1 (`packages/html-program/src/playback.ts:16-17`). The tests pass only because 30 is the default, and a non-30 fps regression would go unnoticed.
 - **Small race in comments.** `feedback-store.ts:47-49` re-reads and compares before `rename`, but another writer can still slip in between the check and the rename. This is acceptable for one local user.
 - **Possible blow-up.** `planTemporalInverse` branches recursively over relation plans (`temporal-inverse.ts:194-263`) with no bound on branches. This is fine with today's few relations but could grow exponentially.
 
 ## 6. Relevance to UGCMediaClips: **High**
 
-Our editing loop is "plan, wait one to two minutes for an ffmpeg render, look, edit text, render again" (`clipper/src/components/RenderPanel.tsx:255-259`, `:333`). The rest of our UI has the following gaps:
+Our editing loop is "plan, wait one to two minutes for an ffmpeg render, look, edit text, render again" (`clipper/src/components/RenderPanel.tsx:24` "Render started — this takes a minute or two", `:99`; the file has 116 lines). *(corrected in check)* The rest of our UI has the following gaps:
 
 - **`CaptionsView`**
   - The style preview is a CSS stand-in that only approximates libass (`clipper/src/components/CaptionPreview.tsx:19-22`) and is drawn beside the video, not over it (`clipper/src/views/CaptionsView.tsx:233-253`).
@@ -258,10 +259,10 @@ Our editing loop is "plan, wait one to two minutes for an ffmpeg render, look, e
   - The position and size sliders only commit settings; seeing the result needs a server render (`:279-292`).
 - **`FormatsView`.** Beats are drawn as a static bar beside a separate `<video>`. The bar has no click-to-seek and no live highlight (`clipper/src/views/FormatsView.tsx:154-157`, `221-226`).
 - **`ClipCard` and `OverlayEditor`.** Overlays are text rows that say "render again to see it" (`clipper/src/components/OverlayEditor.tsx`, the `save` toast). Nothing in the app is previewed in the picture before a render.
-- **The OpenReel bridge.** It rebuilds the render in a *different* renderer: the font size is roughly `size*0.8` and the positions are guessed (`clipper/editor/bridge/clip-operator-bridge.tsx:133-188`). It then saves a baked MP4 (`:244-266`). Edits never flow back into the plan, so "rendering again replaces the edit" (`RenderPanel.tsx:333`; `clipper/server/app.ts:1252-1258`). This is the exact two-renderer drift and one-way write that Studio's design avoids.
+- **The OpenReel bridge.** It rebuilds the render in a *different* renderer: the font size is roughly `size*0.8` and the positions are guessed (`clipper/editor/bridge/clip-operator-bridge.tsx:133-188`). It then saves a baked MP4 (`:244-266`). Edits never flow back into the plan, so "rendering again replaces the edit" (`RenderPanel.tsx:99`; the edited MP4 replaces `videoKey` in `clipper/server/app.ts:1248-1280`, and a new render clears `editedAt` in `clipper/server/render.ts:366`). *(corrected in check)* This is the exact two-renderer drift and one-way write that Studio's design avoids.
 
 Our render already separates an expensive phase from a cheap one:
-- **Expensive:** cutting shots into framed 1080×1920 parts, voicing and aligning (`clipper/server/render.ts:250-298`).
+- **Expensive:** voicing and aligning (`clipper/server/render.ts:189-248`), then cutting shots into framed 1080×1920 parts (`render.ts:250-299`). *(corrected in check)*
 - **Cheap:** building one ASS file plus emoji stickers plus the audio mix (`render.ts:300-327`, `clipper/server/captions.ts:93`).
 
 The parts are stored (`render.ts:330-364`). This makes Studio's model of one compiled document driving both preview and render reachable for us.
@@ -293,7 +294,7 @@ Our constraints are multi-tenant, CPU-only, cost-sensitive and must work without
 6. **Playhead-linked transcript and beats.** Highlight the spoken word or line (`main.ts:969-974`) and click a line to seek, in `CaptionsView` and in the `FormatsView` beat bar.
 7. **Frame snapshot endpoint and grid output** (`snapshot-cli.ts`). This gives agents and QA visual evidence cheaply.
 8. **Decode-aware seek and drift hysteresis** (`playback.ts:110-124, 169`). Use this if we build our own preview player instead of a bare `<video>`: resolve seeks on `seeked`, and correct drift only beyond about 80 ms.
-9. **Storyboard atlas for footage scrubbing** (`storyboard.ts`: one ffmpeg `tile` PNG of at most about 360 tiles). It is useful on the Footage tab and for choosing shots, and much cheaper than per-frame thumbnails. Cache the atlas in object storage per footage file, not in memory.
+9. **Storyboard atlas for footage scrubbing** (`storyboard.ts`: one ffmpeg `tile` PNG of about 360 tiles for clips of 360 s or less, and one tile per second beyond that; add a hard cap if we copy it). *(corrected in check)* It is useful on the Footage tab and for choosing shots, and much cheaper than per-frame thumbnails. Cache the atlas in object storage per footage file, not in memory.
 10. **Inspector unit discipline** (`parameter-values.ts`). Edit the magnitude but keep the authored unit, show scaled percentages, and validate against the stored value, not the displayed one. This applies directly to the caption size and position sliders.
 
 ## 9. Things not to copy
@@ -417,3 +418,36 @@ The following UGCMediaClips files were read for the comparison:
 - `clipper/server/render.ts:240-370`
 - `clipper/server/media.ts:100-132`
 - `clipper/server/captions.ts:93-110`
+
+## Check
+
+The second reviewer re-opened every `path:line` citation against hypit `dc2b7a8f` (and `packages/html-program` where the notes cite it), and every "Our app" citation against `clipper` at `8ba4657`.
+
+**Reported bugs and smells**
+| Item | Result |
+|---|---|
+| `server.ts:419-422` dead `clearTimeout` | **Confirmed.** `:414` already throws when `timer !== undefined`. |
+| Chinese `disabledReason` strings in `parameters.ts` | **Confirmed** at exactly 340, 437, 566, 584 and 589. These are the only CJK literals in `src/`. The English literals at `timeline.ts:623`, `:733` and `library.ts:61` are also confirmed. |
+| Unbounded caches | **Confirmed.** The server storyboard `Map` (`server.ts:102`, `682-686`) evicts an entry only on failure. No `revokeObjectURL` exists anywhere in `src/`. Material bytes are held fully in memory. Extended with the browser caches and the duplicated `bytesOf`. |
+| `ui/resize.ts:35,40` unguarded `localStorage` | **Confirmed.** `theme.ts:9-12,32-35` and `i18n.ts:18,60` wrap their calls. `main.ts:94-118` calls `createHandle` at module load, so a throw breaks startup. |
+| `--at-frame` bounds | **Refuted, and removed.** The list is bounds- and order-checked downstream, before any side effect (see §5). |
+| Shim test `data-fps` vs `data-hypit-frame-numerator` | **Confirmed**, and it also affects `audio-preview.test.ts:21`. |
+
+**Our-app claims.** The `CaptionPreview`, `CaptionsView`, `FormatsView`, `OverlayEditor`, `ClipCard` ("Saved — rules re-checked"), bridge (`size*0.8` at `:180`, guessed positions at `:142-168`, baked MP4 upload at `:244-266`), `media.ts`, `captions.ts:93` and `streamKey` Range claims are all confirmed. Three app citations were wrong. The `RenderPanel.tsx:255-259/:333` lines do not exist (the file has 116 lines); the correct lines are `:24` and `:99`. The `app.ts:1252-1258` citation was the middle of a handler. The expensive render phase was cited only from the cutting step, without voicing.
+
+**Totals.** About 125 claims checked: 113 confirmed, 11 corrected, 1 removed (refuted), 0 left unverified. About 8 additions were made (marked *added in check*).
+
+**Corrections:**
+- the header line-count breakdown;
+- the `INSPECTOR.md` citation;
+- the storyboard bound (two places);
+- the UI-test claim;
+- the `RenderPanel` citations (two places);
+- the `app.ts` citation;
+- the `render.ts` phase citation;
+- the shim fixture scope;
+- the `--at-frame` list (refuted).
+
+**Coverage.** All 93 files under `packages/studio` (61 in `src/`, 25 in `test/`, and 7 docs, locale, manifest and HTML files) are in the table, and every line count matches `wc -l`. No files were added.
+
+**Verdict: Verified with corrections ⚠️.** The correction rate is about 9.6%, just under the 10% line, and the count is an estimate. One of the six headline bugs was false, and several "Our app" line citations pointed at code that does not exist, so this does not qualify as a clean pass. The architecture description, Studio-side citations and recommendations are otherwise accurate.
