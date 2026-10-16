@@ -10,18 +10,18 @@ import { aiLive, chatJSON } from "./llm";
 // to cut from the campaign's footage. Every plan is checked against the brief
 // before anyone sees it; a failing plan gets one rewrite with the failures.
 
-const SYSTEM = `You are a short-form video producer making clips for a paid "clipping" campaign (TikTok, Reels, Shorts).
+export const PLANNER_PROMPT = `You are a short-form video producer making clips for a paid "clipping" campaign (TikTok, Reels, Shorts).
 Write clip plans a video editor can execute from the campaign's own footage. Each clip must:
 - open with a scroll-stopping hook (max 12 words) — vary the angle across clips, don't reuse the brief's examples word for word;
 - have a voiceover that says every required phrase out loud and ends with the call to action in the final line;
 - only state facts from keyFacts — never invent features, rewards, codes, partnerships or results, and never break bannedClaims;
 - fit the length: about ${WORDS_PER_SECOND} spoken words per second;
-- list 2-5 shots, each naming an exact footage file from the list and the moment to cut (e.g. "last-second goal");
+- list 2-5 shots, each naming an exact footage file from the list and the moment to cut (e.g. "last-second goal"), and a "phrase": the exact narration words where that shot starts (shot 1 starts with the narration). Pick footage that shows what those words claim (visual evidence), not just a picture of a noun in them;
 - name its hook style, one of: ${HOOK_STYLES.filter((h) => h.id !== "other").map((h) => h.id).join(", ")};
 - optionally add 0-4 animated overlays that land on exact words of the voiceover ("cue" must be words copied from the narration): "comment" (a viewer comment the clip answers: {"kind":"comment","cue","user","text"}), "emoji" ({"kind":"emoji","cue","emoji"}) on a punchline, "text" (one big word or number: {"kind":"text","cue","text"}), or "tier" for ranking clips (one per ranked item: {"kind":"tier","cue","text","tier":"S|A|B|C|D"}). Use overlays only where they add something; never put a fact in an overlay that isn't in keyFacts.
 When "learning" is given, it is what this creator's past posts showed. Plans marked "proven" lean on what worked (proven traits, the style of the winning hooks — never copy them word for word) and avoid what underperformed. Plans marked "test" each try one untested option from the list instead, so the system keeps learning.
 When "format" is given, write every clip in that format: follow its recipe, beats, pacing, hook style and overlay pattern, adapted to this campaign's product, facts and footage (never copy the reference's words or claims).
-Return JSON {"clips":[{"title","angle","hookStyle","hook","narration","onScreenText":[...],"cta","shots":[{"footageName","moment","seconds"}],"lengthSec","caption","hashtags":[...],"overlays":[...]}]}.`;
+Return JSON {"clips":[{"title","angle","hookStyle","hook","narration","onScreenText":[...],"cta","shots":[{"footageName","moment","seconds","phrase"}],"lengthSec","caption","hashtags":[...],"overlays":[...]}]}.`;
 
 type Draft = Omit<Clip, "id" | "campaignId" | "status" | "qa" | "model" | "cost" | "createdAt" | "updatedAt"> & { hookStyle?: HookStyle };
 
@@ -40,7 +40,7 @@ function matchFootage(name: string, footage: FootageFile[]): FootageFile | undef
   return footage.find((f) => f.name.toLowerCase().replace(/\.\w{2,4}$/, "").trim() === n) ?? footage.find((f) => n && f.name.toLowerCase().includes(n));
 }
 
-function toDraft(raw: Record<string, unknown>, c: Campaign): Draft {
+export function toDraft(raw: Record<string, unknown>, c: Campaign): Draft {
   const video = c.footage.filter((f) => f.kind === "video");
   const shots = (Array.isArray(raw.shots) ? raw.shots : []).map((s: Record<string, unknown>) => {
     const f = matchFootage(toStr(s.footageName), video);
@@ -183,7 +183,7 @@ export async function planClips(c: Campaign, n: number, existing: Clip[], guide?
     const footage = c.footage
       .filter((f) => f.kind === "video")
       .map((f) => (f.moments?.length ? { name: f.name, moments: f.moments.slice(0, 8).map((m) => `${m.type}: ${m.description}`) } : f.name));
-    const r = await chatJSON<{ clips?: Record<string, unknown>[] }>("script", SYSTEM, {
+    const r = await chatJSON<{ clips?: Record<string, unknown>[] }>("script", PLANNER_PROMPT, {
       campaign: briefForModel(c),
       footage,
       count: n,
@@ -197,7 +197,7 @@ export async function planClips(c: Campaign, n: number, existing: Clip[], guide?
     // One rewrite for plans that break the brief, with the exact failures.
     const failing = drafts.map((d, i) => ({ i, qa: checkClip(d, c.brief) })).filter((x) => !x.qa.pass);
     if (failing.length) {
-      const fix = await chatJSON<{ clips?: Record<string, unknown>[] }>("script", SYSTEM, {
+      const fix = await chatJSON<{ clips?: Record<string, unknown>[] }>("script", PLANNER_PROMPT, {
         campaign: briefForModel(c),
         footage,
         count: failing.length,

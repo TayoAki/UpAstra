@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ffmpegAvailable, sceneCutNear } from "../server/media";
 import { shotTimes } from "../server/shots";
+import { PLANNER_PROMPT, toDraft } from "../server/scripts";
 
 // B3.2': a shot starts on a scene cut when one is within 0.4 s of where it
 // was going to start.
@@ -66,5 +67,22 @@ describe("phrase-bound shots", () => {
     const t = shotTimes(shots, words, 10);
     expect(t[1].bound).toBe(false); // "made" is 0.5 s in
     expect(t[0].len).toBeGreaterThanOrEqual(1.5);
+  });
+});
+
+// B3.3: the planner binds shots to phrases and picks footage as evidence.
+describe("planner shot rules", () => {
+  it("asks for a phrase per shot and visual evidence, in a few words", () => {
+    expect(PLANNER_PROMPT).toMatch(/"phrase"/);
+    expect(PLANNER_PROMPT).toMatch(/evidence/i);
+    // At most ~150 more prompt tokens than before (about 4 characters a token).
+    expect(PLANNER_PROMPT.length).toBeLessThanOrEqual(2122 + 600); // 2122 before this change
+  });
+
+  it("keeps a shot's phrase only if the narration says it", () => {
+    const camp = { footage: [{ id: "f1", name: "Gameplay", kind: "video" }], brief: { lengthSec: { min: 10, max: 30 }, cta: { text: "" } } } as never;
+    const d = toDraft({ narration: "The Octane hits like a truck. Play Car League now.", shots: [{ footageName: "Gameplay", moment: "goal", seconds: 4, phrase: "The Octane hits" }, { footageName: "Gameplay", moment: "menu", seconds: 3, phrase: "free rewards forever" }] }, camp);
+    expect(d.shots[0].phrase).toBe("The Octane hits");
+    expect(d.shots[1].phrase).toBeUndefined();
   });
 });
