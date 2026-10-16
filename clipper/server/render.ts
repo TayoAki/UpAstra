@@ -18,7 +18,7 @@ import { analyzeFootage, pickMoment } from "./moments";
 import { videoStore } from "./storage";
 import { checkAIBudget, recordUsage } from "./usage";
 import { alert, isUserError } from "./alerts";
-import { emojiStickers, placeOverlays } from "./overlays";
+import { emojiStickers, hiddenComments, placeOverlays } from "./overlays";
 
 // The render queue: approved clip plans → finished 9:16 MP4s.
 //   1. find moments in each footage file the plan uses (cached)
@@ -354,6 +354,8 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     // Overlays land on the words they're cued to (tier items stay until the call to action).
     const layout = { width: W, height: H, bandTop: VIDEO_TOP, bandHeight: VIDEO_H, font: style.font, accent: accentOf(brand), uppercase: style.uppercase };
     const { placed, missed } = placeOverlays(clip.overlays ?? [], words, duration, ctaFrom);
+    const crowded = hiddenComments(placed, layout);
+    if (crowded.length) log({ campaignId: c.id, kind: "clip", message: `Left out ${crowded.length} comment overlay(s) in "${clip.title}": too many on screen at once (${crowded.map((x) => `@${x.user}`).join(", ")}).` });
     const { stickers, missing } = await emojiStickers(placed, layout, tmp);
     if (missed.length || missing.length)
       log({ campaignId: c.id, kind: "clip", message: `Left out ${missed.length + missing.length} overlay(s) on "${clip.title}"${missed.length ? ` — cue words not in the voiceover: ${missed.map((o) => `"${o.cue ?? o.text}"`).join(", ")}` : ""}${missing.length ? ` — no image for ${missing.join(" ")}` : ""}.` });

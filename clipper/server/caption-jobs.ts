@@ -6,7 +6,7 @@ import type { CaptionJob } from "../shared/types";
 import { buildAss, groups } from "./captions";
 import { getDoc, HttpError, loadTenant, log, now, runInWorkspace, save, tenantLoadHooks } from "./db";
 import { prepareFonts } from "./fonts";
-import { probe, run } from "./media";
+import { BT709, burnFilter, probe, run, yuvMatrix } from "./media";
 import { videoStore } from "./storage";
 import { NO_SPACES, transcribe } from "./transcribe";
 import { recordUsage } from "./usage";
@@ -117,12 +117,12 @@ async function renderJob(j: CaptionJob, workspaceId: string) {
     const fonts = await prepareFonts(dir, brand);
     const out = path.join(dir, "out.mp4");
     const src = await videoStore().readUrl(j.sourceKey);
-    const esc = (p: string) => p.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
+    const info = await probe(src).catch(() => undefined);
     await run("ffmpeg", [
       "-v", "error", "-y",
       "-i", src,
-      "-vf", `ass='${esc(ass)}':fontsdir='${esc(fonts)}',format=yuv420p`,
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+      "-vf", burnFilter(ass, fonts, yuvMatrix(info?.colorSpace, info?.height ?? height)),
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", ...BT709,
       "-c:a", "aac", "-b:a", "160k",
       "-movflags", "+faststart",
       out,

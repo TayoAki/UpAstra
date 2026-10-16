@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FONT_WIDTHS } from "../server/font-metrics";
-import { commentLayout, fitText, textWidth, tierLayout } from "../server/overlays";
+import { commentLayout, fitText, hiddenComments, overlayEvents, textWidth, tierLayout } from "../server/overlays";
+import type { Overlay } from "../shared/types";
 import { TIERS, type Tier } from "../shared/types";
 
 // B0.5: tier items and comments never overlap each other and never leave
@@ -87,7 +88,17 @@ describe("comment layout", () => {
     );
     const above = { x: 0, y: 0, w: 1080, h: 560 };
     const shown = c.filter((x) => x.shown);
+    expect(shown).toHaveLength(2);
     for (const a of shown) expect(inside(a, above)).toBe(true);
-    if (shown.length === 2) expect(overlap(shown[0], shown[1])).toBe(false);
+    expect(overlap(shown[0], shown[1])).toBe(false);
+  });
+
+  it("reports the comments it had to leave out", () => {
+    const placed = Array.from({ length: 6 }, (_, i) => ({ o: { id: `c${i}`, kind: "comment", user: `u${i}`, text: body } as Overlay, start: 1, end: 3 }));
+    const hidden = hiddenComments(placed, L("Poppins Black"));
+    expect(hidden.length).toBeGreaterThan(0);
+    const drawn = overlayEvents(placed, L("Poppins Black")).filter((l) => l.includes("Reply to @"));
+    expect(drawn.length + hidden.length).toBe(6);
+    for (const h of hidden) expect(drawn.some((l) => l.includes(`@${h.user}`))).toBe(false);
   });
 });

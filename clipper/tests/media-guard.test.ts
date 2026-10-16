@@ -23,7 +23,7 @@ describe("ffmpeg inputs", () => {
     expect(hardenInputs("ffmpeg", ["-y", "-i", "/tmp/a.mp4", "-i", "https://bucket/x.mp4?sig", "out.mp4"])).toEqual([
       "-y",
       "-protocol_whitelist", "file", "-format_whitelist", expect.stringContaining("mp4"), "-i", "/tmp/a.mp4",
-      "-protocol_whitelist", "https,http,tls,tcp,crypto", "-format_whitelist", expect.any(String), "-i", "https://bucket/x.mp4?sig",
+      "-protocol_whitelist", "https,http,httpproxy,tls,tcp,crypto", "-format_whitelist", expect.any(String), "-i", "https://bucket/x.mp4?sig",
       "out.mp4",
     ]);
     expect(hardenInputs("ffmpeg", ["-i", "x"]).join(" ")).not.toMatch(/hls/);

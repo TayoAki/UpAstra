@@ -295,6 +295,19 @@ export function overlayStyles(L: OverlayLayout): string[] {
   ];
 }
 
+/** The comment cards of a render, laid out (while a tier board covers the footage, they sit above it). */
+function layoutComments(placed: Placed[], L: OverlayLayout) {
+  const tiers = placed.filter((x) => x.o.kind === "tier" && x.o.text?.trim());
+  const board = tiers.length ? { from: tiers[0].start, to: Math.max(...tiers.map((t) => t.end)) } : undefined;
+  const comments = placed
+    .filter((x) => x.o.kind === "comment" && x.o.text?.trim())
+    .map((p) => ({ start: p.start, end: p.end, text: esc(p.o.text!), user: (p.o.user || "viewer").replace(/^@/, "").slice(0, 24) }));
+  return commentLayout(comments, L, board);
+}
+
+/** Comments that didn't fit anywhere while they were due, so the render can say so. */
+export const hiddenComments = (placed: Placed[], L: OverlayLayout) => layoutComments(placed, L).filter((c) => !c.shown);
+
 /** Dialogue lines for comments, pop-up text and the tier board. Emoji go through {@link emojiStickers}. */
 export function overlayEvents(placed: Placed[], L: OverlayLayout): string[] {
   const k = Math.min(L.width, L.height) / 1080;
@@ -304,15 +317,10 @@ export function overlayEvents(placed: Placed[], L: OverlayLayout): string[] {
   const shape = (start: number, end: number, x: number, y: number, color: string, drawing: string, layer = 5, extra = "") =>
     lines.push(`Dialogue: ${layer},${ts(start)},${ts(end)},OvShape,,0,0,0,,{\\an7\\pos(${Math.round(x)},${Math.round(y)})\\1c${assColor(color)}${extra}\\p1}${drawing}{\\p0}`);
 
-  // While a tier board covers the footage, comments sit above the footage instead.
   const tierItems = placed.filter((x) => x.o.kind === "tier" && x.o.text?.trim());
-  const board = tierItems.length ? { from: tierItems[0].start, to: Math.max(...tierItems.map((t) => t.end)) } : undefined;
 
   // Comment cards, laid out so cards on screen together never overlap.
-  const comments = placed
-    .filter((x) => x.o.kind === "comment" && x.o.text?.trim())
-    .map((p) => ({ start: p.start, end: p.end, text: esc(p.o.text!), user: (p.o.user || "viewer").replace(/^@/, "").slice(0, 24) }));
-  for (const p of commentLayout(comments, L, board)) {
+  for (const p of layoutComments(placed, L)) {
     if (!p.shown) continue;
     const { x, y, w, h, user } = p;
     // Slide up a little and fade, together.

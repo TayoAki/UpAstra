@@ -14,13 +14,43 @@ describe("CJK scripts", () => {
     expect(sentences("Mixed 中文。Then English.")).toEqual(["Mixed 中文。", "Then English."]);
   });
 
+  it("keeps runs of end marks and closing quotes with their sentence", () => {
+    expect(sentences("太棒了！！现在就玩吧！！")).toEqual(["太棒了！！", "现在就玩吧！！"]);
+    expect(sentences("最高です。「今すぐ買って！」")).toEqual(["最高です。", "「今すぐ買って！」"]);
+    expect(sentences("等等。。。现在下载！")).toEqual(["等等。。。", "现在下载！"]);
+    expect(sentences("他说“真好！”我们走吧。")).toEqual(["他说“真好！”", "我们走吧。"]);
+    expect(sentences("Wait?! Really. Version 3.5 is out.")).toEqual(["Wait?!", "Really.", "Version 3.5 is out."]);
+  });
+
   it("anchors the CTA to the first word of the last sentence", () => {
-    for (const [lang, text] of [["ja", "このゲームは最高です。ロブロックスで今すぐ遊ぼう。"], ["zh", "这个游戏太好玩了。现在就在罗布乐思上玩吧。"]] as const) {
+    // Expected: the token holding the last sentence's first letter, found by
+    // walking the tokens over the text, independently of how the code counts.
+    const expectedIndex = (text: string, lang: string) => {
+      const flat = text.replace(/\s+/g, "");
+      const last = sentences(text).at(-1)!.replace(/\s+/g, "");
+      const lead = last.search(/[\p{L}\p{N}]/u);
+      const offset = flat.lastIndexOf(last) + lead;
+      let pos = 0;
+      for (const [i, t] of scriptWords(text, lang).entries()) {
+        if (offset < pos + t.length) return i;
+        pos += t.length;
+      }
+      return -1;
+    };
+    for (const [lang, text] of [
+      ["ja", "このゲームは最高です。ロブロックスで今すぐ遊ぼう。"],
+      ["zh", "这个游戏太好玩了。现在就在罗布乐思上玩吧。"],
+      ["zh", "太棒了！！现在就玩吧！！"],
+      ["ja", "最高です。「今すぐ買って！」"],
+      ["ja", "最高です。「限定」セール中！"],
+      ["zh", "等等。。。现在下载！"],
+      ["zh", "他说“真好！”我们走吧。"],
+    ] as const) {
       const tokens = scriptWords(text, lang);
       const timed = tokens.map((t, i) => ({ text: t, start: i, end: i + 0.9 }));
-      const last = scriptWords(sentences(text).at(-1)!, lang).length;
-      expect(last).toBeGreaterThan(1);
-      expect(lastSentenceStart(text, timed, lang)).toBe(tokens.length - last);
+      const want = expectedIndex(text, lang);
+      expect(want, text).toBeGreaterThan(0);
+      expect(lastSentenceStart(text, timed, lang), text).toBe(want);
     }
     const en = "Car League is free. Play Car League on Roblox.";
     const timed = en.split(" ").map((t, i) => ({ text: t, start: i, end: i + 0.9 }));

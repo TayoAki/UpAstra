@@ -27,7 +27,8 @@ export function netArgs(url: string): string[] {
 // container, read from a local file or (for our own storage's signed links)
 // over HTTP(S), and never anything it points to.
 const FORMATS = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,flv,mpegts,wav,mp3,aac,ogg,flac,s16le,concat,image2,png_pipe";
-const protocolsFor = (input: string) => (/^https?:/.test(input) ? "https,http,tls,tcp,crypto" : "file");
+// httpproxy: https inputs tunnel through -http_proxy when one is configured.
+const protocolsFor = (input: string) => (/^https?:/.test(input) ? "https,http,httpproxy,tls,tcp,crypto" : "file");
 
 /** Add input restrictions in front of every ffmpeg `-i` (and ffprobe's input). */
 export function hardenInputs(cmd: string, args: string[]): string[] {
@@ -43,18 +44,34 @@ export function hardenInputs(cmd: string, args: string[]): string[] {
 }
 
 // ffmpeg, ffprobe and whisper get only what they need to run, never the
-// server's keys. Proxy and CA settings reach ffmpeg as arguments (netArgs).
-const CHILD_ENV = ["PATH", "HOME", "XDG_CACHE_HOME", "LANG", "LC_ALL", "TMPDIR", "TZ", "SSL_CERT_FILE", "LD_LIBRARY_PATH", "OMP_NUM_THREADS", "FONTCONFIG_FILE", "FONTCONFIG_PATH"];
+// server's keys. The proxy itself reaches ffmpeg as an argument (netArgs);
+// ffmpeg still reads no_proxy (and http_proxy) from the environment.
+const CHILD_ENV = ["PATH", "HOME", "XDG_CACHE_HOME", "LANG", "LC_ALL", "TMPDIR", "TZ", "SSL_CERT_FILE", "LD_LIBRARY_PATH", "OMP_NUM_THREADS", "FONTCONFIG_FILE", "FONTCONFIG_PATH", "no_proxy", "NO_PROXY", "http_proxy"];
 export function childEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = {};
   for (const k of CHILD_ENV) if (env[k] !== undefined) out[k] = env[k]!;
   return out;
 }
 
+// Children run in their own process groups (so a timeout kills everything
+// they started), which also means they'd outlive the server: kill them on exit.
+const live = new Set<number>();
+export const liveChildren = () => live.size;
+process.once("exit", () => {
+  for (const pid of live)
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+});
+
 export function run(cmd: string, args: string[], timeoutMs = 20 * 60_000): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     // Its own process group, so a timeout also kills anything it started.
     const p = spawn(cmd, hardenInputs(cmd, args), { stdio: ["ignore", "pipe", "pipe"], env: childEnv(), detached: true });
+    const pid = p.pid;
+    if (pid) live.add(pid);
     let stdout = "";
     let stderr = "";
     p.stdout.on("data", (d) => (stdout += d));
@@ -66,9 +83,10 @@ export function run(cmd: string, args: string[], timeoutMs = 20 * 60_000): Promi
         p.kill("SIGKILL");
       }
     }, timeoutMs);
-    p.on("error", (e) => (clearTimeout(timer), reject(e)));
+    p.on("error", (e) => (clearTimeout(timer), pid && live.delete(pid), reject(e)));
     p.on("close", (code) => {
       clearTimeout(timer);
+      if (pid) live.delete(pid);
       if (code === 0) resolve({ stdout, stderr });
       else {
         console.error(`[ffmpeg] ${cmd} ${args.filter((a) => !/^https?:/.test(a)).join(" ").slice(0, 600)}\n${stderr.trim().split("\n").slice(-12).join("\n")}`);
@@ -81,12 +99,26 @@ export function run(cmd: string, args: string[], timeoutMs = 20 * 60_000): Promi
 /** Public Google Drive file → a direct, range-capable download URL. */
 export const driveDownloadUrl = (fileId: string) => `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t`;
 
-export async function probe(url: string): Promise<{ duration: number; hasAudio: boolean; width: number; height: number }> {
-  const { stdout } = await run("ffprobe", [...netArgs(url), "-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height", "-of", "json", url], 120_000);
+export async function probe(url: string): Promise<{ duration: number; hasAudio: boolean; width: number; height: number; colorSpace?: string }> {
+  const { stdout } = await run("ffprobe", [...netArgs(url), "-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height,color_space", "-of", "json", url], 120_000);
   const j = JSON.parse(stdout);
   const v = (j.streams ?? []).find((s: { codec_type: string }) => s.codec_type === "video") ?? {};
-  return { duration: Number(j.format?.duration) || 0, hasAudio: (j.streams ?? []).some((s: { codec_type: string }) => s.codec_type === "audio"), width: v.width ?? 0, height: v.height ?? 0 };
+  return { duration: Number(j.format?.duration) || 0, hasAudio: (j.streams ?? []).some((s: { codec_type: string }) => s.codec_type === "audio"), width: v.width ?? 0, height: v.height ?? 0, colorSpace: v.color_space && v.color_space !== "unknown" ? v.color_space : undefined };
 }
+
+/** The YUV matrix a video was encoded with: its tag, else what players assume for its size. */
+export const yuvMatrix = (colorSpace: string | undefined, height: number): "bt601" | "bt709" =>
+  colorSpace ? (/bt470bg|smpte170m|bt601|fcc/.test(colorSpace) ? "bt601" : "bt709") : height >= 720 ? "bt709" : "bt601";
+
+const escPath = (p: string) => p.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
+
+/**
+ * Burn an ASS file onto a video read with its own YUV matrix: drawn in RGB,
+ * converted once to BT.709 (tag the output with BT709), so neither the
+ * captions nor the footage shift colour.
+ */
+export const burnFilter = (ass: string, fontsDir: string | undefined, matrix: "bt601" | "bt709") =>
+  `scale=in_color_matrix=${matrix}:in_range=tv,format=rgb24,ass='${escPath(ass)}'${fontsDir ? `:fontsdir='${escPath(fontsDir)}'` : ""},scale=out_color_matrix=bt709:out_range=tv,format=yuv420p`;
 
 /**
  * A small preview for the vision model: keyframes only (fast even for long

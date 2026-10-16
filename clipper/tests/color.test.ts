@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { compose, ffmpegAvailable } from "../server/media";
+import { BT709, burnFilter, compose, ffmpegAvailable, yuvMatrix } from "../server/media";
 
 // B0.3: captions, stickers and footage keep their colours through the final
 // encode when a player decodes it as BT.709 (what phones do for HD video),
@@ -36,5 +36,25 @@ describe.skipIf(!ffmpegAvailable())("colour", () => {
     near(pixel(out, 540, 900), pixel(video, 540, 900)); // footage, unchanged from the source
     const tags = execFileSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=color_space,color_primaries,color_transfer,color_range", "-of", "csv=p=0", out], { encoding: "utf8" }).trim();
     expect(tags).toBe("tv,bt709,bt709,bt709");
+  }, 60_000);
+
+  it("burns captions onto any upload without shifting its colours (caption jobs)", () => {
+    for (const [name, matrix, size] of [["hd", "bt709", "1280x720"], ["sd", "bt601", "640x480"]] as const) {
+      const src = path.join(dir, `${name}.mp4`);
+      execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", `color=c=0x3366CC:s=${size}:r=30:d=1`, "-vf", `scale=out_color_matrix=${matrix}:out_range=tv,format=yuv420p`, ...(matrix === "bt709" ? ["-colorspace", "bt709"] : []), "-c:v", "libx264", "-crf", "1", src]);
+      const ass = path.join(dir, `${name}.ass`);
+      fs.writeFileSync(ass, fs.readFileSync(path.join(dir, "s.ass"), "utf8").replace("PlayResX: 1080", `PlayResX: ${size.split("x")[0]}`).replace("PlayResY: 1920", `PlayResY: ${size.split("x")[1]}`));
+      const out = path.join(dir, `${name}-out.mp4`);
+      execFileSync("ffmpeg", ["-v", "error", "-y", "-i", src, "-vf", burnFilter(ass, undefined, yuvMatrix(matrix === "bt709" ? "bt709" : undefined, matrix === "bt709" ? 720 : 480)), ...BT709, "-c:v", "libx264", "-crf", "1", out]);
+      // Footage (decoded with its own matrix) is unchanged; the caption box is #E5484D.
+      const srcPx = execFileSync("ffmpeg", ["-v", "error", "-i", src, "-frames:v", "1", "-vf", `scale=in_color_matrix=${matrix}:in_range=tv,format=rgb24,crop=1:1:600:400`, "-f", "rawvideo", "-"]);
+      const sx = Number(size.split("x")[0]);
+      near(pixel(out, Math.min(600, sx - 1), 400, 0), [...srcPx.subarray(0, 3)]);
+      near(pixel(out, 150, 150, 0), [0xe5, 0x48, 0x4d]);
+    }
+    expect(yuvMatrix("smpte170m", 1080)).toBe("bt601");
+    expect(yuvMatrix("bt709", 480)).toBe("bt709");
+    expect(yuvMatrix(undefined, 1080)).toBe("bt709");
+    expect(yuvMatrix(undefined, 480)).toBe("bt601");
   }, 60_000);
 });

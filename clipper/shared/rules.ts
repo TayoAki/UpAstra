@@ -1,3 +1,4 @@
+import { sentences } from "./sentences";
 import type { CampaignBrief, CampaignStats, Clip, ClipStatus, Post, QACheck } from "./types";
 
 // Plain-code rules shared by the server and the dashboard: what a post earns,
@@ -94,8 +95,7 @@ export function checkClip(clip: Pick<Clip, "hook" | "narration" | "cta" | "lengt
 
   // 3. CTA where the brief wants it.
   if (brief.cta.text) {
-    const sentences = clip.narration.split(/(?<=[.!?])\s+/).filter(Boolean);
-    const tail = norm(brief.cta.placement === "end" ? sentences.slice(-2).join(" ") : clip.narration);
+    const tail = norm(brief.cta.placement === "end" ? sentences(clip.narration).slice(-2).join(" ") : clip.narration);
     const want = significant(brief.cta.text);
     // An action ("play", "download"…) plus most of the CTA's other words.
     const [verb, ...rest] = want;

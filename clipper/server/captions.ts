@@ -1,4 +1,5 @@
 import { groupWords, resolveCaptionStyle, type CaptionStyle } from "../shared/caption-styles";
+import { sentences } from "../shared/sentences";
 import { scriptWords } from "./align";
 import { H, VIDEO_TOP, W } from "./media";
 import { overlayEvents, overlayStyles, type OverlayLayout, type Placed } from "./overlays";
@@ -25,13 +26,7 @@ const ts = (s: number) => {
 };
 const esc = (s: string) => s.replace(/\\/g, "").replace(/[{}]/g, "").replace(/\n/g, " ");
 
-/** Split a script into sentences, keeping punctuation. Full-width 。！？ end one with no space after. */
-export const sentences = (text: string) =>
-  text
-    .replace(/\s+/g, " ")
-    .split(/(?<=[.!?])\s+|(?<=[。！？])\s*/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+export { sentences };
 
 /**
  * When the last sentence starts, from word timings that follow the script's
@@ -39,8 +34,12 @@ export const sentences = (text: string) =>
  */
 export function lastSentenceStart(script: string, timed: { start: number }[], language?: string): number | undefined {
   const sents = sentences(script);
-  const n = sents.length ? scriptWords(sents[sents.length - 1], language).length : 0;
-  return n && n <= timed.length ? timed[timed.length - n].start : undefined;
+  if (!sents.length || !timed.length) return undefined;
+  // Count the words before the last sentence, segmented in context (a
+  // sentence segmented on its own can split differently at its edges).
+  const text = script.replace(/\s+/g, " ").trim();
+  const before = scriptWords(text.slice(0, text.lastIndexOf(sents[sents.length - 1])), language).length;
+  return before < timed.length ? timed[before].start : undefined;
 }
 
 /**
