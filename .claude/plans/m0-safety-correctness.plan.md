@@ -27,7 +27,7 @@ Each fix ships separately, test first.
 |---|---|---|
 | `clipper/server/media.ts` | UPDATE | env allowlist and process-group kill in `run()`; the `buildProxy` timestamp fix |
 | `clipper/server/render.ts` | UPDATE | BT.709 convert and tag in compose; CJK-safe CTA anchor (`:305-309`) |
-| `clipper/server/overlays.ts` | UPDATE | the sticker graph composites in bt709 |
+| `clipper/server/overlays.ts` | UPDATE | sticker overlay in `format=rgb` (`:301-305`) |
 | `clipper/tests/media-env.test.ts` | CREATE | env scrub and tree-kill tests |
 | `clipper/tests/proxy-time.test.ts` | CREATE | proxy timestamp accuracy test |
 | `clipper/tests/color.test.ts` | CREATE | bars-through-pipeline colour test |
@@ -45,9 +45,9 @@ Each fix ships separately, test first.
 - **Validate**: a fixture with colour steps every 1 s and keyframes every 5 s. The proxy frame labelled `00:00:07` has the colour of second 7.
 
 ### Task 3: BT.709 (B0.3)
-- **Action**: Add `scale=out_color_matrix=bt709:out_range=tv` (or `colorspace=all=bt709`) before `format=yuv420p` in the final encode and the overlay composite, plus `-colorspace bt709 -color_primaries bt709 -color_trc bt709`.
+- **Action**: Blend in RGB and convert once: `scale=in_color_matrix=bt709:in_range=tv,format=rgb24,ass=…` → sticker `overlay=…:format=rgb` → `scale=out_color_matrix=bt709:out_range=tv,format=yuv420p`, with the four `-color*` tags. Don't add only a trailing `out_color_matrix`: the batch 05 check measured that it shifts BT.709 footage.
 - **Mirror**: the existing filter chain in compose.
-- **Validate**: `color.test.ts`: ffprobe reports `bt709` in all three tags, and the decoded centre pixel of the red bar is within ±3 of the source RGB.
+- **Validate**: `color.test.ts`: ffprobe reports `bt709` in all three tags, and `#E5484D` overlay → 228,70,75 ±3 and `#3366CC` footage → 46,98,198 ±3, decoded as BT.709.
 
 ### Task 4: CJK CTA anchor (B0.4)
 - **Action**: Replace `sents[...].split(" ").length` with `scriptWords(lastSentence, language).length`.

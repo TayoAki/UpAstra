@@ -66,7 +66,7 @@ Ranking overlays have three forms. **TierBoard** places icons into S/A/B/C/D-sty
   - The re-assert also requires that no tier preset appears after a reveal (`:588-596`) and that reveals are chronological (`:614-623`).
 - **Triggered schedule** (TopThree): `schedule.ts:331-381`. Activation instants are sorted, then handed to `resolveTriggeredSchedule` (`packages/temporal/src/schedule.ts:13-50`). That function requires triggers strictly increasing inside `[outer.start, terminal)`, with `exclusive[i] = [t_i, t_{i+1}|terminal)` and `cumulative[i] = [t_i, outer.end)`. The ranking re-assert checks all of these identities (`schedule.ts:541-572`).
 - **Motion fitting.** A window that is shorter than the preferred motion is never an error:
-  - TierBoard: `moveStart = max(appearFrames, duration − moveFrames)`. The glide always **ends exactly at the window end** (`schedule.ts:711-725`).
+  - TierBoard: `moveStart = max(appearFrames, duration − moveFrames)`. When there is a glide, it **ends exactly at the window end** (`schedule.ts:711-725`). But when `duration ≤ appearFrames` (8 by default), `moveEndFrame` is left undefined: there is no glide and no `move` sound event, and the drop item jumps from the stage straight to its cell at the window end (`schedule.ts:719-723`, `tier.ts:136-175`, `schedule.ts:838-840`) *(corrected in check)*.
   - Column: `fitColumnRevealMotion` keeps preferred appear+move when they fit. Otherwise it splits the duration in proportion. A 1-frame window becomes a hard "direct" cut (`schedule.ts:727-743`).
   - TopThree: `fitRankingEntranceMotion` clamps the appear time to the stage (`schedule.ts:699-709`).
 - **Sound events** are derived from the same phases:
@@ -104,7 +104,7 @@ Ranking overlays have three forms. **TierBoard** places icons into S/A/B/C/D-sty
   - Rendered as **one keyframe per frame**, all linear (`render.ts:241-251`).
 - **Column reveal** (`render.ts:408-462`):
   - rises from below with `outBack` overshoot at 72% of appear;
-  - during a hold of 6 frames or more, two tiny "breathing" keyframes (±0.8/1.8 px, scale 1.007/1.002, `:453-458`);
+  - during a hold of 6 frames or more, two tiny "breathing" keyframes, (+0.8, −1.8) px at scale 1.007 and then (−0.4, +1.6) px at scale 1.002 (`:453-458`) *(corrected in check)*;
   - then shrinks and moves into the slot over the last `moveFrames`.
 - **TopThree**: the item fades and rises 8 px from scale 0.82 (`render.ts:222-231`). Its accent ring pulses to `scale 1.08` at mid-stage (`:570-577`). The settled copy drops the ring (`:618-619`, asserted at `ranking.test.ts:466-470`).
 
@@ -156,7 +156,7 @@ The test shows events `appear 25, move 59, appear 65, move 89` → sample starts
   - stage and board Frames are separate;
   - every derived span is re-asserted.
 - **Bug: Column stage defaults disagree.** The code defaults are `stage-x 0.66, stage-y 0.73, stage-size 356` (`style.ts:237-238`). The published vocabulary says `0.5, 0.24, 132` (`manifest.ts:381-386`), and Studio shows the manifest values. The manifest also says "fraction of the Frame's width", but the code uses `within` (`render.ts:517-518`).
-- **Doc/code mismatch:** `sound-fade-frames` "fades in and out" (`manifest.ts:303-304`), but the renderer sets `fadeOutSamples: 0` (`render.ts:687`).
+- **Doc/code mismatch:** `sound-fade-frames` "fades in and out" (`manifest.ts:303-304`, repeated for Column `:397` and TopThree `:468`), but the renderer sets `fadeOutSamples: 0` (`render.ts:687`). Studio's inspector labels the same field "Fade In" (`packages/ranking/src/studio.ts:215`), so Studio matches the code and only the manifest text is wrong. The audio-track module does support fade-out (`packages/audio-track/src/program.ts:92`), so the omission is ranking-only. *(added in check)*
 - **Dead code:**
   - `rowY` (`render.ts:374-377`);
   - the `cell-gap` schema/placement, which is not a Recipe key (`manifest.ts:120`, `packages/ranking/src/studio.ts:75`);
@@ -242,7 +242,8 @@ Timed social "reply to comment" cards. Each Sticker has its own Frame (where), i
 
 ### Quality notes
 - Good: separate concerns, no fabricated metadata, explicit failure when text can't fit, and a clean, readable motion function.
-- The manifest lists `enter-easing` values without `out-back` (`manifest.ts:236`), but the decoder accepts it (`author.ts:132`). The published vocabulary under-documents the code.
+- The markup vocabulary lists `enter-easing` values without `out-back` (`manifest.ts:236`), but the decoder accepts it (`author.ts:132`), and so do the style schema in the same manifest (`manifest.ts:94`) and the asserts (`program.ts:121`). Only the author-facing list under-documents the code *(corrected in check)*. The omission also hides a behaviour: with `out-back`, enter opacity is `min(1, 1.35·rawProgress)` instead of following the eased curve (`program.ts:306-308`) *(added in check)*.
+- The avatar `fallback` defaults to `none` (`author.ts:114`), so by default a sticker with no avatar Blob has no avatar column, even when it has an author. The initial disc appears only with `avatar-fallback=initial` *(added in check)*.
 - An unused `duration` schema (`manifest.ts:60-64`).
 - `textElement` uses `wrap:"none"` with `maxLines:1` and an ellipsis for header and meta (`program.ts:384`). Long handles truncate instead of shrinking. That is acceptable.
 - "Too short for its text" is checked only against the box height. The body's real ink height depends on the browser wrap, and the ellipsis hides overflow. So it does not fail closed on *content* overflow, only on geometry.

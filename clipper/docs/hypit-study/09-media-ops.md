@@ -460,7 +460,7 @@ compiled to one ffmpeg graph. Duck with `sidechaincompress`, keyed on the voice 
    - Pattern: `packages/media-local/src/files.ts:375-401`.
    - Our code: `clipper/server/media.ts:81-94`.
    - This directly improves shot accuracy for every render.
-   - Check measurement (ffmpeg 6.1.1, below): the drawtext-before-`fps` and full-decode variants both fix the label; full decode at `fps=1` was only ~1.6× slower than keyframe-only on the synthetic clip (0.20 s vs 0.13 s), but that ratio will be much worse on long 60 fps HEVC, so measure on real footage before choosing. Moving `drawtext` before `fps` alone fixes the label but not the missing tail; add `-t`/`eof_action` handling or `fps=…:eof_action=pass` if the last GOP matters *(added in check; the `eof_action` remedy is unverified)*.
+   - Check measurement (ffmpeg 6.1.1, below): the drawtext-before-`fps` and full-decode variants both fix the label; full decode at `fps=1` was only ~1.6× slower than keyframe-only on the synthetic clip (0.20 s vs 0.13 s), but that ratio will be much worse on long 60 fps HEVC, so measure on real footage before choosing. Moving `drawtext` before `fps` fixes the label. Separately, `fps=…:eof_action=pass` brings back the last keyframe, which plain `fps=1` drops (measured: slots 0-15 instead of 0-14). The seconds after the last keyframe can never appear in a keyframe-only proxy *(added in check)*.
 2. **Scrub the child-process environment** for ffmpeg, ffprobe and whisper (`packages/media-local/src/process-env.ts:8-21`). It's one line in `clipper/server/media.ts:47` (`env: { PATH }`) and stops secrets leaking into subprocesses and their crash dumps. Whisper.cpp also goes through `run` (`clipper/server/transcribe.ts:51`), so the same line covers it. Caveat from the check: our proxy and CA settings are already passed as arguments by `netArgs` (`media.ts:15-21`), but fontconfig (used by `drawtext` and `ass`) usually wants `HOME` or `XDG_CACHE_HOME`, so keep those (or `FONTCONFIG_*`) alongside `PATH` and test a caption render *(added in check; fontconfig need unverified on Railway)*.
 3. **One low-resolution pre-scan per footage file, cached alongside moments.** Run a 32×32 difference pass with scores (`packages/media-local/src/files.ts:467-491`) plus `blackdetect`, in one decode. Use it to:
    - snap shot starts to visual cuts;
@@ -620,3 +620,73 @@ Every file listed was read fully. The `uv.lock` files (`provider-image-opencv-lo
 | `packages/recipe/src/parser.ts` | 306 | ✅ |
 | `packages/recipe/src/types.ts` | 26 | ✅ |
 | `packages/recipe/test/source-closure.test.ts` | 371 | ✅ |
+
+---
+
+## Check
+
+Second review against hypit `dc2b7a8f` and `clipper/` as of this check. Scratch files are in `/tmp/claude-0/-home-user-UpAstra/c8a97aa2-c81c-52c3-a0df-9bba50d7f6fe/scratchpad/check09/` (`run.sh` reproduces the experiment).
+
+### Our app, claim 1: `buildProxy` timestamps (`clipper/server/media.ts:81-94`)
+
+**ffmpeg semantics.**
+- `-skip_frame nokey` is a decoder option, so only keyframes leave the decoder, and they keep their real PTS.
+- The `fps` filter does not pass input timestamps through. It emits one frame per output slot, stamps it with the slot index in a 1/fps time base, and fills each slot with the most recent input frame whose rounded PTS is at or before the slot. It duplicates that frame until a newer one arrives; it never pulls a later frame back.
+- `drawtext`'s `%{pts}` prints the PTS of the frame it receives. Because it sits after `fps`, that is the slot time, not the keyframe's time.
+
+**Experiment** (ffmpeg 6.1.1). The source was 20 s at 30 fps, `-g 150 -keyint_min 150 -sc_threshold 0`, with keyframes confirmed by ffprobe at exactly 0, 5, 10 and 15 s. Picture brightness rises with the frame index, and the frame number is also burned in. We ran buildProxy's exact filter (`-skip_frame nokey`, `fps=1,scale=480:-2,drawtext=%{pts\:hms}`), then read each proxy frame's PTS (the burned label) and the mean luma of a crop away from the label.
+
+| Burned label | Proxy picture luma | Matches source frame at |
+|---|---|---|
+| 0, 1, 2, 3, 4 s | 30.0 | 0 s (source luma 30.0) |
+| 5, 6, 7, 8, 9 s | 74.0 | 5 s (source luma 74.0) |
+| 10, 11, 12, 13, 14 s | 120.0 | 10 s (source luma 120.0) |
+| (none; proxy ends at 15.0 s, 15 frames) | | the 15 s keyframe and the last 5 s are absent |
+
+`showinfo` placed before and after `fps` confirms the mechanism. Input PTS were 0, 5, 10 and 15 s; output PTS were 0, 1, …, 14, the values drawtext printed.
+
+**Result.**
+- The claim is confirmed, with the direction corrected. The label is the slot time, and the picture is the previous keyframe, so the label is late by 0 to (GOP − 1 s). It is never early, and it is not "nearest".
+- On a 5 s GOP, a moment the model reads at "00:00:04" actually happened at 0 s.
+- The tail after the last keyframe (here 5 s) is also missing.
+- As a control, the same filter **without** `-skip_frame nokey` gives 20 frames with luma stepping on every frame.
+- The real error on our footage depends on its GOP, so footage with 1-2 s GOPs is affected far less.
+
+### Our app, claim 2: `run()` env
+
+Confirmed. `clipper/server/media.ts:47` calls `spawn(cmd, …, { stdio: [...] })` with no `env` option, so Node passes `process.env` whole. That includes `OPENROUTER_API_KEY`, `GOOGLE_API_KEY` and the rest, and it reaches ffmpeg, ffprobe and whisper.cpp (`transcribe.ts:47`, `51`).
+
+### hypit citations, priority set
+
+- `cutFrame` at `files.ts:375-401` is confirmed: `-copyts -start_at_zero`, input `-ss` to at − 2 s (`SEEK_RUN_UP = 2`, `files.ts:199`), `trim=start=at,showinfo`, and it parses `config in time_base` plus `n:0 pts:`. The test at `files.test.ts:259-260` asserts 53/24 s for a 2.2 s request.
+- `process-env.ts:8-21` is confirmed as code, but its scope was overstated. It applies to the Provider port only, and the file-port CLI inherits the host env (corrected in 2a, Quality notes and the table).
+- The boundary pass is confirmed: `fps=12,scale=32:32,format=rgb24` (`files.ts:475-477`), score = mean absolute byte difference / 255, candidates at ≥ 0.1, `at = index / sampleRate` (`files.ts:488`), and CLI bounds of 1-120 and 0-1 (`files.ts:793-794`).
+- The envelope `aeval` is confirmed (`media-local/src/audio-level-automation.ts:4-31`): a nested `if(lt(n+offset,…))` linear interpolation, × a sum of `gte*lt` audibility spans, × fades, as one per-sample `aeval` for both channels. The `audio-track` package itself has no eval code; it only produces clip gain and fades (`audio-track/src/program.ts:91-99`, `166-167`).
+- The OpenCV bugs are confirmed:
+  - Grayscale `contain`: a 2-D `scaled` goes into an `(h, w, 3)` canvas (`raster_execute.py:96-101`). A numpy reproduction raises `ValueError: could not broadcast input array from shape (32,64) into shape (32,64,3)`. `split()` handles 2-D, but `resize` never calls it. Compose is safe because it uses `bgra()`.
+  - 16-bit input: `IMREAD_UNCHANGED` (`:68`) with uint8 assumptions.
+  - Denoise is a no-op below 32 px (`:107-108`).
+  - No `env` on spawn (`provider.ts:65`).
+  - "image transform" error text appears on compose too (`provider.ts:73`, `78`, `89`).
+  - The limits are confirmed (`provider.ts:99-101`, `148`), and the lock pins numpy 2.5.1 and opencv-python-headless 4.14.0.94.
+
+### Totals
+
+- Claims checked: about 80 of the notes' roughly 170 cited claims. These were every claim about our app, the priority set above, and spot checks across all nine packages (types and identity math, probe timing, normalize chain, mux AAC tolerance, extract-frame, CLI seek, tiles and grid, no-clobber, StillVideo split, retime bound, audio-plan gain and mix guard, yt-dlp arguments, staging and pin, recipe regexes and quoting).
+- Confirmed: 74.
+- Corrected: 5.
+  1. Env scrub scope, in three places.
+  2. The proxy bug's direction ("nearest keyframe" became "previous keyframe, label late"), plus the dropped tail.
+  3. `moments.ts:205/217` became `:72/:84`.
+  4. The "duck" grep: it is in Markdown docs, with no HTML file and no source.
+  5. The Input safety row.
+- Added: the measured experiment, the fix variants (including `eof_action=pass`), and the fontconfig caveat on env scrubbing.
+- Removed: 0. Newly marked unverified: 1 (whether fontconfig needs `HOME` on Railway).
+- Correction rate: about 6%.
+
+**Coverage.** Every `src/**`, `test/**`, runtime and README file in the nine packages matches the table and `wc -l` (126 files; `package.json`, `tsconfig*` and `uv.lock` excluded as stated). Package src and test totals match. One file was added: `provider-image-opencv-local/runtime/.python-version` (1 line).
+
+**Verdict: Verified with corrections ⚠️.** The correction rate is under 10%, but one file was missing from coverage and two load-bearing claims needed fixing.
+- The env-scrub "pattern to copy" holds only for hypit's Provider port.
+- The `buildProxy` bug is real and now measured: the label runs up to one GOP late, and the last GOP is dropped.
+

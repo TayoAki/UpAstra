@@ -45,9 +45,13 @@ Hypit paths below are relative to the hypit repo (`packages/...`, `skills/hypit/
 - **Avoid:** whole-file `-show_frames` probing.
 
 ### B0.3 BT.709 colour on the final encode
-- **Change:** in `compose()` and the overlay paths, convert explicitly (`scale=…:out_color_matrix=bt709`, or `colorspace`) and tag the output (`-colorspace bt709 -color_primaries bt709 -color_trc bt709`).
-- **Tests first:** render SMPTE bars through the full pipeline. ffprobe shows bt709 tags, and the sampled RGB of the 75% red bar stays within ±3 of the source.
-- **Parity:** `packages/html-video/.../capture.ts:148-149` (study 05 #3). Validate on iOS and Android playback (PRD open question).
+- **Measured in the batch 05 check:**
+  - our untagged output decodes `#E5484D` as 240,86,74 under BT.709, a shift of about +11/+14/−3;
+  - ASS captions, comments and tier colours drift the same way, not only the PNG stickers;
+  - the obvious fix, a trailing `scale=out_color_matrix=bt709`, re-matrixes BT.709 footage (`#3366CC` comes out 49,94,192).
+- **Change:** blend in RGB, then convert once. The filter chain is `scale=in_color_matrix=bt709:in_range=tv,format=rgb24,ass=…`, then the stickers `overlay=…:format=rgb`, then `scale=out_color_matrix=bt709:out_range=tv,format=yuv420p`, with `-colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv` (`server/media.ts:159-170`, `server/overlays.ts:301-305`). Measure the speed cost and record it.
+- **Tests first:** both overlays and footage decode within ±3 of the source: `#E5484D` gives 228,70,75 and `#3366CC` gives about 46,98,198. ffprobe shows bt709 tags. Reference outputs: `scratchpad/check05/`.
+- **Parity:** html-video `capture.ts:143-150` (study 05 #3, check). **Beats:** hypit's tail conversion is safe only because it encodes from RGB browser frames; ours composites over YUV footage.
 
 ### B0.4 CJK-safe CTA timing
 - **Change:** `server/render.ts:305-309` counts last-sentence words with `split(" ")`. Use `scriptWords(lastSentence, language)` from `server/align.ts:42`, which is the same segmentation as alignment, and anchor to the token index.
