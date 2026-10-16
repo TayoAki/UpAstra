@@ -36,8 +36,8 @@ describe("caption styles", () => {
     expect(ass).toContain("Style: Cap,Anton,112,");
   });
 
-  it("joins words without spaces for languages that don't use them", () => {
-    const ass = buildAss({ hook: "", captions: [{ text: "你好世界", start: 0, end: 1, words: [{ text: "你好", start: 0, end: 0.5 }, { text: "世界", start: 0.5, end: 1 }] }], cta: "", ctaFrom: 9, duration: 2, style: resolveCaptionStyle(undefined, { style: "bold-pop" }), joiner: "" });
+  it("joins words without spaces for scripts that don't use them (no language needed)", () => {
+    const ass = buildAss({ hook: "", captions: [{ text: "你好世界", start: 0, end: 1, words: [{ text: "你好", start: 0, end: 0.5 }, { text: "世界", start: 0.5, end: 1 }] }], cta: "", ctaFrom: 9, duration: 2, style: resolveCaptionStyle(undefined, { style: "bold-pop" }) });
     expect(ass).toContain("}你好世界");
   });
 });

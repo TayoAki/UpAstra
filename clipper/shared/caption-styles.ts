@@ -1,3 +1,4 @@
+import { joinWords } from "./words";
 // Caption styles: presets, the workspace brand kit layered on top, and a
 // campaign's own choice on top of that. The same resolved style drives the
 // server's burned-in captions (ASS / libass) and the editor's caption track.
@@ -110,11 +111,11 @@ export function groupWords<T extends { text: string; start: number; end: number 
     if (!cur.length) first = i;
     cur.push(w);
     if (cur.length >= max || /[.!?,;:—。！？、，]$/.test(w.text)) {
-      out.push({ text: cur.map((x) => x.text).join(" "), start: cur[0].start, end: cur[cur.length - 1].end, words: cur, first });
+      out.push({ text: joinWords(cur.map((x) => x.text)), start: cur[0].start, end: cur[cur.length - 1].end, words: cur, first });
       cur = [];
     }
   });
-  if (cur.length) out.push({ text: cur.map((x) => x.text).join(" "), start: cur[0].start, end: cur[cur.length - 1].end, words: cur, first });
+  if (cur.length) out.push({ text: joinWords(cur.map((x) => x.text)), start: cur[0].start, end: cur[cur.length - 1].end, words: cur, first });
   // Close tiny gaps so captions don't flicker.
   for (let i = 0; i < out.length - 1; i++) if (out[i + 1].start - out[i].end < 0.25) out[i].end = out[i + 1].start;
   return out;

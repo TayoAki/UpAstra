@@ -8,7 +8,7 @@ import { getDoc, HttpError, loadTenant, log, now, runInWorkspace, save, tenantLo
 import { prepareFonts } from "./fonts";
 import { BT709, burnFilter, probe, run, yuvMatrix } from "./media";
 import { videoStore } from "./storage";
-import { NO_SPACES, transcribe } from "./transcribe";
+import { transcribe } from "./transcribe";
 import { isPending, submitJob, waitingCount } from "./jobs";
 import { recordUsage } from "./usage";
 import { alert, isUserError } from "./alerts";
@@ -100,7 +100,6 @@ async function renderJob(j: CaptionJob, workspaceId: string) {
         duration: j.durationSec ?? (j.words.at(-1)?.end ?? 0) + 1,
         captions: groups(j.words, style.wordsPerCaption),
         style,
-        joiner: j.joiner ?? (j.language && NO_SPACES.has(j.language) ? "" : " "),
         language: j.language,
         frame: { width, height },
       }),

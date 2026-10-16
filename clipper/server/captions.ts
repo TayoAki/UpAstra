@@ -1,5 +1,6 @@
 import { groupWords, resolveCaptionStyle, type CaptionStyle } from "../shared/caption-styles";
 import { sentences } from "../shared/sentences";
+import { joinWords, sepBetween } from "../shared/words";
 import { scriptWords } from "./align";
 import { H, VIDEO_TOP, W } from "./media";
 import { overlayEvents, overlayStyles, type OverlayLayout, type Placed } from "./overlays";
@@ -97,8 +98,8 @@ export type CaptionGroup = Timed & { words?: Timed[] };
 
 /**
  * The full caption track: hook across the top, captions in the chosen style,
- * and the call-to-action card at the end. `joiner` is "" for languages written
- * without spaces.
+ * and the call-to-action card at the end. Words are spaced by script
+ * (none inside Chinese, Japanese or Thai).
  */
 export function buildAss(o: {
   hook: string;
@@ -108,7 +109,6 @@ export function buildAss(o: {
   duration: number;
   style?: CaptionStyle;
   accent?: string;
-  joiner?: string;
   language?: string;
   /** Frame size; defaults to UGCMediaClips's 1080×1920. Style sizes scale with the short side. */
   frame?: { width: number; height: number };
@@ -120,7 +120,6 @@ export function buildAss(o: {
   const k = Math.min(FW, FH) / 1080;
   const px = (n: number) => Math.max(1, Math.round(n * k));
   const st = o.style ?? resolveCaptionStyle(undefined);
-  const joiner = o.joiner ?? " ";
   const font = st.font;
   const bold = /^DejaVu/i.test(font) ? -1 : 0;
   const accent = assColor(o.accent ?? "#E5484D");
@@ -162,13 +161,13 @@ export function buildAss(o: {
         const from = k === 0 ? g.start : w.start;
         const to = k < words.length - 1 ? words[k + 1].start : end;
         if (to <= from || from >= o.duration) return;
-        const text = words.map((x, q) => (q === k ? `{\\c${hl}}${esc(cased(x.text))}{\\c${white}}` : esc(cased(x.text)))).join(joiner);
+        const text = words.map((x, q) => (q ? sepBetween(words[q - 1].text, x.text) : "") + (q === k ? `{\\c${hl}}${esc(cased(x.text))}{\\c${white}}` : esc(cased(x.text)))).join("");
         lines.push(`Dialogue: 0,${ts(from)},${ts(Math.min(to, o.duration))},Cap,,0,0,0,,{${place}${k === 0 ? pop : ""}}${text}`);
       });
       continue;
     }
     const anim = st.animation === "pop" || st.animation === "karaoke" ? pop : st.animation === "fade" ? "\\fad(70,70)" : "";
-    const text = words.map((x) => esc(cased(x.text))).join(joiner);
+    const text = esc(cased(joinWords(words.map((x) => x.text))));
     lines.push(`Dialogue: 0,${ts(g.start)},${ts(end)},Cap,,0,0,0,,{${place}${anim}}${text}`);
   }
   if (o.overlays?.placed.length) lines.push(...overlayEvents(o.overlays.placed, o.overlays.layout));

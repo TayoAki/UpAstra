@@ -12,7 +12,7 @@ import { cacheKey, footageSource, isCached } from "./footage-cache";
 import { cancelJob, cancelWaiting, checkCancelled, currentSignal, isPending, pendingCount, submitJob, waitingCount } from "./jobs";
 import { cachedStep } from "./steps";
 import { alignScript, type Alignment } from "./align";
-import { NO_SPACES, transcribe, transcriptionAvailable, whisperModel, type Word } from "./transcribe";
+import { transcribe, transcriptionAvailable, whisperModel, type Word } from "./transcribe";
 import { accentOf, resolveCaptionStyle } from "../shared/caption-styles";
 import { prepareFonts } from "./fonts";
 import { analyzeFootage, pickMoment } from "./moments";
@@ -353,7 +353,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     if (missed.length || missing.length)
       log({ campaignId: c.id, kind: "clip", message: `Left out ${missed.length + missing.length} overlay(s) on "${clip.title}"${missed.length ? ` — cue words not in the voiceover: ${missed.map((o) => `"${o.cue ?? o.text}"`).join(", ")}` : ""}${missing.length ? ` — no image for ${missing.join(" ")}` : ""}.` });
     const ass = path.join(tmp, "subs.ass");
-    fs.writeFileSync(ass, buildAss({ hook: clip.hook, captions: captionGroups, cta: ctaText, ctaFrom, duration, style, accent: accentOf(brand), joiner: r.language && NO_SPACES.has(r.language) ? "" : " ", language: r.language, overlays: { placed, layout } }));
+    fs.writeFileSync(ass, buildAss({ hook: clip.hook, captions: captionGroups, cta: ctaText, ctaFrom, duration, style, accent: accentOf(brand), language: r.language, overlays: { placed, layout } }));
     const final = path.join(tmp, "final.mp4");
     await compose({ video: joined, ass, voice: voicePath, duration, out: final, fontsDir: await prepareFonts(tmp, brand), workDir: tmp, stickers });
 
