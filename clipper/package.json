@@ -2,7 +2,7 @@
   "name": "clip-operator",
   "version": "0.1.0",
   "private": true,
-  "description": "Clip Operator — paste a clipping brief, get the rules, scripts and clips, and track every campaign you run.",
+  "description": "UGCMediaClips — paste a clipping brief, get the rules, scripts and clips, and track every campaign you run.",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n api,web -c blue,magenta \"tsx watch server/index.ts\" \"vite\"",

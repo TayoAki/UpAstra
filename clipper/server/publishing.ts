@@ -41,7 +41,7 @@ export interface ScheduleOptions {
   youtube?: { title?: string; privacy?: "public" | "unlisted" | "private" };
 }
 
-/** Schedule (or post now) a rendered clip to connected accounts. One Outstand post, one Clip Operator post per account. */
+/** Schedule (or post now) a rendered clip to connected accounts. One Outstand post, one UGCMediaClips post per account. */
 export async function scheduleClip(workspaceId: string, clip: Clip, o: ScheduleOptions): Promise<Post[]> {
   const doc = getDoc();
   const key = clip.render?.status === "done" ? clip.render.videoKey : undefined;

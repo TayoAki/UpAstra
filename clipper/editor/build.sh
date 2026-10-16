@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the OpenReel editor (pinned commit + Clip Operator patches) into ../editor-dist.
+# Build the OpenReel editor (pinned commit + UGCMediaClips patches) into ../editor-dist.
 # Used by the Dockerfile; also works locally: bash editor/build.sh
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"

@@ -1,4 +1,4 @@
-// Apply Clip Operator's changes to a checkout of OpenReel (MIT, github.com/Augani/openreel-video).
+// Apply UGCMediaClips's changes to a checkout of OpenReel (MIT, github.com/Augani/openreel-video).
 // Usage: node apply.mjs <openreel-checkout>
 // Every edit names the exact text it replaces and fails loudly if OpenReel has
 // changed, so a version bump can't silently skip a patch.
@@ -24,7 +24,7 @@ fs.copyFileSync(path.join(here, "bridge/clip-operator-bridge.tsx"), path.join(we
 // 2. Load it with the app.
 edit("src/main.tsx", `import App from "./App";`, `import App from "./App";\nimport "./clip-operator-bridge";`);
 
-// 3. Opening from Clip Operator starts a fresh project; don't offer to recover an old one.
+// 3. Opening from UGCMediaClips starts a fresh project; don't offer to recover an old one.
 edit(
   "src/App.tsx",
   `const { isChecking, showDialog, availableSaves, recover, dismiss, clearAll } = useProjectRecovery();`,
@@ -32,7 +32,7 @@ edit(
 );
 edit("src/App.tsx", `import { useRouter } from "./hooks/use-router";`, `import { useRouter } from "./hooks/use-router";\nimport { OPENED_FROM_CLIP_OPERATOR } from "./clip-operator-bridge";`);
 
-// 4. Served under /editor/ on Clip Operator's domain.
+// 4. Served under /editor/ on UGCMediaClips's domain.
 edit("vite.config.ts", `base: isDesktop ? "./" : "/",`, `base: isDesktop ? "./" : (process.env.OPENREEL_BASE ?? "/"),`);
 edit(
   "src/components/editor/preview/threejs-layer-renderer.ts",
@@ -41,11 +41,11 @@ edit(
 );
 
 // 5. No service worker: OpenReel's registers at the site root, which on a shared
-//    domain would sit in front of Clip Operator's own pages and API.
+//    domain would sit in front of UGCMediaClips's own pages and API.
 edit(
   "src/services/service-worker.ts",
   `  // Only register in production or if explicitly enabled\n  if (import.meta.env.DEV && !import.meta.env.VITE_ENABLE_SW) {`,
-  `  // Clip Operator build: the editor shares a domain with the app, so never register.\n  if (import.meta.env.DEV || !import.meta.env.VITE_ENABLE_SW) {`,
+  `  // UGCMediaClips build: the editor shares a domain with the app, so never register.\n  if (import.meta.env.DEV || !import.meta.env.VITE_ENABLE_SW) {`,
 );
 
-console.log("OpenReel patched for Clip Operator.");
+console.log("OpenReel patched for UGCMediaClips.");

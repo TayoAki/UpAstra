@@ -22,7 +22,7 @@ type ToolCall = { id: string; type: "function"; function: { name: string; argume
 const transcripts = new Map<string, Msg[]>();
 const running = new Map<string, AbortController>();
 
-const system = (tz: string) => `You are the Clipping Agent inside Clip Operator, a tool for "clippers" who earn money posting short videos (TikTok, Reels, Shorts) for paid clipping campaigns.
+const system = (tz: string) => `You are the Clipping Agent inside UGCMediaClips, a tool for "clippers" who earn money posting short videos (TikTok, Reels, Shorts) for paid clipping campaigns.
 You act for the signed-in user through your tools. Today is ${new Date().toISOString()} (UTC); the user's time zone is ${tz}.
 
 How to work:

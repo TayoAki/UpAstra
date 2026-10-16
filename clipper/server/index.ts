@@ -9,7 +9,7 @@ const port = Number(process.env.PORT ?? 8788);
 startMetricsPoller();
 const server = createApp().listen(port, () => {
   const s = serviceStatus();
-  console.log(`Clip Operator on http://localhost:${port}  (storage: ${s.storage}, AI: ${s.ai}${s.ai === "live" ? ` · ${s.aiModel}` : ""})`);
+  console.log(`UGCMediaClips on http://localhost:${port}  (storage: ${s.storage}, AI: ${s.ai}${s.ai === "live" ? ` · ${s.aiModel}` : ""})`);
 });
 
 for (const sig of ["SIGTERM", "SIGINT"] as const)

@@ -5,12 +5,12 @@ The clip editor at `/editor/` is [OpenReel](https://github.com/Augani/openreel-v
 - `apply.mjs`:
   - serves the editor under `/editor/`;
   - turns off its service worker;
-  - skips the recovery prompt when the editor is opened from Clip Operator;
+  - skips the recovery prompt when the editor is opened from UGCMediaClips;
   - loads the bridge.
 - `bridge/clip-operator-bridge.tsx`:
   - loads a clip's shots, voiceover, captions, hook and call to action into a new project;
-  - points the AI editor at Clip Operator's AI proxy;
-  - adds **Save to Clip Operator**.
+  - points the AI editor at UGCMediaClips's AI proxy;
+  - adds **Save to UGCMediaClips**.
 
 `build.sh` fetches the pinned commit, applies the patches and builds into `../editor-dist` (the Dockerfile runs it). To update OpenReel, change `OPENREEL_COMMIT`, run `bash editor/build.sh`, and fix any anchor `apply.mjs` reports as missing.
 

@@ -30,7 +30,7 @@ export interface CaptionStyle {
   glow?: boolean;
 }
 
-/** Fonts bundled with Clip Operator (SIL Open Font License, see /fonts). */
+/** Fonts bundled with UGCMediaClips (SIL Open Font License, see /fonts). */
 export const BUNDLED_FONTS: { family: string; file: string }[] = [
   { family: "Poppins Black", file: "Poppins-Black.ttf" },
   { family: "Poppins ExtraBold", file: "Poppins-ExtraBold.ttf" },

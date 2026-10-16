@@ -99,7 +99,7 @@ export function buildAss(o: {
   accent?: string;
   joiner?: string;
   language?: string;
-  /** Frame size; defaults to Clip Operator's 1080×1920. Style sizes scale with the short side. */
+  /** Frame size; defaults to UGCMediaClips's 1080×1920. Style sizes scale with the short side. */
   frame?: { width: number; height: number };
 }): string {
   const FW = o.frame?.width ?? W;

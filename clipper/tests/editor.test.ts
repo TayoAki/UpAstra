@@ -5,7 +5,7 @@ import { createApp } from "../server/app";
 import { initAuth } from "../server/auth";
 import { useMemoryBackend } from "../server/db";
 
-// The editor's AI chat goes through Clip Operator: the server's key, a pinned
+// The editor's AI chat goes through UGCMediaClips: the server's key, a pinned
 // model, capped output, the workspace's daily limit — and streams pass through.
 let upstream: http.Server;
 let app: http.Server;

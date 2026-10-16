@@ -1,6 +1,6 @@
-# Clip Operator — single image: API + built web app + the OpenReel editor.
+# UGCMediaClips — single image: API + built web app + the OpenReel editor.
 
-# The editor: OpenReel (MIT) at a pinned commit with Clip Operator's patches (editor/).
+# The editor: OpenReel (MIT) at a pinned commit with UGCMediaClips's patches (editor/).
 FROM node:22-slim AS editor
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN corepack enable

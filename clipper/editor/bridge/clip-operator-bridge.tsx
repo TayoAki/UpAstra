@@ -1,14 +1,14 @@
-// Clip Operator ⇄ OpenReel bridge.
+// UGCMediaClips ⇄ OpenReel bridge.
 //
 // Copied into OpenReel's apps/web/src at build time (see ../apply.mjs). When
 // the editor is opened as /editor/?co_clip=<id>#/new?…, it:
-//   1. loads the clip's "edit pack" from Clip Operator (same origin, session cookie),
+//   1. loads the clip's "edit pack" from UGCMediaClips (same origin, session cookie),
 //   2. imports the shots and voiceover, and lays out the timeline: shots on a
 //      video track, voice on an audio track, the hook and call to action as
 //      text, word-timed captions as subtitles,
-//   3. points OpenReel's AI editor at Clip Operator's AI proxy (no API key in
+//   3. points OpenReel's AI editor at UGCMediaClips's AI proxy (no API key in
 //      the browser), and
-//   4. adds a "Save to Clip Operator" button that exports the edit and uploads
+//   4. adds a "Save to UGCMediaClips" button that exports the edit and uploads
 //      it as the clip's video.
 import { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
@@ -30,7 +30,7 @@ interface EditPack {
   voice?: { url: string; name: string };
   captions: { text: string; start: number; end: number; words: Word[] }[];
   hook?: { text: string; end: number };
-  /** Clip Operator's resolved caption style (brand kit + campaign), as used in its renders. */
+  /** UGCMediaClips's resolved caption style (brand kit + campaign), as used in its renders. */
   captionStyle?: { font: string; size: number; color: string; highlight: string; outline: string; outlineWidth: number; uppercase: boolean; position: number; animation: string; box?: string };
   accent?: string;
   fonts?: { family: string; url: string }[];
@@ -118,7 +118,7 @@ async function buildTimeline(pack: EditPack, progress: (s: string) => void) {
   }
 
   progress("Adding text and captions…");
-  // The brand's fonts, so text renders (and exports) as it does in Clip Operator.
+  // The brand's fonts, so text renders (and exports) as it does in UGCMediaClips.
   await Promise.all(
     (pack.fonts ?? []).map(async (f) => {
       try {
@@ -155,7 +155,7 @@ async function buildTimeline(pack: EditPack, progress: (s: string) => void) {
       style: { fontFamily: font, fontSize: Math.round((cs?.size ?? 92) * 0.8), color: cs?.color ?? "#ffffff", backgroundColor: cs?.box ? cs.box.slice(0, 7) : "transparent", position: "bottom", highlightColor: cs?.highlight ?? "#ffd60a" },
     });
   }
-  // Captions go just under the footage band, as in Clip Operator's renders.
+  // Captions go just under the footage band, as in UGCMediaClips's renders.
   const capTrack = store().project.timeline.tracks.find((t) => t.role === "captions");
   for (const c of store().getAllTextClips().filter((x) => x.trackId === capTrack?.id)) {
     store().updateTextTransform(c.id, { position: { x: 0.5, y: cs?.position ?? 0.78 } });
@@ -174,7 +174,7 @@ function configureAI(ai: EditPack["ai"]) {
   s.setLlmBaseUrl(new URL(ai.baseUrl, window.location.origin).toString());
   s.setLlmModel(ai.model);
   // "Configured" means "a key is stored in the browser vault" — there is none:
-  // Clip Operator's proxy holds the key and authenticates with the session.
+  // UGCMediaClips's proxy holds the key and authenticates with the session.
   if (s.configuredServices.includes("openai-compatible")) s.removeConfiguredService("openai-compatible");
 }
 
@@ -234,7 +234,7 @@ async function saveEdit(pack: EditPack, progress: (s: string) => void) {
   if (!result?.success) throw new Error(result?.error?.message ?? "Export failed");
   const blob = out.blob();
   if (blob.size < 1000) throw new Error("The export came out empty");
-  progress(`Uploading to Clip Operator (${(blob.size / 1e6).toFixed(1)} MB)…`);
+  progress(`Uploading to UGCMediaClips (${(blob.size / 1e6).toFixed(1)} MB)…`);
   const up = await fetch(pack.saveUrl, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "video/mp4" }, body: blob });
   const data = await up.json().catch(() => ({}));
   if (!up.ok) throw new Error((data as { error?: string }).error ?? `Upload failed (${up.status})`);
@@ -268,7 +268,7 @@ function Bar() {
     setError(undefined);
     try {
       await saveEdit(pack, setStatus);
-      setStatus("Saved to Clip Operator ✓");
+      setStatus("Saved to UGCMediaClips ✓");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -280,11 +280,11 @@ function Bar() {
     <div style={{ position: "fixed", left: "50%", bottom: 12, transform: "translateX(-50%)", zIndex: 2147483000, display: "flex", alignItems: "center", gap: 10, padding: "8px 10px 8px 14px", borderRadius: 999, background: "rgba(20,20,22,0.92)", color: "#fff", font: "500 13px/1.2 system-ui, sans-serif", boxShadow: "0 6px 24px rgba(0,0,0,0.35)", maxWidth: "calc(100vw - 24px)" }}>
       <span style={{ width: 8, height: 8, borderRadius: 99, background: error ? "#ff6369" : busy ? "#f5a623" : "#30a46c", flex: "none" }} />
       <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        <strong>Clip Operator</strong>
+        <strong>UGCMediaClips</strong>
         {pack ? ` · ${pack.clip.title}` : ""} — {error ?? status}
       </span>
       <button disabled={busy || !pack} onClick={save} style={{ border: 0, borderRadius: 999, padding: "7px 12px", background: ACCENT, color: "#fff", font: "inherit", cursor: busy ? "default" : "pointer", opacity: busy || !pack ? 0.6 : 1 }}>
-        Save to Clip Operator
+        Save to UGCMediaClips
       </button>
       {pack && (
         <a href={pack.backUrl} style={{ color: "#ccc", textDecoration: "none", whiteSpace: "nowrap" }}>
@@ -313,5 +313,5 @@ if (CLIP_ID) {
   ReactDOM.createRoot(host).render(<Bar />);
 }
 
-/** True when this editor session was opened from Clip Operator (skips the recovery prompt). */
+/** True when this editor session was opened from UGCMediaClips (skips the recovery prompt). */
 export const OPENED_FROM_CLIP_OPERATOR = !!CLIP_ID;

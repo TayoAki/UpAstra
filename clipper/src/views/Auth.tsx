@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Play } from "lucide-react";
 import type { Me } from "../../shared/types";
 import { api } from "../api";
+import { Logo } from "../components/Logo";
 
 export function AuthView({ onIn }: { onIn: (m: Me) => void }) {
   const [mode, setMode] = useState<"login" | "signup">("signup");
@@ -25,12 +25,7 @@ export function AuthView({ onIn }: { onIn: (m: Me) => void }) {
   return (
     <div className="auth">
       <div className="auth-pitch">
-        <div className="row" style={{ gap: 10 }}>
-          <span className="rail-logo" style={{ width: 34, height: 34, borderRadius: 9, background: "#e5484d", display: "grid", placeItems: "center" }}>
-            <Play size={18} fill="#fff" color="#fff" />
-          </span>
-          <strong style={{ fontSize: 18 }}>Clip Operator</strong>
-        </div>
+        <Logo size={40} />
         <h1>Paste a clipping brief. Get clips that follow every rule.</h1>
         <ul>
           <li>Reads the brief from a Google Doc, link or pasted text: CPM, payout cap, required phrases, CTA and banned claims.</li>

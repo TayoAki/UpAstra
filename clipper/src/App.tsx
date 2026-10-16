@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { BarChart3, Bot, CalendarDays, Captions, Clapperboard, Home, Inbox, Lightbulb, LogOut, Play, Plus, Settings, ChevronRight, Search } from "lucide-react";
+import { BarChart3, Bot, CalendarDays, Captions, Clapperboard, Home, Inbox, Lightbulb, LogOut, Plus, Settings, ChevronRight, Search } from "lucide-react";
 import { fmtNum, fmtUSD } from "../shared/rules";
 import { api } from "./api";
 import { go, useApp, useRoute } from "./store";
@@ -13,6 +13,7 @@ import { Overview, OverviewRight } from "./views/Overview";
 import { PostsView } from "./views/Posts";
 import { Review } from "./views/Review";
 import { SettingsView } from "./views/Settings";
+import { LogoMark } from "./components/Logo";
 
 export function Tabs({ tabs, active, onPick }: { tabs: { id: string; label: string; n?: number }[]; active: string; onPick: (id: string) => void }) {
   return (
@@ -88,8 +89,8 @@ export function App() {
   return (
     <div className={`shell ${right ? "" : "no-right"}`}>
       <nav className="rail" aria-label="Main">
-        <div className="logo">
-          <Play size={16} fill="#fff" />
+        <div className="logo" title="UGCMediaClips">
+          <LogoMark size={32} />
         </div>
         {railBtn("/", !page, <Home size={19} />, "Overview")}
         {railBtn("/new", page === "new", <Plus size={19} />, "New campaign")}

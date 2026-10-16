@@ -1,5 +1,5 @@
 import type { BrandKit, CaptionOverrides } from "./caption-styles";
-// Clip Operator data model. One document per workspace holds its campaigns,
+// UGCMediaClips data model. One document per workspace holds its campaigns,
 // footage, clip plans, posts and activity.
 
 export type Platform = "tiktok" | "instagram" | "youtube" | "x" | "facebook" | "threads" | "linkedin" | "bluesky" | "snapchat" | "other";

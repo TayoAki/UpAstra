@@ -120,7 +120,7 @@ export function ScheduleView() {
             </tbody>
           </table>
         ) : (
-          <Empty>Nothing published through Clip Operator yet.</Empty>
+          <Empty>Nothing published through UGCMediaClips yet.</Empty>
         )}
       </Panel>
     </div>

@@ -4,7 +4,7 @@ import { CAPTION_STYLES } from "../shared/caption-styles";
 import type { Campaign, CampaignStats, CaptionJob, Clip, Insights, LearningReport, Post, ServiceStatus, SocialAccount } from "../shared/types";
 import { HOOK_STYLES, PLATFORMS, VOICES } from "../shared/types";
 
-// MCP server for Clip Operator: run the whole thing headless from Claude
+// MCP server for UGCMediaClips: run the whole thing headless from Claude
 // (Desktop, Code, claude.ai connectors) or any MCP client. Tools call the same
 // HTTP API the dashboard uses, with the workspace agent key, so every brief
 // rule, QA check, spend cap and render queue applies unchanged. Actions show
@@ -12,7 +12,7 @@ import { HOOK_STYLES, PLATFORMS, VOICES } from "../shared/types";
 
 export type ApiCall = <T = unknown>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown) => Promise<T>;
 
-/** Calls the Clip Operator HTTP API with a workspace agent key. */
+/** Calls the UGCMediaClips HTTP API with a workspace agent key. */
 export function httpApi(baseUrl: string, key: string, extraHeaders: Record<string, string> = {}, sessionAuth = false): ApiCall {
   return async (method, path, body) => {
     const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api${path}`, {
@@ -121,10 +121,10 @@ const PLATFORM = z.enum(PLATFORMS as [string, ...string[]]);
 
 export function createMcpServer(api: ApiCall): McpServer {
   const server = new McpServer(
-    { name: "clip-operator", version: "0.1.0" },
+    { name: "ugcmediaclips", version: "0.1.0" },
     {
       instructions:
-        "Clip Operator turns paid clipping-campaign briefs into finished 9:16 shorts (TikTok, Reels, Shorts). " +
+        "UGCMediaClips turns paid clipping-campaign briefs into finished 9:16 shorts (TikTok, Reels, Shorts). " +
         "Fastest path: brief_to_shorts (brief link or text → plans → renders), then wait_for_renders for the video links. " +
         "Step by step: add_campaign → plan_clips → review_clip (approve) → render_clip → wait_for_renders. " +
         "Plans are checked against the brief in code (required phrases, CTA, length, banned claims); never approve a failing plan without telling the user why. " +
@@ -509,7 +509,7 @@ export function createMcpServer(api: ApiCall): McpServer {
           content: {
             type: "text",
             text:
-              `Use Clip Operator to make shorts for this clipping campaign brief:\n\n${brief}\n\n` +
+              `Use UGCMediaClips to make shorts for this clipping campaign brief:\n\n${brief}\n\n` +
               "Call brief_to_shorts (briefUrl if it's a link, else briefText) with 3 clips, then wait_for_renders until they finish. " +
               "Report the campaign's payout terms and rules in one short list, then each clip's hook, length and video link. " +
               "For plans left as drafts, say which rule failed and offer a fix. Remind me to log each post (link + account) after I upload it.",

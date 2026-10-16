@@ -951,7 +951,7 @@ export function createApp() {
       const clip = findClip(String(req.params.id));
       if (!clip.render || clip.render.status !== "done") throw new HttpError(409, "Render this clip before saving an edit");
       const type = String(req.headers["content-type"] ?? "").split(";")[0];
-      if (type !== "video/mp4") throw new HttpError(415, "Export as MP4 to save to Clip Operator");
+      if (type !== "video/mp4") throw new HttpError(415, "Export as MP4 to save to UGCMediaClips");
       const key = `${req.workspaceId}/clips/${clip.id}-edit-${Date.now()}.mp4`;
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "edit-"));
       let size: number;
@@ -987,7 +987,7 @@ export function createApp() {
   );
 
   // The editor's AI chat (OpenAI-compatible), on the server's key and the workspace's daily AI limit.
-  api.get("/ai/v1/models", (_req, res) => res.json({ object: "list", data: aiLive() ? [{ id: editorModel(), object: "model", owned_by: "clip-operator" }] : [] }));
+  api.get("/ai/v1/models", (_req, res) => res.json({ object: "list", data: aiLive() ? [{ id: editorModel(), object: "model", owned_by: "ugcmediaclips" }] : [] }));
   api.post(
     "/ai/v1/chat/completions",
     wrap(async (req, res) => {

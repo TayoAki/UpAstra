@@ -101,7 +101,7 @@ export function ConnectAccounts() {
       {pending && (
         <Modal title="Which pages?" onClose={() => setPending(undefined)}>
           <p className="small muted" style={{ marginTop: 0 }}>
-            Pick the pages Clip Operator may post to.
+            Pick the pages UGCMediaClips may post to.
           </p>
           {pending.pages.map((p) => (
             <label key={p.id} className="row" style={{ padding: "6px 0" }}>

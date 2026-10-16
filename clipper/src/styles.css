@@ -187,9 +187,6 @@ h3 {
 .rail .logo {
   width: 32px;
   height: 32px;
-  border-radius: 9px;
-  background: var(--accent);
-  color: #fff;
   display: grid;
   place-items: center;
   margin-bottom: 10px;
@@ -1247,4 +1244,25 @@ tr.clickable:hover td {
 }
 .usage-bar > span.hot {
   background: var(--bad);
+}
+
+/* Brand */
+.brand-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.brand-word {
+  font-family: "Poppins ExtraBold", system-ui, sans-serif;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: var(--text);
+  white-space: nowrap;
+}
+.brand-word b {
+  color: var(--accent);
+  font-weight: inherit;
+}
+.auth-pitch .brand-word {
+  color: #fff;
 }

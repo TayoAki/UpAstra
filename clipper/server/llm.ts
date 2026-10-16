@@ -24,7 +24,7 @@ function provider() {
     return {
       url: `${process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1"}/chat/completions`,
       key: process.env.OPENROUTER_API_KEY,
-      headers: { "HTTP-Referer": process.env.APP_URL ?? "https://clip-operator.app", "X-Title": "Clip Operator" } as Record<string, string>,
+      headers: { "HTTP-Referer": process.env.APP_URL ?? "https://clip-operator.app", "X-Title": "UGCMediaClips" } as Record<string, string>,
       openrouter: true,
     };
   if (process.env.OPENAI_API_KEY)
@@ -211,7 +211,7 @@ export async function speak(script: string, voice: string): Promise<{ pcm: Buffe
   if (!mediaLive()) throw new Error("Voiceover needs OPENROUTER_API_KEY");
   const res = await fetch(`${process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1"}/chat/completions`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, "Content-Type": "application/json", "X-Title": "Clip Operator" },
+    headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, "Content-Type": "application/json", "X-Title": "UGCMediaClips" },
     body: JSON.stringify({
       model: modelFor("voice"),
       modalities: ["text", "audio"],

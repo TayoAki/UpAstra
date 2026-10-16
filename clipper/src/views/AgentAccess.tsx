@@ -23,9 +23,9 @@ export function AgentAccess() {
   const revoke = () => confirm("Revoke the agent key? Anything using it stops working.") && run(() => api.revokeAgentKey(), "Key revoked").then((m) => m && (setKey(undefined), setMe(m)));
 
   const snippets = [
-    { title: "Claude Code", body: `claude mcp add --transport http clip-operator ${mcpUrl} --header "Authorization: Bearer ${shown}"` },
-    { title: "Cursor, Windsurf and other MCP clients (JSON config)", body: JSON.stringify({ mcpServers: { "clip-operator": { type: "http", url: mcpUrl, headers: { Authorization: `Bearer ${shown}` } } } }, null, 2) },
-    { title: "Claude Desktop (via mcp-remote)", body: JSON.stringify({ mcpServers: { "clip-operator": { command: "npx", args: ["-y", "mcp-remote", mcpUrl, "--header", `Authorization: Bearer ${shown}`] } } }, null, 2) },
+    { title: "Claude Code", body: `claude mcp add --transport http ugcmediaclips ${mcpUrl} --header "Authorization: Bearer ${shown}"` },
+    { title: "Cursor, Windsurf and other MCP clients (JSON config)", body: JSON.stringify({ mcpServers: { "ugcmediaclips": { type: "http", url: mcpUrl, headers: { Authorization: `Bearer ${shown}` } } } }, null, 2) },
+    { title: "Claude Desktop (via mcp-remote)", body: JSON.stringify({ mcpServers: { "ugcmediaclips": { command: "npx", args: ["-y", "mcp-remote", mcpUrl, "--header", `Authorization: Bearer ${shown}`] } } }, null, 2) },
     { title: "Plain HTTP API (scripts, n8n, Zapier)", body: `curl -H "Authorization: Bearer ${shown}" ${window.location.origin}/api/state` },
   ];
 
@@ -35,7 +35,7 @@ export function AgentAccess() {
         <div>
           <h1>Agent access</h1>
           <p className="muted" style={{ margin: 0 }}>
-            Run Clip Operator without the dashboard: an AI agent (Claude, Cursor…) or a script can add briefs, write and render clips, log posts and read what's working — with the same brief checks and limits as here.
+            Run UGCMediaClips without the dashboard: an AI agent (Claude, Cursor…) or a script can add briefs, write and render clips, log posts and read what's working — with the same brief checks and limits as here.
           </p>
         </div>
       </div>

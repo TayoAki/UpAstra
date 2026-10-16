@@ -6,7 +6,7 @@ import { HttpError, newId } from "./db";
 // Reading briefs and footage from where campaigns publish them: Google Docs,
 // public Google Drive folders, or any public web page.
 
-const UA = "Mozilla/5.0 (compatible; ClipOperator/1.0)";
+const UA = "Mozilla/5.0 (compatible; UGCMediaClips/1.0)";
 
 function privateIP(ip: string): boolean {
   if (isIP(ip) === 6) {

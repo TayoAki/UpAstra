@@ -5,14 +5,14 @@ import { videoStore } from "./storage";
 
 // Outstand (outstand.so): one API for posting and scheduling to TikTok,
 // Instagram, YouTube, Facebook, X, Threads, LinkedIn, Bluesky and more.
-// Clip Operator uses one organization API key; each workspace's connected
+// UGCMediaClips uses one organization API key; each workspace's connected
 // social accounts are tagged with the workspace id (Outstand's tenant_id).
 // Docs: https://www.outstand.so/docs
 
 export const outstandConfigured = () => !!process.env.OUTSTAND_API_KEY;
 const base = () => (process.env.OUTSTAND_BASE_URL ?? "https://api.outstand.so/v1").replace(/\/$/, "");
 
-/** Networks Clip Operator offers to connect, with how Outstand names them. */
+/** Networks UGCMediaClips offers to connect, with how Outstand names them. */
 export const NETWORKS: { id: string; label: string; platform: Platform }[] = [
   { id: "tiktok", label: "TikTok", platform: "tiktok" },
   { id: "instagram", label: "Instagram", platform: "instagram" },

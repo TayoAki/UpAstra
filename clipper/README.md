@@ -1,4 +1,4 @@
-# Clip Operator
+# UGCMediaClips
 
 A standalone SaaS for clippers: paste a clipping campaign brief, get its rules, footage and clip plans, and track every post and what each campaign owes you.
 
@@ -41,8 +41,8 @@ A standalone SaaS for clippers: paste a clipping campaign brief, get its rules, 
 Every rendered clip can be opened on a timeline with **Edit in editor**: the [OpenReel](https://github.com/Augani/openreel-video) editor (MIT), served at `/editor/`.
 
 - **What it loads:** the render's own parts. The shots go on a video track, the AI voiceover on an audio track, the hook and call to action as text, and word-timed captions. You can trim, reorder, restyle captions, add zooms, transitions and music, and more.
-- **AI Editor chat:** describe an edit ("add a punch-in zoom on every shot", "make the captions bigger"). It runs on Clip Operator's AI key and counts toward the workspace's daily AI limit, so no API key is entered in the browser. Edits that change the project ask for approval first.
-- **Save to Clip Operator:** the browser exports the edit and uploads it as the clip's video. The server converts the audio to AAC and moves the MP4 index to the front. The parts are kept, so the clip can be opened again; rendering again replaces the edit.
+- **AI Editor chat:** describe an edit ("add a punch-in zoom on every shot", "make the captions bigger"). It runs on UGCMediaClips's AI key and counts toward the workspace's daily AI limit, so no API key is entered in the browser. Edits that change the project ask for approval first.
+- **Save to UGCMediaClips:** the browser exports the edit and uploads it as the clip's video. The server converts the audio to AAC and moves the MP4 index to the front. The parts are kept, so the clip can be opened again; rendering again replaces the edit.
 - **Browser:** the editor needs Chrome or Edge (WebCodecs with H.264).
 - **Build:** `editor/build.sh` builds OpenReel from the pinned commit in `editor/OPENREEL_COMMIT` with the patches in `editor/` (see `editor/NOTICE.md`). The Dockerfile runs it. Locally, run `bash editor/build.sh` to put it in `editor-dist/`.
 
@@ -121,7 +121,7 @@ Every AI call is metered against its workspace in dollars, as billed by the prov
 Everything in the dashboard can be run by an AI agent or a script. Create a key in **Settings → Agent access** (shown once, stored hashed, one per workspace). It works for every workspace action except account and key management. Agent actions are marked "agent" in Activity.
 
 - **Remote MCP server:** `https://<your-app>/mcp` (Streamable HTTP, stateless), with the header `Authorization: Bearer co_agent_…`.
-  - Claude Code: `claude mcp add --transport http clip-operator https://<your-app>/mcp --header "Authorization: Bearer co_agent_…"`
+  - Claude Code: `claude mcp add --transport http ugcmediaclips https://<your-app>/mcp --header "Authorization: Bearer co_agent_…"`
 - **Local stdio server** (Claude Desktop, or clients without remote MCP): `CLIP_API_URL=https://<your-app> CLIP_API_KEY=co_agent_… npm run mcp`
 - **Plain HTTP API:** the same `/api/...` routes the dashboard uses, with the same header.
 
