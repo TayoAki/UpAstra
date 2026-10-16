@@ -118,7 +118,7 @@ The family schedules visible cue envelopes, then renders each cue as nested HTML
 - `renderFineCaption` (`packages/caption-fine/src/render.ts:1080`);
 - `fineCaptionParameters`, `fineCaptionStyle` and `FINE_CAPTION_FAMILY="@hypit/caption-fine@1"` (`packages/caption-fine/src/style.ts:173,359,16`);
 - the recipe schema and property lists (`packages/caption-fine/src/recipe.ts:74-120`);
-- 24 one-shot motions (`packages/caption-fine/src/recipe.ts:3-7`).
+- 24 one-shot motion values, one of which is `none`, so 23 real motions (`packages/caption-fine/src/recipe.ts:3-7`). *(corrected in check)*
 
 Markup:
 
@@ -181,7 +181,7 @@ There is also a Studio facet (`packages/caption-fine/src/studio.ts`).
 - **Cue spring.** The cue-entrance spring is a fixed piecewise scale: from `start` (default 0.72) to 1.05 at 50%, to 0.95 at 75%, then to 1 (`:354-375`). The test confirms 0.75 → 1.05 → 0.95 over 4 frames (`packages/caption-fine/test/caption-fine.test.ts:148-189`).
 - **Duration cap.** Enter and exit are each capped at half the cue's duration (`packages/caption-fine/src/render.ts:393-396`).
 - **Keyframe sampling.** Spring, bounce and elastic are sampled at up to 12 points per transition; the other motions at up to 4 (`:386-390`).
-- **Loops.** There are 7 periodic loops plus `none`: shake, wobble, breathe, float, pulse, flicker and glow-pulse. Their amplitudes are fixed, e.g. shake ±3 px and wobble ±2.5° (`:518-561`).
+- **Loops.** There are 7 periodic loops plus `none`: shake, wobble, breathe, float, pulse, flicker and glow-pulse. Their base amplitudes are fixed, e.g. shake ±3 px and wobble ±2.5°, and are scaled by `motion.loopIntensity` (`:518-561`, shake `:537`, wobble `:540`). *(corrected in check)*
 
 ### Recipe and validation (`packages/caption-fine/src/style.ts`)
 
@@ -236,10 +236,10 @@ There are 26 test declarations, about 28 tests at runtime counting loops:
 **Weaknesses and smells:**
 
 1. `max-lines` counts only *structural* rows. Physical wraps can still exceed the limit, which the README admits (`packages/caption-fine/README.md:123-124`). Exceeding the structural limit throws at render time (`packages/caption-fine/src/render.ts:719-724`), which is hostile to unattended pipelines.
-2. In `activeBoxAnimation`, `enterFrames` and `exitFrames` are each capped by the full logical span, not by the span minus the other transition (`packages/caption-fine/src/render.ts:572-573`). On short words the enter and exit transitions overlap. The code then picks `enter` while `enterProgress < 1` (`:585`), so the exit is effectively truncated. This is minor.
+2. In `activeBoxAnimation`, `enterFrames` and `exitFrames` are each capped by the full logical span, not by the span minus the other transition (`packages/caption-fine/src/render.ts:572-573`). On short words the enter and exit transitions overlap. During the overlap the code uses `min(enterProgress, exitProgress)` (`:586`) but picks the `enter` motion kind while `enterProgress < 1` (`:585`), so the exit's progress is applied through the enter curve and a distinct exit motion is lost. This is minor. *(corrected in check)*
 3. The joined box requires a live DOM and `getClientRects` on every seek (`packages/caption-fine/src/joined-box.ts:74-99`). It only works in a browser backend (`packages/caption-fine/README.md:112-113`).
-4. There are unused imports: `Timeline` and `temporalTypes` in `packages/caption-fine/src/manifest.ts:1,5`.
-5. The surface is large: about 110 recipe properties and 24 motions × 5 motion slots, plus 8 loop options. It is powerful, but the parameter space is hard to audit visually.
+4. There are unused imports: `Timeline` and `temporalTypes` in `packages/caption-fine/src/manifest.ts:1,5` (each name appears only on its import line).
+5. The surface is large: about 110 recipe properties and 24 motion values × 5 motion slots, plus 8 loop options. It is powerful, but the parameter space is hard to audit visually.
 
 **Relevance: High.** This is the closest thing in hypit to our caption renderer. Its algorithms translate directly to ASS.
 
@@ -428,16 +428,16 @@ Unicode-range sharding is only worth it for browser previews (the editor), where
 - A unit's start is the start boundary of its *first listed* token. Its end is the end boundary of its *last listed* token (`packages/narrative-caption/src/project.ts:41-57`).
 - Every failure reports the full identity path, for example `CaptionDocument → Unit → Token → Boundary` (`:36-55`).
 - `end <= start` throws `CAPTION_UNIT_WINDOW` (`:53-56`).
-- Selection → units requires that each unit is entirely inside or entirely outside the selection. A partially selected unit throws (`packages/narrative-caption/src/selection.ts:28-33`).
+- Selection → units requires that each unit is entirely inside or entirely outside the selection. A partially selected unit throws (`packages/narrative-caption/src/selection.ts:31-33`). *(corrected in check)*
 
-**Tests.** None. The package has no `test/` directory.
+**Tests.** The package has no `test/` directory of its own, but it is exercised by repo-level tests: `test/narrative-caption.test.ts` (171 lines, 5 declarations, one looped twice, covering selection, Chinese timing, overlap preservation and the empty document) and `packages/script/test/narrative-views.test.ts:102-109`. *(corrected in check)*
 
 **Quality notes.**
 
 - The diagnostics are excellent.
 - *Smell:* token order within a unit is assumed chronological but never validated (`packages/narrative-caption/src/project.ts:41-42`).
-- *Smell:* in `captionUnitsForNarrativeSelection`, a unit with no binding gives `positions = []`. Then `Math.min()` is `Infinity` and `Math.max()+1` is `-Infinity`, so the unit is silently skipped instead of rejected (`packages/narrative-caption/src/selection.ts:24-30`).
-- There is zero test coverage.
+- *Smell:* in `captionUnitsForNarrativeSelection`, a unit with no binding gives `positions = []`. Then `Math.min()` is `Infinity` and `Math.max()+1` is `-Infinity`, so the unit is silently skipped instead of rejected (`packages/narrative-caption/src/selection.ts:24-30`). `assertNarrativeCaptionBindingFor` would reject an incomplete binding (`packages/narrative-caption/src/identity.ts:43-47`), but this function never calls it; it only compares ids (`selection.ts:16-18`).
+- There is no package-local test, only the repo-level ones listed above. *(corrected in check)*
 
 **Relevance: Medium-Low.** Our equivalent is the script→transcript DP aligner (`clipper/server/align.ts`, outside this batch). The useful idea is the **N:M unit binding** with full-path errors. A displayed word such as "$1,000" can map to spoken tokens "one thousand dollars" and take the first-to-last token span, instead of being forced into 1:1 alignment.
 
@@ -457,14 +457,14 @@ Unicode-range sharding is only worth it for browser previews (the editor), where
 
 There are four gaps relative to hypit:
 
-1. **Spacing is wrong for CJK and mixed scripts in the editor path.** `buildAss` rebuilds text with a per-render `joiner` (`clipper/server/captions.ts:113`, `:161`). However, the editor's caption parts store `g.text` (`clipper/server/render.ts:353`), which is always space-joined. The captions page also joins with `" "` (`clipper/src/views/CaptionsView.tsx:174`, `:312`). A per-language joiner also cannot express `3D`, `3개월` or `是的 就是这样` together. hypit's per-word `separatorBefore` can (`packages/caption/src/types.ts:5-6`, `packages/caption-fine/test/caption-fine.test.ts:550-580`).
+1. **Spacing is wrong for CJK and mixed scripts in the editor path.** `buildAss` rebuilds text with a per-render `joiner` (`clipper/server/captions.ts:113`, `:161`). However, the editor's caption parts store `g.text` (`clipper/server/render.ts:353`, from `groups` at `clipper/server/captions.ts:73` → `groupWords`), which is always space-joined, even for `NO_SPACES` languages that the ASS path joins with `""` (`clipper/server/render.ts:322`). The captions page also joins with `" "` (`clipper/src/views/CaptionsView.tsx:174`, `:312`). A per-language joiner also cannot express `3D`, `3개월` or `是的 就是这样` together. hypit's per-word `separatorBefore` can (`packages/caption/src/types.ts:5-6`, `packages/caption-fine/test/caption-fine.test.ts:550-580`).
 2. **There is no line budget.** We emit `WrapStyle: 0` with 70px margins (`clipper/server/captions.ts:127`, `:133`). The "subtitle" preset (9 words at 54px, `clipper/shared/caption-styles.ts:51`) or a size override up to 220px (`:94`) can wrap to 3 or more lines. hypit has structural rows plus `max-lines` (`packages/caption-fine/src/render.ts:628-639`, `:719-724`).
-3. **The anchor is the centre.** We use `\an5\pos(W/2, position·H)` (`clipper/server/captions.ts:142`), so an extra line grows *downward* toward the platform UI. hypit's example anchors the bottom, growing upward (`packages/caption-fine/README.md:73`).
+3. **The anchor is the centre.** We use `\an5\pos(W/2, position·H)` (`clipper/server/captions.ts:142`), so a multi-line block grows symmetrically about `y`: half of each extra line grows downward toward the platform UI. *(corrected in check)* hypit's example anchors the bottom, growing upward (`packages/caption-fine/README.md:73`).
 4. **There is no lead or tail.** We only close gaps. hypit uses lead/tail with `cut` handoff per speaker (`packages/caption-fine/src/schedule.ts:72-89`).
 
 ### Active-word styling
 
-Our karaoke emits one `Dialogue` per word. The highlighted word runs from its start to the **next word's start** (`clipper/server/captions.ts:149-157`, `:153`), so during a pause the last word stays lit. hypit uses `min(ownEnd, nextStart)` (`packages/caption-fine/src/render.ts:646-663`). Ours is arguably better for short pauses and worse for long ones. A threshold would do: hold through gaps under ~0.3 s.
+Our karaoke emits one `Dialogue` per word. The highlighted word runs from its start to the **next word's start** (`clipper/server/captions.ts:149-157`, `:153`), so during a pause inside a group the word before the pause stays lit. The group's final word runs to the group end (`:153`), which `groupWords` may have stretched over a gap under 0.25 s (`clipper/shared/caption-styles.ts:119`). *(corrected in check)* hypit uses `min(ownEnd, nextStart)` (`packages/caption-fine/src/render.ts:646-663`). Ours is arguably better for short pauses and worse for long ones. A threshold would do: hold through gaps under ~0.3 s.
 
 We only have the "current fill" treatment. hypit adds the following, and each has a libass equivalent:
 
@@ -534,7 +534,7 @@ See §5. Our fallback is implicit (fontconfig plus system Noto, `clipper/server/
 - **Browser rendering and measurement.** The joined boxes, Path text, Mask and the html-program text engine all need headless Chromium with DOM measurement on every seek (`packages/caption-fine/src/joined-box.ts:74-99`). On CPU-only Railway at SaaS volume, libass is far cheaper and deterministic.
 - **Throwing on overflow at render time** (`packages/caption-fine/src/render.ts:719-724`). An unattended pipeline must degrade, by re-splitting or shrinking, not fail a paid render.
 - **Authored-only cues.** hypit relies on Script `||` for grouping (`packages/caption-fine/README.md:62-63`). We need automatic grouping from ASR output.
-- **The parameter explosion.** About 110 recipe properties, 24 motions × 5 motion slots, and 8 loop options (`packages/caption-fine/src/recipe.ts:3-97`). Clippers want 8–12 curated presets with a few overrides, and every knob is a support and QA surface.
+- **The parameter explosion.** About 110 recipe properties, 24 motion values × 5 motion slots, and 8 loop options (`packages/caption-fine/src/recipe.ts:3-97`). Clippers want 8–12 curated presets with a few overrides, and every knob is a support and QA surface.
 - **The graph, producer, manifest and fragment ceremony** for each value type (`packages/caption/src/component.ts`, `packages/caption-fine/src/fragment.ts`, `packages/text/src/fragment.ts`). It is valuable for hypit's agent-authored build graph and pure overhead for our Express pipeline.
 - **Head-following regions.** They need upstream face/region tracking per frame (`packages/caption-fine/README.md:17-40`), which is costly on CPU and of marginal value for gameplay clips.
 - **`@hypit/text` templates for prompts.** These are overkill; TS functions suffice.
@@ -626,3 +626,26 @@ Every file listed below was read in full (✅). PNGs are binary previews and wer
 | packages/narrative-caption/src/selection.ts | 38 | ✅ |
 | packages/narrative-caption/src/surface.ts | 80 | ✅ |
 | packages/narrative-caption/src/types.ts | 7 | ✅ |
+
+## Check
+
+Second review against hypit `dc2b7a8f31b1ef1443a79ca448548d69e3ceb6a0` and `clipper/`.
+
+**Scope.** Every claim the reviewer was asked to target was checked line by line. A broad sample of the other citations was also checked: caption types, functions, producers and Use precedence; the caption-fine schedule, worked example, render functions, style defaults and bounds, recipe lists, typography guidance and test counts; text-fine functions and producers; fontsource; narrative-caption. All line counts in the coverage table were rechecked with `wc -l`.
+
+**Targeted hypit bugs**
+- `text` `Set` documented as "replaces" (`packages/text/src/manifest.ts:89`) while `bindText` asserts the name is unset (`packages/text/src/program.ts:239-241`): **confirmed**. `decodeTextRenderSurface` puts the Params and the projected recipe properties into the initial bindings (`packages/text/src/surface.ts:127-162`), and the fragment chains every `Set` through `bindText` (`packages/text/src/fragment.ts:25-40`). A `Set` on a name already filled by a Param or a recipe property, or two `Set`s on the same name, therefore fails.
+- `.choice.*` all marked consumed (`packages/text/src/recipe.ts:175`): **confirmed**. Choices are only gathered for axis or variant blocks (`:151-154`), so a choice for a missing block, or for a fixed or slot block, is silently ignored.
+- narrative-caption unbound unit skipped (`selection.ts:24-30`): **confirmed**, with the nuance that the binding validator would catch it but isn't called.
+- text-fine dead `fonts !== undefined` guard (`program.ts:473-475`): **confirmed**. `fonts` is a required array (`packages/composition/src/track.ts:83`), and `.length` is read first.
+- caption-fine `activeBoxAnimation` overlap (`render.ts:572-573`): **confirmed** that both are capped by the full span. The description of the effect was corrected.
+- Unused imports in caption-fine `manifest.ts:1,5`: **confirmed**.
+
+**Targeted claims about our app:** all **confirmed** (`clipper/server/render.ts:353`; `clipper/shared/caption-styles.ts:113`, `:85-95`; `clipper/src/views/CaptionsView.tsx:174`, `:312`; `clipper/server/captions.ts:127`, `:142`, `:153`). Two wording corrections were made: `\an5` grows symmetrically, not downward; and which word stays lit during a pause.
+
+**Totals:** about 90 claims checked; 83 confirmed; 7 corrected (motion count including `none`, loop amplitude scaling, active-box overlap effect, the selection line range, narrative-caption tests, the `\an5` growth direction, karaoke pause wording); 0 removed; 0 unverified beyond those the notes already flag.
+
+**Coverage:** complete. All 80 files across the six packages are listed with correct line counts (src totals 514 / 3,112 / 1,303 / 2,425 / 234 / 366 = 7,954; tests 1,833). No files added. Repo-level tests outside the packages (`test/narrative-caption.test.ts`) are now cited in §6.
+
+**Verdict:** Verified ✅. Under 10% of claims needed correction (7 of about 90) and coverage is complete. The most substantive fix is that narrative-caption *is* tested, at repo level.
+
