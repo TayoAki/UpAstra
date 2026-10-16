@@ -92,8 +92,14 @@ export function roundedRect(w: number, h: number, r: number): string {
 
 const WIDE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\u3000-\u303f\uff00-\uffef]/u;
 const EMOJI = /\p{Extended_Pictographic}/u;
-/** The widest bundled font: a safe guess for brand uploads we have no metrics for. */
-const FALLBACK_WIDTHS = FONT_WIDTHS["Archivo Black"];
+/**
+ * For brand uploads (and whatever fontconfig substitutes when one fails to
+ * load) we have no metrics: each character's widest bundled width plus 30%,
+ * an upper bound for common faces (the widest measured, DejaVu Sans Bold,
+ * came within 1% of it).
+ */
+const FALLBACK_WIDTHS: Record<string, number> = {};
+for (const m of Object.values(FONT_WIDTHS)) for (const [ch, w] of Object.entries(m)) FALLBACK_WIDTHS[ch] = Math.max(FALLBACK_WIDTHS[ch] ?? 0, w * 1.3);
 
 /** Rendered width of a single line of text at an ASS font size. */
 export function textWidth(text: string, size: number, font: string): number {
@@ -175,6 +181,8 @@ export interface OverlayLayout {
   font: string;
   accent: string;
   uppercase?: boolean;
+  /** The hook across the top, so cards placed above the footage keep clear of it. */
+  hook?: { text: string; end: number };
 }
 
 // ---- Layout -------------------------------------------------------------------------
@@ -196,6 +204,8 @@ export interface Box {
  * Names are fitted to their cell (shrunk, then cut with "…"), so nothing
  * overlaps or runs off the frame.
  */
+const MAX_PER_TIER = 12;
+
 export function tierLayout(items: { text: string; tier: Tier }[], L: OverlayLayout) {
   const px = scaleOf(L);
   const left = px(40);
@@ -210,9 +220,11 @@ export function tierLayout(items: { text: string; tier: Tier }[], L: OverlayLayo
   for (const it of items) count.set(it.tier, (count.get(it.tier) ?? 0) + 1);
   const seen = new Map<Tier, number>();
   const placed = items.map((it) => {
-    const n = count.get(it.tier)!;
+    // At most 4 lines of 3 per tier (plans carry at most 12 overlays); any more aren't drawn.
+    const n = Math.min(count.get(it.tier)!, MAX_PER_TIER);
     const j = seen.get(it.tier) ?? 0;
     seen.set(it.tier, j + 1);
+    if (j >= MAX_PER_TIER) return { text: "", size: 0, x: 0, cy: 0, box: { x: 0, y: 0, w: 0, h: 0 } };
     const cols = Math.min(3, n);
     const lineH = (rowH - px(6)) / Math.ceil(n / cols);
     const slotW = area / cols;
@@ -226,6 +238,59 @@ export function tierLayout(items: { text: string; tier: Tier }[], L: OverlayLayo
     return { text, size: fit.size, x, cy, box };
   });
   return { left, top, width, labelW, rowH, items: placed };
+}
+
+/** Something else on screen for a while that comment cards must keep clear of. */
+export interface Blocked extends Box {
+  start: number;
+  end: number;
+  what: "hook" | "text" | "sticker";
+}
+
+/** A pop-up word: fitted to the frame with room for its 112% pop and outline, centred in the footage. */
+function popLayout(p: Placed, L: OverlayLayout) {
+  const px = scaleOf(L);
+  const text = esc(L.uppercase === false ? p.o.text!.trim() : p.o.text!.trim().toUpperCase()).slice(0, 80);
+  const fit = fitText(text, { font: L.font, size: px(124), minSize: px(64), maxWidth: (L.width - px(80)) / 1.12 - 2 * px(9), maxLines: 2 });
+  const cy = L.bandTop + L.bandHeight * 0.42;
+  const w = Math.max(...fit.lines.map((l) => textWidth(l, fit.size, L.font))) * 1.12 + 2 * px(9);
+  const h = fit.lines.length * fit.size * 1.12 + 2 * px(9);
+  return { fit, cx: L.width / 2, cy, box: { x: L.width / 2 - w / 2, y: cy - h / 2, w, h } };
+}
+
+/** Where emoji stickers go: alternating corners of the footage. */
+export function stickerSpots(L: OverlayLayout) {
+  const px = scaleOf(L);
+  const size = px(230);
+  const spots = [
+    [L.width - size - px(60), L.bandTop + px(40)],
+    [px(60), L.bandTop + L.bandHeight - size - px(40)],
+    [L.width - size - px(60), L.bandTop + L.bandHeight - size - px(40)],
+    [px(60), L.bandTop + px(40)],
+  ];
+  return { size, spots };
+}
+
+/** The hook, pop-up words and stickers, as boxes in time that comment cards avoid. */
+export function blockedBoxes(placed: Placed[], L: OverlayLayout): Blocked[] {
+  const px = scaleOf(L);
+  const out: Blocked[] = [];
+  if (L.hook?.text.trim()) {
+    // Top-centred at y = bandTop − 330 with 70 px side margins (see the Hook style in captions.ts).
+    const fs = px(76);
+    const lines = fitText(esc(L.hook.text), { font: L.font, size: fs, minSize: fs, maxWidth: L.width - 2 * px(70), maxLines: 6 }).lines.length;
+    out.push({ what: "hook", start: 0, end: L.hook.end, x: px(70) - px(7), y: L.bandTop - px(330) - px(7), w: L.width - 2 * px(70) + 2 * px(7), h: lines * fs * 1.15 + 2 * px(7) });
+  }
+  for (const p of placed.filter((x) => x.o.kind === "text" && x.o.text?.trim())) out.push({ what: "text", start: p.start, end: p.end, ...popLayout(p, L).box });
+  const { size, spots } = stickerSpots(L);
+  placed
+    .filter((x) => x.o.kind === "emoji" && x.o.emoji)
+    .forEach((p, i) => {
+      const [x, y] = spots[i % spots.length];
+      // Stickers bounce in from a quarter of their size below.
+      out.push({ what: "sticker", start: p.start, end: p.end, x, y, w: size, h: size * 1.25 });
+    });
+  return out;
 }
 
 export interface CommentIn {
@@ -242,7 +307,7 @@ export interface CommentIn {
  * out if it would have under 0.6 s on screen. While a tier board covers the
  * footage, cards sit in the space above the footage instead.
  */
-export function commentLayout(comments: CommentIn[], L: OverlayLayout, board?: { from: number; to: number }) {
+export function commentLayout(comments: CommentIn[], L: OverlayLayout, board?: { from: number; to: number }, blocked: Blocked[] = []) {
   const px = scaleOf(L);
   const w = px(820);
   const x = L.width / 2 - w / 2;
@@ -255,14 +320,16 @@ export function commentLayout(comments: CommentIn[], L: OverlayLayout, board?: {
       const overBoard = !!board && c.start < board.to && c.end > board.from;
       // The band over the footage, or the space above it during a tier board.
       const region = overBoard ? { top: px(20), bottom: L.bandTop - px(24) } : { top: L.bandTop + px(40), bottom: L.bandTop + L.bandHeight - px(20) };
-      const live = out.filter((p) => p.shown && p.start < c.end && c.start < p.end);
+      // Everything on screen at the same time: other cards, and the hook, pop-up words and stickers.
+      const live: Box[] = [...out.filter((p) => p.shown), ...blocked].filter((p) => p.start < c.end && c.start < p.end);
       for (const maxLines of [3, 2, 1]) {
         const fit = fitText(c.text, { font: L.font, size: px(46), minSize: px(38), maxWidth: w - px(152), maxLines });
         if (!fit.lines.length) break;
         const h = px(118) + fit.lines.length * Math.round(fit.size * (56 / 46));
         // Top-down in the band; bottom-up (nearest the footage) above it.
         const tries = overBoard ? [region.bottom - h, ...live.map((p) => p.y - gap - h)].sort((a, b) => b - a) : [region.top, ...live.map((p) => p.y + p.h + gap)].sort((a, b) => a - b);
-        const y = tries.find((y) => y >= region.top && y + h <= region.bottom && live.every((p) => y + h + gap <= p.y || y >= p.y + p.h + gap));
+        const clear = (y: number) => live.every((p) => x + w + gap <= p.x || p.x + p.w + gap <= x || y + h + gap <= p.y || p.y + p.h + gap <= y);
+        const y = tries.find((y) => y >= region.top && y + h <= region.bottom && clear(y));
         if (y !== undefined) {
           out.push({ ...c, x, y, w, h, body: fit.lines, bodySize: fit.size, shown: true });
           done = true;
@@ -271,7 +338,7 @@ export function commentLayout(comments: CommentIn[], L: OverlayLayout, board?: {
       }
       if (done) break;
       // No room now: wait until the first card on screen leaves.
-      const next = Math.min(...live.map((p) => p.end).filter((e) => e > c.start));
+      const next = Math.min(...[...out.filter((p) => p.shown), ...blocked].filter((p) => p.start < c.end && c.start < p.end).map((p) => p.end).filter((e) => e > c.start));
       if (!Number.isFinite(next) || next > c.end - 0.6) break;
       c = { ...c, start: next };
     }
@@ -296,13 +363,13 @@ export function overlayStyles(L: OverlayLayout): string[] {
 }
 
 /** The comment cards of a render, laid out (while a tier board covers the footage, they sit above it). */
-function layoutComments(placed: Placed[], L: OverlayLayout) {
+export function layoutComments(placed: Placed[], L: OverlayLayout) {
   const tiers = placed.filter((x) => x.o.kind === "tier" && x.o.text?.trim());
   const board = tiers.length ? { from: tiers[0].start, to: Math.max(...tiers.map((t) => t.end)) } : undefined;
   const comments = placed
     .filter((x) => x.o.kind === "comment" && x.o.text?.trim())
     .map((p) => ({ start: p.start, end: p.end, text: esc(p.o.text!), user: (p.o.user || "viewer").replace(/^@/, "").slice(0, 24) }));
-  return commentLayout(comments, L, board);
+  return commentLayout(comments, L, board, blockedBoxes(placed, L));
 }
 
 /** Comments that didn't fit anywhere while they were due, so the render can say so. */
@@ -337,10 +404,7 @@ export function overlayEvents(placed: Placed[], L: OverlayLayout): string[] {
   placed
     .filter((x) => x.o.kind === "text" && x.o.text?.trim())
     .forEach((p, i) => {
-      const text = esc(L.uppercase === false ? p.o.text!.trim() : p.o.text!.trim().toUpperCase()).slice(0, 80);
-      // Fitted with room for the 112% pop and the outline.
-      const fit = fitText(text, { font: L.font, size: px(124), minSize: px(64), maxWidth: (L.width - px(80)) / 1.12 - 2 * px(9), maxLines: 2 });
-      const y = L.bandTop + L.bandHeight * 0.42;
+      const { fit, cy: y } = popLayout(p, L);
       lines.push(
         `Dialogue: 8,${ts(p.start)},${ts(p.end)},OvPop,,0,0,0,,{\\an5\\pos(${Math.round(cx)},${Math.round(y)})${fit.size !== px(124) ? `\\fs${fit.size}` : ""}\\frz${i % 2 ? -4 : 4}\\fscx40\\fscy40\\t(0,110,\\fscx112\\fscy112)\\t(110,190,\\fscx100\\fscy100)\\fad(0,160)}${fit.lines.join("\\N")}`,
       );
@@ -422,24 +486,17 @@ export interface Sticker {
 
 /** Where each emoji pops in: alternating corners of the footage, so consecutive ones don't stack. */
 export async function emojiStickers(placed: Placed[], L: OverlayLayout, dir: string): Promise<{ stickers: Sticker[]; missing: string[] }> {
-  const k = Math.min(L.width, L.height) / 1080;
-  const size = Math.round(230 * k);
-  const spots = [
-    [L.width - size - Math.round(60 * k), L.bandTop + Math.round(40 * k)],
-    [Math.round(60 * k), L.bandTop + L.bandHeight - size - Math.round(40 * k)],
-    [L.width - size - Math.round(60 * k), L.bandTop + L.bandHeight - size - Math.round(40 * k)],
-    [Math.round(60 * k), L.bandTop + Math.round(40 * k)],
-  ];
+  const { size, spots } = stickerSpots(L);
   const stickers: Sticker[] = [];
   const missing: string[] = [];
-  let i = 0;
-  for (const p of placed.filter((x) => x.o.kind === "emoji" && x.o.emoji)) {
+  // The spot follows the emoji's order (as blockedBoxes assumes), even if an earlier one had no image.
+  for (const [i, p] of placed.filter((x) => x.o.kind === "emoji" && x.o.emoji).entries()) {
     const png = await emojiPng(p.o.emoji!, dir);
     if (!png) {
       missing.push(p.o.emoji!);
       continue;
     }
-    const [x, y] = spots[i++ % spots.length];
+    const [x, y] = spots[i % spots.length];
     stickers.push({ png, start: p.start, end: p.end, x, y, size });
   }
   return { stickers, missing };

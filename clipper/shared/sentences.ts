@@ -6,6 +6,10 @@
 const END = /[.!?。！？]/;
 const FULL_WIDTH_END = /[。！？]/;
 const CLOSE = /["'”’」』）)】\]]/;
+/** Scripts written without spaces: an ASCII "!" or "?" right before one of these ends a sentence too. */
+const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}「『（“]/u;
+/** Japanese quoting particles: 「…。」と言った continues the sentence. */
+const QUOTING = /^(と|って)/;
 
 /** Split a script into sentences, keeping punctuation. */
 export function sentences(text: string): string[] {
@@ -20,8 +24,12 @@ export function sentences(text: string): string[] {
       fullWidth ||= FULL_WIDTH_END.test(chars[i + 1]);
       cur += chars[++i];
     }
-    // ASCII marks end a sentence only before a space ("3.5" doesn't).
-    if (i + 1 >= chars.length || chars[i + 1] === " " || fullWidth) {
+    const next = chars[i + 1];
+    const closed = CLOSE.test(chars[i]);
+    if (closed && next && QUOTING.test(chars.slice(i + 1, i + 3).join(""))) continue;
+    // ASCII marks end a sentence only before a space ("3.5" doesn't), or
+    // straight before unspaced text ("车!快来").
+    if (next === undefined || next === " " || fullWidth || (/[!?]/.test(chars[i]) && UNSPACED.test(next))) {
       if (cur.trim()) out.push(cur.trim());
       cur = "";
     }

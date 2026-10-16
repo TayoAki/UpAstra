@@ -142,7 +142,7 @@ Hypit paths below are relative to the hypit repo (`packages/...`, `skills/hypit/
 - **Parity:** `packages/caption/src/types.ts:5-6`, `packages/caption-fine/src/spacing.ts:6-16` (study 06 #1).
 
 ### B2.2 Measured line budget, re-split instead of throw
-- **Change:** measure group width with font advance widths (fontkit on the bundled fonts) against `W − 2·margin`, insert `\N`, and re-split a group that needs more than 2 lines at the best word boundary, recursively.
+- **Change:** measure group width with the libass-measured widths from M0 (`server/font-metrics.ts`, `scripts/measure-fonts.mjs`) against `W − 2·margin`. Also measure **uploaded brand fonts** at upload time the same way and store the widths with the font; today unknown fonts use the bundled maximum + 30%, which is safe but shrinks text more than needed (M0 santa review), insert `\N`, and re-split a group that needs more than 2 lines at the best word boundary, recursively.
 - **Tests first:**
   - a long German compound and a 40-character brand name never exceed the safe width or 2 lines;
   - groups are re-split, never dropped.
@@ -213,6 +213,7 @@ Hypit paths below are relative to the hypit repo (`packages/...`, `skills/hypit/
 - **Parity:** `schedule.ts:699-743` (study 08 #2).
 
 ### B4.3 Fit validation with repair
+- **Known from the M0 review:** comment cards now avoid the hook, pop words and stickers, but stickers and pop words can still sit on a tier board (and stickers on each other's corners when more than 4 are up at once).
 - **Change:**
   - the grid fix from B0.5 is extended to Top-N and podium;
   - long tier names are measured and wrapped with an ellipsis (replacing `wrap()` by character count at `server/overlays.ts:88-104`);

@@ -20,6 +20,11 @@ describe("CJK scripts", () => {
     expect(sentences("等等。。。现在下载！")).toEqual(["等等。。。", "现在下载！"]);
     expect(sentences("他说“真好！”我们走吧。")).toEqual(["他说“真好！”", "我们走吧。"]);
     expect(sentences("Wait?! Really. Version 3.5 is out.")).toEqual(["Wait?!", "Really.", "Version 3.5 is out."]);
+    // ASCII marks with no space, inside unspaced text.
+    expect(sentences("这是最好的车!快来下载吧?")).toEqual(["这是最好的车!", "快来下载吧?"]);
+    expect(sentences("これは最高の車です。「本当にすごい！」今すぐ試してね。")).toEqual(["これは最高の車です。", "「本当にすごい！」", "今すぐ試してね。"]);
+    // A quote followed by the quoting particle と continues the sentence.
+    expect(sentences("彼は「最高。」と言った。今すぐ遊ぼう。")).toEqual(["彼は「最高。」と言った。", "今すぐ遊ぼう。"]);
   });
 
   it("anchors the CTA to the first word of the last sentence", () => {
@@ -45,6 +50,9 @@ describe("CJK scripts", () => {
       ["ja", "最高です。「限定」セール中！"],
       ["zh", "等等。。。现在下载！"],
       ["zh", "他说“真好！”我们走吧。"],
+      ["zh", "这是最好的车!快来下载吧?"],
+      ["ja", "これは最高の車です。「本当にすごい！」今すぐ試してね。"],
+      ["ja", "彼は「最高。」と言った。今すぐ遊ぼう。"],
     ] as const) {
       const tokens = scriptWords(text, lang);
       const timed = tokens.map((t, i) => ({ text: t, start: i, end: i + 0.9 }));
@@ -56,6 +64,8 @@ describe("CJK scripts", () => {
     const timed = en.split(" ").map((t, i) => ({ text: t, start: i, end: i + 0.9 }));
     expect(lastSentenceStart(en, timed)).toBe(4);
     expect(lastSentenceStart(en, [])).toBeUndefined();
+    // One sentence: there's no "last sentence" to anchor to, so the caller falls back.
+    expect(lastSentenceStart("Play Turbo Ball now", timed.slice(0, 4))).toBeUndefined();
   });
 
   it("counts unspaced scripts by characters", () => {

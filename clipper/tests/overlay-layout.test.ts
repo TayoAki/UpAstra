@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FONT_WIDTHS } from "../server/font-metrics";
-import { commentLayout, fitText, hiddenComments, overlayEvents, textWidth, tierLayout } from "../server/overlays";
+import { blockedBoxes, commentLayout, fitText, hiddenComments, layoutComments, overlayEvents, textWidth, tierLayout } from "../server/overlays";
 import type { Overlay } from "../shared/types";
 import { TIERS, type Tier } from "../shared/types";
 
@@ -33,6 +33,15 @@ describe("text fitting", () => {
 });
 
 describe("tier board layout", () => {
+  it("draws at most 12 items in one tier, inside the row", () => {
+    const items = Array.from({ length: 20 }, (_, i) => ({ text: `Car ${i}`, tier: "S" as Tier }));
+    const t = tierLayout(items, L("Poppins Black"));
+    const drawn = t.items.filter((x) => x.text);
+    expect(drawn).toHaveLength(12);
+    drawn.forEach((a, i) => drawn.forEach((b, j) => j > i && expect(overlap(a.box, b.box)).toBe(false)));
+    for (const a of drawn) expect(a.box.y + a.box.h).toBeLessThanOrEqual(t.top + t.rowH + 0.5);
+  });
+
   it("never overlaps or overflows, for 1–12 items in every font", () => {
     for (const font of FONTS)
       for (let n = 1; n <= 12; n++)
@@ -100,5 +109,23 @@ describe("comment layout", () => {
     const drawn = overlayEvents(placed, L("Poppins Black")).filter((l) => l.includes("Reply to @"));
     expect(drawn.length + hidden.length).toBe(6);
     for (const h of hidden) expect(drawn.some((l) => l.includes(`@${h.user}`))).toBe(false);
+  });
+
+  it("keeps cards off the hook, pop-up words and emoji stickers", () => {
+    const hookL = { ...L("Poppins Black"), hook: { text: "Ranking every single car in Car League", end: 3.2 } };
+    const o = (x: Partial<Overlay>) => ({ id: Math.random().toString(36), ...x }) as Overlay;
+    const placed = [
+      { o: o({ kind: "tier", text: "Octane", tier: "S" }), start: 0.5, end: 9 },
+      { o: o({ kind: "comment", user: "a", text: body }), start: 1, end: 3 },
+      { o: o({ kind: "comment", user: "b", text: "second card" }), start: 1.2, end: 3 },
+      { o: o({ kind: "text", text: "no way" }), start: 4, end: 5 },
+      { o: o({ kind: "comment", user: "c", text: body }), start: 4.2, end: 6 },
+      { o: o({ kind: "emoji", emoji: "🔥" }), start: 6.5, end: 8 },
+      { o: o({ kind: "comment", user: "d", text: body }), start: 6.6, end: 8 },
+    ];
+    const blocked = blockedBoxes(placed, hookL);
+    expect(blocked.map((b) => b.what).sort()).toEqual(["hook", "sticker", "text"]);
+    for (const c of layoutComments(placed, hookL).filter((x) => x.shown))
+      for (const b of blocked) if (c.start < b.end && b.start < c.end) expect(overlap(c, b), `@${c.user} × ${b.what}`).toBe(false);
   });
 });

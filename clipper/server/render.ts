@@ -336,7 +336,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     const style = resolveCaptionStyle(brand, c.captions);
     const captionGroups = groups(words, style.wordsPerCaption);
     // Overlays land on the words they're cued to (tier items stay until the call to action).
-    const layout = { width: W, height: H, bandTop: VIDEO_TOP, bandHeight: VIDEO_H, font: style.font, accent: accentOf(brand), uppercase: style.uppercase };
+    const layout = { width: W, height: H, bandTop: VIDEO_TOP, bandHeight: VIDEO_H, font: style.font, accent: accentOf(brand), uppercase: style.uppercase, hook: { text: clip.hook, end: Math.min(HOOK_SECONDS, duration) } };
     const { placed, missed } = placeOverlays(clip.overlays ?? [], words, duration, ctaFrom);
     const crowded = hiddenComments(placed, layout);
     if (crowded.length) log({ campaignId: c.id, kind: "clip", message: `Left out ${crowded.length} comment overlay(s) in "${clip.title}": too many on screen at once (${crowded.map((x) => `@${x.user}`).join(", ")}).` });

@@ -34,7 +34,7 @@ export { sentences };
  */
 export function lastSentenceStart(script: string, timed: { start: number }[], language?: string): number | undefined {
   const sents = sentences(script);
-  if (!sents.length || !timed.length) return undefined;
+  if (sents.length < 2 || !timed.length) return undefined;
   // Count the words before the last sentence, segmented in context (a
   // sentence segmented on its own can split differently at its edges).
   const text = script.replace(/\s+/g, " ").trim();
