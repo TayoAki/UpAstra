@@ -11,7 +11,7 @@ Each batch is read in full, then checked by an independent reviewer who re-opens
 | 03 | CLI & companion | cli, studio-companion | [03-cli.md](03-cli.md) | pending |
 | 04 | Studio (preview app) | studio | [04-studio.md](04-studio.md) | pending |
 | 05 | Rendering | html-program, html-document, html-video, provider-html-local, browser-capture, visual-track, composition, film, video | [05-rendering.md](05-rendering.md) | pending |
-| 06 | Text & captions | caption, caption-fine, text, text-fine, fontsource, narrative-caption | [06-text-captions.md](06-text-captions.md) | pending |
+| 06 | Text & captions | caption, caption-fine, text, text-fine, fontsource, narrative-caption | [06-text-captions.md](06-text-captions.md) | Verified ✅ |
 | 07 | Speech, alignment & time | whisperx, provider-whisperx-local, narrative-speech-alignment, speech-estimate, speech-evidence, narrative, narrative-temporal, temporal, timeline, timeline-author, script, author | [07-speech-time.md](07-speech-time.md) | pending |
 | 08 | Overlay components | ranking, comment-sticker, interview-emoji-reveal, depth-stack, spatial, region-evidence | [08-overlays.md](08-overlays.md) | pending |
 | 09 | Media & audio operations | media, media-local, media-operations, image-operations, provider-image-opencv-local, audio-track, volcengine-matting, yt-dlp, recipe | [09-media-ops.md](09-media-ops.md) | pending |

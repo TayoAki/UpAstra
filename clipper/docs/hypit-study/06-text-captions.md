@@ -635,7 +635,7 @@ Second review against hypit `dc2b7a8f31b1ef1443a79ca448548d69e3ceb6a0` and `clip
 
 **Targeted hypit bugs**
 - `text` `Set` documented as "replaces" (`packages/text/src/manifest.ts:89`) while `bindText` asserts the name is unset (`packages/text/src/program.ts:239-241`): **confirmed**. `decodeTextRenderSurface` puts the Params and the projected recipe properties into the initial bindings (`packages/text/src/surface.ts:127-162`), and the fragment chains every `Set` through `bindText` (`packages/text/src/fragment.ts:25-40`). A `Set` on a name already filled by a Param or a recipe property, or two `Set`s on the same name, therefore fails.
-- `.choice.*` all marked consumed (`packages/text/src/recipe.ts:175`): **confirmed**. Choices are only gathered for axis or variant blocks (`:151-154`), so a choice for a missing block, or for a fixed or slot block, is silently ignored.
+- `.choice.*` all marked consumed (`packages/text/src/recipe.ts:175`): **confirmed**. Choices are only gathered for axis or variant blocks (`:146-150`), so a choice for a missing block, or for a fixed or slot block, is silently ignored.
 - narrative-caption unbound unit skipped (`selection.ts:24-30`): **confirmed**, with the nuance that the binding validator would catch it but isn't called.
 - text-fine dead `fonts !== undefined` guard (`program.ts:473-475`): **confirmed**. `fonts` is a required array (`packages/composition/src/track.ts:83`), and `.length` is read first.
 - caption-fine `activeBoxAnimation` overlap (`render.ts:572-573`): **confirmed** that both are capped by the full span. The description of the effect was corrected.
@@ -645,7 +645,7 @@ Second review against hypit `dc2b7a8f31b1ef1443a79ca448548d69e3ceb6a0` and `clip
 
 **Totals:** about 90 claims checked; 83 confirmed; 7 corrected (motion count including `none`, loop amplitude scaling, active-box overlap effect, the selection line range, narrative-caption tests, the `\an5` growth direction, karaoke pause wording); 0 removed; 0 unverified beyond those the notes already flag.
 
-**Coverage:** complete. All 80 files across the six packages are listed with correct line counts (src totals 514 / 3,112 / 1,303 / 2,425 / 234 / 366 = 7,954; tests 1,833). No files added. Repo-level tests outside the packages (`test/narrative-caption.test.ts`) are now cited in §6.
+**Coverage:** complete. All 81 files across the six packages (3 of them PNGs) are listed with correct line counts (src totals 514 / 3,112 / 1,303 / 2,425 / 234 / 366 = 7,954; tests 1,833). No files added. Repo-level tests outside the packages (`test/narrative-caption.test.ts`) are now cited in §6.
 
 **Verdict:** Verified ✅. Under 10% of claims needed correction (7 of about 90) and coverage is complete. The most substantive fix is that narrative-caption *is* tested, at repo level.
 
