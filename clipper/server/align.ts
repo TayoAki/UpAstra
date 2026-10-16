@@ -62,9 +62,13 @@ export function alignScript(script: string, spoken: Word[], language?: string): 
   // word: voices add words far more often than they drop them.
   const SKIP_SCRIPT = 1.5;
   const EXTRA_SPOKEN = 1;
+  // A mismatch with a word the recogniser wasn't sure of costs less: it was
+  // probably the script word, misheard (so it lends its timing).
   const cost = (i: number, j: number) => {
     const d = distance(a[i], b[j]);
-    return d === 0 ? 0 : d <= 0.34 ? 0.5 : d <= 0.6 ? 1.2 : 2.5;
+    const base = d === 0 ? 0 : d <= 0.34 ? 0.5 : d <= 0.6 ? 1.2 : 2.5;
+    const p = spoken[j].p;
+    return base && p !== undefined ? base * (0.5 + 0.5 * Math.min(1, Math.max(0, p))) : base;
   };
   // Groups: up to 3 script words against up to 3 spoken words, matched on
   // their joined text, for words the recogniser split or merged ("web site",
@@ -120,7 +124,8 @@ export function alignScript(script: string, spoken: Word[], language?: string): 
   while (i > 0 && j > 0) {
     const how = move[i][j];
     if (how === 1) {
-      if (cost(i - 1, j - 1) < 2.5) {
+      // Paired only when plausibly the same word: a near-miss, or a mismatch the recogniser was under 60% sure of.
+      if (cost(i - 1, j - 1) < 2) {
         Object.assign(words[i - 1], { start: spoken[j - 1].start, end: spoken[j - 1].end });
         matchedAt[i - 1] = true;
         mark(j - 1, j - 1);
@@ -164,7 +169,9 @@ export function alignScript(script: string, spoken: Word[], language?: string): 
     let e = k;
     while (e < n && Number.isNaN(words[e].start)) e++;
     let from = k > 0 ? words[k - 1].end : spoken[jStart]?.start ?? 0;
-    const to = e < n ? words[e].start : Math.max(from + 0.3 * (e - k), jEnd > 0 ? spoken[jEnd - 1].end : total);
+    // Unmatched words after the last match stay (nearly) inside the speech.
+    const speechEnd = jEnd > 0 ? spoken[jEnd - 1].end : total;
+    const to = e < n ? words[e].start : Math.max(from + 0.05 * (e - k), Math.min(Math.max(from + 0.3 * (e - k), speechEnd), Math.max(speechEnd, from) + 0.4));
     // No room (e.g. "Car League" heard as one word): share the previous word's time.
     if (to - from < 0.1 * (e - k) && k > 0) {
       from = (words[k - 1].start + words[k - 1].end) / 2;

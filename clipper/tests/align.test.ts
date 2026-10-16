@@ -103,3 +103,28 @@ describe("M:N alignment", () => {
     for (const w of al.words) expect(w.end).toBeGreaterThan(w.start);
   });
 });
+
+// B5.4: the recogniser's confidence weighs mismatches, and unmatched words at
+// the edges stay inside the speech.
+describe("confidence and speech bounds", () => {
+  it("takes a misheard word's timing when the recogniser wasn't sure of it", () => {
+    const words = (p: number): Word[] => ["one", "banana", "three", "four"].map((text, i) => ({ text, start: i * 0.5, end: i * 0.5 + 0.4, p: text === "banana" ? p : 0.95 }));
+    expect(alignScript("one two three four", words(0.1)).matched).toBe(1);
+    expect(alignScript("one two three four", words(0.95)).matched).toBe(0.75);
+  });
+
+  it("keeps unmatched trailing words inside the speech", () => {
+    const al = alignScript("play car league now on roblox today friends", spoken("play car league", 0, 0.3));
+    const speechEnd = 0.3 * 3 - 0.05;
+    for (const w of al.words) expect(w.end).toBeLessThanOrEqual(speechEnd + 0.4 + 1e-9);
+  });
+
+  it("reads token confidence from whisper's full JSON", () => {
+    const w = wordsFrom([
+      { text: " Hello", offsets: { from: 0, to: 400 }, tokens: [{ text: " Hello", p: 0.9 }] },
+      { text: " wrld", offsets: { from: 400, to: 800 }, tokens: [{ text: " w", p: 0.3 }, { text: "rld", p: 0.5 }, { text: "[_TT_40]", p: 0.99 }] },
+    ] as never);
+    expect(w[0].p).toBeCloseTo(0.9);
+    expect(w[1].p).toBeCloseTo(0.4);
+  });
+});
