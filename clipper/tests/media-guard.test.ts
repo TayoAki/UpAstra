@@ -27,6 +27,9 @@ describe("ffmpeg inputs", () => {
       "out.mp4",
     ]);
     expect(hardenInputs("ffmpeg", ["-i", "x"]).join(" ")).not.toMatch(/hls/);
+    // Only a plain colour source may use lavfi; anything else is treated as a file.
+    expect(hardenInputs("ffmpeg", ["-f", "lavfi", "-i", "color=c=black:s=64x64:d=1"])).toEqual(["-f", "lavfi", "-format_whitelist", "lavfi", "-i", "color=c=black:s=64x64:d=1"]);
+    expect(hardenInputs("ffmpeg", ["-f", "lavfi", "-i", "movie=/etc/passwd"]).join(" ")).toContain("-protocol_whitelist file -format_whitelist");
   });
 
   it.skipIf(!ffmpegAvailable())("refuses an upload that is really a playlist, without fetching what it points to", async () => {

@@ -4,7 +4,7 @@ import path from "node:path";
 import { traitsOf } from "../shared/learning";
 import { checkClip, round2 } from "../shared/rules";
 import type { Campaign, Clip, EditParts, FootageFile, RenderInfo, VoiceOption } from "../shared/types";
-import { buildAss, groups, HOOK_SECONDS, lastSentenceStart, sentences, timeWords } from "./captions";
+import { buildAss, fitCaptionsFor, groups, HOOK_SECONDS, lastSentenceStart, sentences, timeWords } from "./captions";
 import { HttpError, getDoc, loadTenant, log, now, runInWorkspace, save, saveNow, tenantLoadHooks } from "./db";
 import { mediaLive, modelFor, speak } from "./llm";
 import { blackSpans, concat, compose, cutSegment, cutSignature, ffmpegAvailable, H, run, speechSpans, VIDEO_H, VIDEO_TOP, W } from "./media";
@@ -348,7 +348,7 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
     const style = resolveCaptionStyle(brand, c.captions);
     const captionGroups = groups(words, style.wordsPerCaption);
     // Overlays land on the words they're cued to (tier items stay until the call to action).
-    const layout = { width: W, height: H, bandTop: VIDEO_TOP, bandHeight: VIDEO_H, font: style.font, accent: accentOf(brand), uppercase: style.uppercase, hook: { text: clip.hook, end: Math.min(HOOK_SECONDS, duration) } };
+    const layout = { width: W, height: H, bandTop: VIDEO_TOP, bandHeight: VIDEO_H, font: style.font, fontWidths: style.fontWidths, accent: accentOf(brand), uppercase: style.uppercase, hook: { text: clip.hook, end: Math.min(HOOK_SECONDS, duration) } };
     const { placed, missed } = placeOverlays(clip.overlays ?? [], words, duration, ctaFrom);
     const crowded = hiddenComments(placed, layout);
     if (crowded.length) log({ campaignId: c.id, kind: "clip", message: `Left out ${crowded.length} comment overlay(s) in "${clip.title}": too many on screen at once (${crowded.map((x) => `@${x.user}`).join(", ")}).` });
@@ -387,7 +387,8 @@ async function renderClip(workspaceId: string, clip: Clip, r: RenderInfo) {
       end: round(p.end),
       tier: p.o.tier,
     }));
-    editParts.captions = captionGroups.map((g) => ({ text: g.text, start: round(g.start), end: round(g.end), words: g.words.map((w) => ({ text: w.text, start: round(w.start), end: round(w.end) })) }));
+    // As burned in: long captions are broken into two lines or split in time.
+    editParts.captions = fitCaptionsFor(captionGroups, style, { width: W, height: H }, r.language).map((g) => ({ text: g.text, start: round(g.start), end: round(g.end), words: g.words.map((w) => ({ text: w.text, start: round(w.start), end: round(w.end) })) }));
 
     const fresh = getDoc().clips.find((x) => x.id === clip.id);
     if (!fresh?.render) return; // deleted mid-render

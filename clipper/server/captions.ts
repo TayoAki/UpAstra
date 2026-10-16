@@ -11,6 +11,8 @@ import { overlayEvents, overlayStyles, textWidth, type OverlayLayout, type Place
 
 /** A gap between words longer than this (seconds) is a pause: the karaoke highlight rests. */
 const PAUSE = 0.35;
+/** The shortest time a caption stays on screen when a long one is split. */
+const MIN_CAPTION = 0.3;
 /** Styles drawn as one event per spoken word. */
 const PER_WORD = new Set(["karaoke", "box", "underline", "accumulate"]);
 
@@ -115,9 +117,11 @@ interface FittedCaption {
  * its best word boundary (each half keeps its words' own times), and so on.
  * Only a single word too wide on its own is drawn smaller.
  */
-export function fitCaptions(groups: CaptionGroup[], o: { size: number; outline: number; font: string; maxWidth: number; cased: (t: string) => string }): FittedCaption[] {
-  const width = (ws: Timed[]) => textWidth(o.cased(joinWords(ws.map((w) => w.text))), o.size, o.font) + 2 * o.outline;
+export function fitCaptions(groups: CaptionGroup[], o: { size: number; outline: number; font: string; widths?: Record<string, number>; maxWidth: number; cased: (t: string) => string }): FittedCaption[] {
+  const textW = (ws: Timed[], size = o.size) => textWidth(o.cased(joinWords(ws.map((w) => w.text))), size, o.font, o.widths);
+  const width = (ws: Timed[]) => textW(ws) + 2 * o.outline;
   const fits = (ws: Timed[]) => width(ws) <= o.maxWidth;
+  const room = o.maxWidth - 2 * o.outline;
   // Where to break a run of words so its widest part is as narrow as possible.
   const bestBreak = (ws: Timed[]) => {
     let best = 1;
@@ -131,16 +135,58 @@ export function fitCaptions(groups: CaptionGroup[], o: { size: number; outline: 
   const fit = (ws: Timed[], start: number, end: number): FittedCaption[] => {
     if (fits(ws)) return [{ start, end, lines: [ws] }];
     if (ws.length === 1) {
-      // The outline doesn't shrink with the text, so size the text to the room left inside it.
-      const text = width(ws) - 2 * o.outline;
-      return [{ start, end, lines: [ws], size: Math.max(Math.round(o.size * 0.5), Math.floor((o.size * (o.maxWidth - 2 * o.outline)) / text)) }];
+      // One word too wide: draw it smaller (to half size); a word still too
+      // wide (a long URL in a huge style) is broken across two lines.
+      const size = Math.floor((o.size * room) / textW(ws));
+      if (size >= o.size * 0.5) return [{ start, end, lines: [ws], size }];
+      const chars = [...ws[0].text];
+      let cut = 1;
+      while (cut < chars.length - 1 && textW([{ ...ws[0], text: chars.slice(0, cut + 1).join("") }]) <= textW([{ ...ws[0], text: chars.slice(cut + 1).join("") }])) cut++;
+      const halves = [chars.slice(0, cut).join(""), chars.slice(cut).join("")].map((text) => ({ ...ws[0], text }));
+      const wider = Math.max(...halves.map((h) => textW([h])));
+      return [{ start, end, lines: halves.map((h) => [h]), size: Math.min(o.size, Math.floor((o.size * room) / wider)) }];
     }
     const b = bestBreak(ws);
     if (fits(ws.slice(0, b)) && fits(ws.slice(b))) return [{ start, end, lines: [ws.slice(0, b), ws.slice(b)] }];
-    // Too long for two lines: show it as two captions, one after the other.
-    return [...fit(ws.slice(0, b), start, ws[b].start), ...fit(ws.slice(b), ws[b].start, end)];
+    // Too long for two lines: show it as two captions, one after the other,
+    // switching when the second half's first word is said, or (when the
+    // words' times collapse) sharing the time by length; each gets ≥ 0.3 s.
+    const share = start + ((end - start) * textW(ws.slice(0, b))) / textW(ws);
+    const said = ws[b].start;
+    const t = said - start >= MIN_CAPTION && end - said >= MIN_CAPTION ? said : end - start >= 2 * MIN_CAPTION ? Math.min(end - MIN_CAPTION, Math.max(start + MIN_CAPTION, share)) : share;
+    return [...fit(ws.slice(0, b), start, t), ...fit(ws.slice(b), t, end)];
   };
-  return groups.flatMap((g) => fit(g.words?.length ? g.words : [g], g.start, g.end));
+  return groups.flatMap((g) => fit(g.words?.length ? g.words : spreadWords(g), g.start, g.end));
+}
+
+/** Words for a caption given only as text: split by spaces, sharing its time by length. */
+function spreadWords(g: Timed): Timed[] {
+  const parts = g.text.split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return [g];
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  let t = g.start;
+  return parts.map((text) => {
+    const d = ((g.end - g.start) * text.length) / total;
+    const w = { text, start: t, end: t + d };
+    t += d;
+    return w;
+  });
+}
+
+/**
+ * The captions as they'll be burned in for a style on a frame (lines joined
+ * with "\n"), for the editor's timeline.
+ */
+export function fitCaptionsFor(groups: CaptionGroup[], st: CaptionStyle, frame = { width: W, height: H }, language?: string) {
+  const k = Math.min(frame.width, frame.height) / 1080;
+  const px = (n: number) => Math.max(1, Math.round(n * k));
+  const cased = (t: string) => (st.uppercase ? t.toLocaleUpperCase(language || undefined) : t);
+  return fitCaptions(groups, { size: px(st.size), outline: px(st.outlineWidth), font: st.font, widths: st.fontWidths, maxWidth: frame.width - 2 * px(70), cased }).map((f) => ({
+    text: f.lines.map((l) => joinWords(l.map((w) => w.text))).join("\n"),
+    start: f.start,
+    end: f.end,
+    words: f.lines.flat(),
+  }));
 }
 
 /**
@@ -202,7 +248,7 @@ export function buildAss(o: {
   // A spring: in small, overshoot a little, settle.
   const pop = "\\fscx72\\fscy72\\t(0,90,\\fscx105\\fscy105)\\t(90,170,\\fscx100\\fscy100)";
   const cased = (t: string) => (st.uppercase ? t.toLocaleUpperCase(o.language || undefined) : t);
-  const fitted = fitCaptions(o.captions, { size: px(st.size), outline: px(st.outlineWidth), font, maxWidth: FW - 2 * px(70), cased });
+  const fitted = fitCaptions(o.captions, { size: px(st.size), outline: px(st.outlineWidth), font, widths: st.fontWidths, maxWidth: FW - 2 * px(70), cased });
   for (const g of fitted) {
     if (g.start >= o.duration) break;
     const end = Math.min(g.end, o.duration);
@@ -237,18 +283,28 @@ export function buildAss(o: {
       lines.push(`Dialogue: 0,${ts(g.start)},${ts(end)},Cap,,0,0,0,,{${place}${size}${pop}}${lead ? `{\\k${lead}}` : ""}${render()}`);
       continue;
     }
-    if (PER_WORD.has(st.animation) && words.length > 1) {
+    if (PER_WORD.has(st.animation)) {
       // One event per word: the whole caption, with the spoken word in the
       // highlight colour. In a pause longer than PAUSE the highlight rests
       // (the line stays, nothing lit) until the next word is said.
+      // Word times are clamped to this caption's own window (a split caption
+      // can start after its words were said); words with no time of their
+      // own just aren't lit, and the line itself always covers the window.
+      let first = true;
+      let shownUntil = g.start;
       words.forEach((w, k) => {
-        const from = k === 0 ? g.start : w.start;
-        const to = Math.min(k < words.length - 1 ? words[k + 1].start : end, o.duration);
-        if (to <= from || from >= o.duration) return;
-        const lit = to - w.end > PAUSE ? Math.max(from + 0.05, w.end + 0.05) : to;
-        lines.push(`Dialogue: 0,${ts(from)},${ts(lit)},Cap,,0,0,0,,{${place}${size}${k === 0 ? pop : ""}}${render(k)}`);
+        const from = Math.max(g.start, k === 0 ? g.start : w.start, shownUntil);
+        const to = Math.min(Math.max(from, k < words.length - 1 ? words[k + 1].start : end), end, o.duration);
+        if (to - from < 0.01 || from >= o.duration) return;
+        // A lit word stays lit at least 0.2 s, even when its own time was shorter.
+        const rest = Math.max(from + 0.2, w.end + 0.05);
+        const lit = to - w.end > PAUSE && rest < to ? rest : to;
+        lines.push(`Dialogue: 0,${ts(from)},${ts(lit)},Cap,,0,0,0,,{${place}${size}${first ? pop : ""}}${render(k)}`);
         if (lit < to) lines.push(`Dialogue: 0,${ts(lit)},${ts(to)},Cap,,0,0,0,,{${place}${size}}${render()}`);
+        first = false;
+        shownUntil = to;
       });
+      if (shownUntil < Math.min(end, o.duration)) lines.push(`Dialogue: 0,${ts(shownUntil)},${ts(Math.min(end, o.duration))},Cap,,0,0,0,,{${place}${size}${first ? pop : ""}}${render(st.animation === "accumulate" ? words.length - 1 : undefined)}`);
       continue;
     }
     const anim = st.animation === "fade" ? "\\fad(70,70)" : st.animation === "none" ? "" : pop;

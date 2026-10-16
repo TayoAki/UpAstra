@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { joinWords } from "../shared/words";
 import { groupWords, resolveCaptionStyle } from "../shared/caption-styles";
-import { buildAss } from "../server/captions";
+import { buildAss, fitCaptionsFor } from "../server/captions";
 import { textWidth } from "../server/overlays";
 
 // B2.1: caption words are spaced by script: no stray spaces inside Chinese,
@@ -39,10 +39,10 @@ describe("caption line budget", () => {
   const visible = (l: string) => l.split(",").slice(9).join(",").replace(/\{[^}]*\}/g, "");
   const sizeOf = (l: string, base: number) => Number(l.match(/\\fs(\d+)/)?.[1] ?? base);
 
-  for (const styleId of ["bold-pop", "karaoke", "hormozi", "boxed", "minimal", "subtitle"]) {
+  for (const styleId of ["bold-pop", "karaoke", "hormozi", "one-word", "boxed", "minimal", "subtitle", "box-highlight", "fill-sweep", "accumulate"]) {
     it(`keeps every line inside the frame (${styleId})`, () => {
       const style = resolveCaptionStyle(undefined, { style: styleId });
-      const text = "Donaudampfschifffahrtsgesellschaftskapitän drives the Turbo Ball Supercharged Edition into the goal again tonight";
+      const text = "Donaudampfschifffahrtsgesellschaftskapitän drives the Turbo Ball Supercharged Edition to WWW.CARLEAGUEOFFICIALGAMEDOWNLOADS.COM/GO tonight Rindfleischetikettierungsüberwachungsaufgabenübertragungsgesetz";
       const ws = timed(text);
       const ass = buildAss({ hook: "", captions: groupWords(ws, style.wordsPerCaption), cta: "", ctaFrom: 99, duration: 99, style });
       const safe = 1080 - 2 * 70;
@@ -54,14 +54,51 @@ describe("caption line budget", () => {
         const fs = sizeOf(e, style.size);
         for (const line of lines) expect(textWidth(style.uppercase ? line.toUpperCase() : line, fs, style.font) + 2 * style.outlineWidth, `${styleId}: ${line}`).toBeLessThanOrEqual(safe + 1);
         const t = lines.join(" ");
-        if (t !== lastText) shown.push(t); // karaoke repeats the line once per word
+        if (t !== lastText) shown.push(t); // per-word styles repeat the line once per word
         lastText = t;
       }
-      // Every word is shown, once, in order.
-      const all = shown.join(" ").split(" ");
-      expect(all.map((w) => w.toLowerCase())).toEqual(text.split(" ").map((w) => w.toLowerCase()));
+      // Every word is shown, once, in order (a word too long for the frame may be split across two lines).
+      expect(shown.join(" ").toLowerCase().replace(/\s+/g, "")).toBe(text.toLowerCase().replace(/\s+/g, ""));
     });
   }
+
+  it("never makes a zero-length caption when words share a start time", () => {
+    // ASR heard the first five as one word: they all start at 1.0.
+    const texts = "Supercalifragilistic Turbo Ballistic Championship Extravaganza Edition tonight again forever".split(" ");
+    const ws = texts.map((t, i) => ({ text: t, start: i < 5 ? 1 : 1 + (i - 4) * 0.35, end: i < 5 ? 1.02 : 1 + (i - 4) * 0.35 + 0.3 }));
+    for (const id of ["karaoke", "bold-pop"]) {
+      const style = resolveCaptionStyle(undefined, { style: id });
+      const ev = events(buildAss({ hook: "", captions: [{ text: texts.join(" "), start: 1, end: 3, words: ws }], cta: "", ctaFrom: 99, duration: 99, style }));
+      const time = (x: string) => { const [h, m, sec] = x.split(":"); return +h * 3600 + +m * 60 + +sec; };
+      for (const e of ev) {
+        const [s0, e0] = e.split(",").slice(1, 3).map(time);
+        expect(e0 - s0, e).toBeGreaterThanOrEqual(0.19); // 0.2 s, read back from centisecond timestamps
+      }
+      const seen = new Set(ev.flatMap((e) => visible(e).split(/\\N| /)).map((w) => w.toLowerCase()));
+      for (const t of texts) expect(seen.has(t.toLowerCase()), `${id}: ${t}`).toBe(true);
+    }
+  });
+
+  it("wraps a caption given as plain text (no word timings)", () => {
+    const style = resolveCaptionStyle(undefined, { style: "bold-pop" });
+    const [e] = events(buildAss({ hook: "", captions: [{ text: "this caption came without word timings", start: 0, end: 3 }], cta: "", ctaFrom: 99, duration: 99, style }));
+    expect(visible(e)).toContain("\\N");
+    expect(e).not.toMatch(/\\fs\d/);
+  });
+
+  it("gives the editor the captions as they're burned in", () => {
+    const style = resolveCaptionStyle(undefined, { style: "bold-pop" });
+    const ws = timed("Donaudampfschifffahrtsgesellschaftskapitän drives the Turbo Ball Supercharged Edition");
+    const fitted = fitCaptionsFor(groupWords(ws, 6), style);
+    expect(fitted.length).toBeGreaterThan(1);
+    for (const f of fitted) expect(f.text.split("\n").length).toBeLessThanOrEqual(2);
+  });
+
+  it("lights a one-word caption in karaoke styles too", () => {
+    const style = resolveCaptionStyle(undefined, { style: "hormozi" });
+    const [e] = events(buildAss({ hook: "", captions: [{ text: "wins", start: 0, end: 0.5, words: [{ text: "wins", start: 0, end: 0.5 }] }], cta: "", ctaFrom: 99, duration: 99, style }));
+    expect(e).toMatch(/\\c&H[0-9A-F]+&?\}WINS/);
+  });
 
   it("leaves a short caption on one line at full size", () => {
     const style = resolveCaptionStyle(undefined, { style: "bold-pop" });

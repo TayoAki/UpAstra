@@ -102,8 +102,8 @@ const FALLBACK_WIDTHS: Record<string, number> = {};
 for (const m of Object.values(FONT_WIDTHS)) for (const [ch, w] of Object.entries(m)) FALLBACK_WIDTHS[ch] = Math.max(FALLBACK_WIDTHS[ch] ?? 0, w * 1.3);
 
 /** Rendered width of a single line of text at an ASS font size. */
-export function textWidth(text: string, size: number, font: string): number {
-  const m = FONT_WIDTHS[font] ?? FALLBACK_WIDTHS;
+export function textWidth(text: string, size: number, font: string, measured?: Record<string, number>): number {
+  const m = measured ?? FONT_WIDTHS[font] ?? FALLBACK_WIDTHS;
   let w = 0;
   for (const ch of text) {
     if (m[ch] !== undefined) w += m[ch];
@@ -116,6 +116,8 @@ export function textWidth(text: string, size: number, font: string): number {
 
 export interface FitOptions {
   font: string;
+  /** Measured widths for a brand font. */
+  widths?: Record<string, number>;
   size: number;
   minSize: number;
   maxWidth: number;
@@ -123,7 +125,7 @@ export interface FitOptions {
 }
 
 function wrapToWidth(words: string[], size: number, o: FitOptions): string[] {
-  const fits = (t: string) => textWidth(t, size, o.font) <= o.maxWidth;
+  const fits = (t: string) => textWidth(t, size, o.font, o.widths) <= o.maxWidth;
   const out: string[] = [];
   let line = "";
   for (const w of words) {
@@ -163,7 +165,7 @@ export function fitText(text: string, o: FitOptions): { lines: string[]; size: n
       const kept = lines.slice(0, o.maxLines);
       let last = kept[kept.length - 1];
       const ell = (t: string) => `${t.replace(/[\s.,;:!?…]+$/u, "")}…`;
-      while (last && textWidth(ell(last), size, o.font) > o.maxWidth) last = [...last].slice(0, -1).join("");
+      while (last && textWidth(ell(last), size, o.font, o.widths) > o.maxWidth) last = [...last].slice(0, -1).join("");
       kept[kept.length - 1] = ell(last);
       return { lines: kept, size };
     }
@@ -181,6 +183,8 @@ export interface OverlayLayout {
   font: string;
   accent: string;
   uppercase?: boolean;
+  /** Measured widths of the font, when it's a brand upload. */
+  fontWidths?: Record<string, number>;
   /** The hook across the top, so cards placed above the footage keep clear of it. */
   hook?: { text: string; end: number };
 }
@@ -229,11 +233,11 @@ export function tierLayout(items: { text: string; tier: Tier }[], L: OverlayLayo
     const lineH = (rowH - px(6)) / Math.ceil(n / cols);
     const slotW = area / cols;
     const size = Math.max(px(14), Math.min(px(48), Math.floor(lineH - 2 * outline)));
-    const fit = fitText(it.text, { font: L.font, size, minSize: Math.max(px(12), Math.floor(size * 0.6)), maxWidth: slotW - px(12) - 2 * outline, maxLines: 1 });
+    const fit = fitText(it.text, { font: L.font, widths: L.fontWidths, size, minSize: Math.max(px(12), Math.floor(size * 0.6)), maxWidth: slotW - px(12) - 2 * outline, maxLines: 1 });
     const text = fit.lines[0] ?? "";
     const x = left + labelW + gap + (j % cols) * slotW + outline;
     const cy = top + TIERS.indexOf(it.tier) * rowH + px(3) + lineH * (Math.floor(j / cols) + 0.5);
-    const w = textWidth(text, fit.size, L.font);
+    const w = textWidth(text, fit.size, L.font, L.fontWidths);
     const box: Box = { x: x - outline, y: cy - fit.size / 2 - outline, w: w + 2 * outline, h: fit.size + 2 * outline };
     return { text, size: fit.size, x, cy, box };
   });
@@ -251,9 +255,9 @@ export interface Blocked extends Box {
 function popLayout(p: Placed, L: OverlayLayout) {
   const px = scaleOf(L);
   const text = esc(L.uppercase === false ? p.o.text!.trim() : p.o.text!.trim().toUpperCase()).slice(0, 80);
-  const fit = fitText(text, { font: L.font, size: px(124), minSize: px(64), maxWidth: (L.width - px(80)) / 1.12 - 2 * px(9), maxLines: 2 });
+  const fit = fitText(text, { font: L.font, widths: L.fontWidths, size: px(124), minSize: px(64), maxWidth: (L.width - px(80)) / 1.12 - 2 * px(9), maxLines: 2 });
   const cy = L.bandTop + L.bandHeight * 0.42;
-  const w = Math.max(...fit.lines.map((l) => textWidth(l, fit.size, L.font))) * 1.12 + 2 * px(9);
+  const w = Math.max(...fit.lines.map((l) => textWidth(l, fit.size, L.font, L.fontWidths))) * 1.12 + 2 * px(9);
   const h = fit.lines.length * fit.size * 1.12 + 2 * px(9);
   return { fit, cx: L.width / 2, cy, box: { x: L.width / 2 - w / 2, y: cy - h / 2, w, h } };
 }
@@ -278,7 +282,7 @@ export function blockedBoxes(placed: Placed[], L: OverlayLayout): Blocked[] {
   if (L.hook?.text.trim()) {
     // Top-centred at y = bandTop − 330 with 70 px side margins (see the Hook style in captions.ts).
     const fs = px(76);
-    const lines = fitText(esc(L.hook.text), { font: L.font, size: fs, minSize: fs, maxWidth: L.width - 2 * px(70), maxLines: 6 }).lines.length;
+    const lines = fitText(esc(L.hook.text), { font: L.font, widths: L.fontWidths, size: fs, minSize: fs, maxWidth: L.width - 2 * px(70), maxLines: 6 }).lines.length;
     out.push({ what: "hook", start: 0, end: L.hook.end, x: px(70) - px(7), y: L.bandTop - px(330) - px(7), w: L.width - 2 * px(70) + 2 * px(7), h: lines * fs * 1.15 + 2 * px(7) });
   }
   for (const p of placed.filter((x) => x.o.kind === "text" && x.o.text?.trim())) out.push({ what: "text", start: p.start, end: p.end, ...popLayout(p, L).box });
@@ -323,7 +327,7 @@ export function commentLayout(comments: CommentIn[], L: OverlayLayout, board?: {
       // Everything on screen at the same time: other cards, and the hook, pop-up words and stickers.
       const live: Box[] = [...out.filter((p) => p.shown), ...blocked].filter((p) => p.start < c.end && c.start < p.end);
       for (const maxLines of [3, 2, 1]) {
-        const fit = fitText(c.text, { font: L.font, size: px(46), minSize: px(38), maxWidth: w - px(152), maxLines });
+        const fit = fitText(c.text, { font: L.font, widths: L.fontWidths, size: px(46), minSize: px(38), maxWidth: w - px(152), maxLines });
         if (!fit.lines.length) break;
         const h = px(118) + fit.lines.length * Math.round(fit.size * (56 / 46));
         // Top-down in the band; bottom-up (nearest the footage) above it.

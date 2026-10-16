@@ -34,6 +34,8 @@ export interface CaptionStyle {
   animation: CaptionAnimation;
   /** Soft glow around the text (blur on the outline). */
   glow?: boolean;
+  /** Measured character widths of a brand font (see BrandKit fonts), for fitting text. */
+  fontWidths?: Record<string, number>;
 }
 
 /** Fonts bundled with UGCMediaClips (SIL Open Font License, see /fonts). */
@@ -72,7 +74,7 @@ export interface BrandKit {
   colors?: { text?: string; highlight?: string; outline?: string; accent?: string };
   /** Force uppercase on or off regardless of style. */
   uppercase?: boolean;
-  fonts?: { id: string; family: string; key: string; file: string }[];
+  fonts?: { id: string; family: string; key: string; file: string; /** libass widths, measured at upload. */ widths?: Record<string, number> }[];
 }
 
 /** Per-campaign or per-job choices, applied last. */
@@ -96,6 +98,7 @@ export function resolveCaptionStyle(brand: BrandKit | undefined, overrides: Capt
   return {
     ...base,
     font: brand?.font?.trim() || base.font,
+    fontWidths: brand?.fonts?.find((f) => f.family === (brand?.font?.trim() || base.font))?.widths,
     color: pick(c.text, base.color),
     highlight: pick(c.highlight, base.highlight),
     outline: pick(c.outline, base.outline),

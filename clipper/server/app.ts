@@ -25,7 +25,7 @@ import { safeFetch } from "./sources";
 import { authUrl, disconnectAccount, finalizePending, NETWORKS, outstandConfigured, pendingPages, tiktokPrivacyOptions, verifyWebhook } from "./outstand";
 import { isRunning, resolvePending, sendToAgent, stopAgent } from "./agent";
 import { cancelScheduled, handleWebhook, scheduleClip, syncAccounts, syncMetrics, type WebhookEvent } from "./publishing";
-import { bundledFontsDir, fontInfo } from "./fonts";
+import { bundledFontsDir, fontInfo, measureFont } from "./fonts";
 import { accentOf, BUNDLED_FONTS, CAPTION_STYLES, resolveCaptionStyle, type BrandKit, type CaptionOverrides } from "../shared/caption-styles";
 import { probe, run } from "./media";
 import { storageKind, videoStore } from "./storage";
@@ -989,7 +989,9 @@ export function createApp() {
         await videoStore().put(key, file, ext === "otf" ? "font/otf" : "font/ttf");
         // "Bebas Neue Regular" → "Bebas Neue"; heavier faces keep their full name ("Poppins Black").
         const family = /\sregular$/i.test(info.fullName) || info.fullName === info.family ? info.family : info.fullName;
-        doc.brand = { ...(doc.brand ?? {}), fonts: [...(doc.brand?.fonts ?? []).filter((f) => f.family !== family), { id, family, key, file: `${id}.${ext}` }] };
+        // Measured once here, so captions and overlays in this font fit tightly.
+        const widths = await measureFont(dir, family);
+        doc.brand = { ...(doc.brand ?? {}), fonts: [...(doc.brand?.fonts ?? []).filter((f) => f.family !== family), { id, family, key, file: `${id}.${ext}`, widths }] };
         log({ kind: "account", message: `Brand font "${family}" uploaded.` });
         save();
         res.status(201).json(stateFor());

@@ -31,6 +31,8 @@ const FORMATS = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,flv,mpegts,wav,mp3,aa
 // httpproxy: https inputs tunnel through -http_proxy when one is configured.
 const protocolsFor = (input: string) => (/^https?:/.test(input) ? "https,http,httpproxy,tls,tcp,crypto" : "file");
 
+const SOLID_COLOUR = /^color=c=\w+:s=\d+x\d+(:r=\d+)?:d=[\d.]+$/;
+
 /** Add input restrictions in front of every ffmpeg `-i` (and ffprobe's input). */
 export function hardenInputs(cmd: string, args: string[]): string[] {
   const guard = (input: string) => ["-protocol_whitelist", protocolsFor(input), "-format_whitelist", FORMATS];
@@ -38,6 +40,11 @@ export function hardenInputs(cmd: string, args: string[]): string[] {
   if (cmd !== "ffmpeg") return args;
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
+    // A plain colour background is the one generated input allowed (lavfi can otherwise open files).
+    if (args[i] === "-i" && args[i - 2] === "-f" && args[i - 1] === "lavfi" && SOLID_COLOUR.test(args[i + 1] ?? "")) {
+      out.push("-format_whitelist", "lavfi", args[i]);
+      continue;
+    }
     if (args[i] === "-i" && i + 1 < args.length) out.push(...guard(args[i + 1]));
     out.push(args[i]);
   }

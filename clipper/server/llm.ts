@@ -193,8 +193,9 @@ export async function withRetries(send: () => Promise<Response>, tries = 3): Pro
     // The wait ends early if the job is cancelled.
     await new Promise<void>((res, rej) => {
       const job = currentSignal();
-      const t = setTimeout(res, wait);
-      job?.addEventListener("abort", () => (clearTimeout(t), rej(job.reason)), { once: true });
+      const onAbort = () => (clearTimeout(t), rej(job!.reason));
+      const t = setTimeout(() => (job?.removeEventListener("abort", onAbort), res()), wait);
+      job?.addEventListener("abort", onAbort, { once: true });
     });
   }
 }
