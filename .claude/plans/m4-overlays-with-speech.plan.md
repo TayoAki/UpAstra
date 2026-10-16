@@ -53,4 +53,4 @@
 - **B4.5:** `packages/comment-sticker/src/author.ts:86-147`.
 
 ## Acceptance
-- [ ] All tasks complete; validation passes; santa-method PASS
+- [x] All tasks complete; validation passes; santa-method PASS (both reviewers)

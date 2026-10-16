@@ -63,4 +63,4 @@
 **Avoids:** Chrome compositing on the server.
 
 ## Acceptance
-- [ ] All tasks complete; validation passes; santa-method PASS
+- [x] All tasks complete; validation passes; santa-method PASS (both reviewers)

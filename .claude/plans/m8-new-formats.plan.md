@@ -54,4 +54,4 @@
 **Avoids:** per-frame keyframe baking, and throwing on imperfect input.
 
 ## Acceptance
-- [ ] All tasks complete; validation passes; santa-method PASS
+- [x] All tasks complete; validation passes; santa-method PASS (both reviewers)

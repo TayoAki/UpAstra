@@ -44,4 +44,4 @@ cd clipper && npm run typecheck && npx vitest run && npm run build
 - **Cuts:** `packages/media-local/src/files.ts:467-491` (boundary pass). **Avoids:** a whole-file decode per upload, and unbounded boundary output.
 
 ## Acceptance
-- [ ] All tasks complete; validation passes; santa-method PASS
+- [x] All tasks complete; validation passes; santa-method PASS (both reviewers)

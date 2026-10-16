@@ -62,4 +62,4 @@
 **Avoids:** charging for chatter at the edges (ours trims it), throwing on imperfect input, and an author markup language beyond these few forms.
 
 ## Acceptance
-- [ ] All tasks complete; validation passes; santa-method PASS
+- [x] All tasks complete; validation passes; santa-method PASS (both reviewers)

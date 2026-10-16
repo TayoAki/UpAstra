@@ -70,4 +70,4 @@ Then render a frame for each preset with long, CJK and mixed text, and look at i
 - **B2.4:** caption-fine `render.ts:441-516`, `:939-967`, `:365-373`. **Avoids:** the ~110-knob parameter set.
 
 ## Acceptance
-- [ ] All tasks complete; validation passes; santa-method PASS
+- [x] All tasks complete; validation passes; santa-method PASS (both reviewers)

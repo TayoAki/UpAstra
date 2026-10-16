@@ -52,4 +52,4 @@
 **Avoids:** a second error vocabulary beside the API's, and estimates from static price tables that drift.
 
 ## Acceptance
-- [ ] All tasks complete; validation passes; santa-method PASS
+- [x] All tasks complete; validation passes; santa-method PASS (both reviewers)
